@@ -6,7 +6,7 @@
 
 **Architecture:** Next.js 16 App Router único, com rotas `(painel)` autenticadas e `(site)` públicas (site fica vazio até a Fase 2). Código organizado em `src/core/` (leads, pipeline, tasks, notifications, audit — sempre presente) e `src/modules/` (catalog, analytics — desligados até suas fases, mas a fronteira de dependência já é imposta por lint desde o Task 4). Banco Postgres via Prisma 7.
 
-**Tech Stack:** Next.js 16 + TypeScript, Tailwind v4 + shadcn/ui, Prisma 7 + PostgreSQL, Auth.js v5, react-hook-form + Zod v4, TanStack Table, dnd-kit, Recharts, Resend, Sentry, Vitest, Playwright.
+**Tech Stack:** Next.js 16 + TypeScript, Tailwind v4 + shadcn/ui, Prisma 7 + PostgreSQL, Auth.js v5, react-hook-form + Zod v4, TanStack Table, dnd-kit, Recharts, Resend, Vitest, Playwright. (Sentry fica como pendência pós-Fase 1 — ver seção final.)
 
 Referência de design: [`docs/superpowers/specs/2026-07-28-crm-base-design.md`](../specs/2026-07-28-crm-base-design.md)
 
@@ -16,6 +16,8 @@ Referência de design: [`docs/superpowers/specs/2026-07-28-crm-base-design.md`](
 - Tailwind v4 + shadcn/ui — componentes shadcn vivem em `src/components/ui/`, livres para edição por fork
 - Prisma 7 + PostgreSQL — nenhuma outra ORM/driver
 - `src/core/**` NUNCA importa de `src/modules/**`. Violação quebra o lint (Task 4)
+- **A identidade de quem age NUNCA vem do cliente.** Server Actions são endpoints HTTP públicos: nenhuma delas aceita `usuarioId`/`autorId` como parâmetro, e nenhum componente cliente recebe esse dado como prop. O autor é sempre derivado da sessão no servidor via `usuarioAtual()` (Task 13). A lógica testável fica em `service.ts` com autor explícito; as actions são finas e apenas derivam e delegam
+- Todo comando de terminal roda em ambiente NÃO-interativo: nada de prompts. Use `--yes`/`-y`; se um comando exigir TTY, registre como pendência em vez de travar
 - Rate limiting é implementado em PostgreSQL (tabela `RateLimit`), não Redis — ver spec seção 7
 - `Lead.contactId` é opcional (spec seção 4.6) — leads de canal WHATSAPP podem nascer sem contato identificado
 - Todo teste de regra de negócio usa Vitest; todo teste de fluxo ponta-a-ponta usa Playwright — nenhum CRUD trivial ganha teste dedicado (spec seção 8)
@@ -36,14 +38,18 @@ CRM-Geral/
     core/
       auth/
         permissions.ts              # matriz de permissão por papel
+        session.ts                  # usuarioAtual(): deriva o usuário da sessão
       leads/
         dedupe.ts                   # deduplicação de Contact por telefone
-        actions.ts                  # Server Actions: criar/mover lead
+        service.ts                  # lógica de lead com autorId explícito (testável)
+        actions.ts                  # Server Actions finas: derivam o autor e delegam
         queries.ts                  # leituras de Lead/Contact
+        notes.ts                    # notas do lead
       pipeline/
         stages.ts                   # leitura/validação de PipelineStage
       tasks/
-        actions.ts
+        service.ts                  # lógica de tarefa (testável)
+        actions.ts                  # Server Actions finas
         queries.ts
       notifications/
         dispatch.ts                 # cria Notification + dispara e-mail
@@ -117,40 +123,76 @@ CRM-Geral/
 ### Task 1: Scaffold do projeto Next.js
 
 **Files:**
-- Create: `package.json`, `tsconfig.json`, `next.config.ts`, `tailwind.config.ts`, `postcss.config.mjs`
+- Create: `package.json`, `tsconfig.json`, `next.config.ts`, `postcss.config.mjs`
 - Create: `src/app/layout.tsx`, `src/app/globals.css`
-- Create: `.gitignore` (já existe — conferir que cobre `node_modules/`, `.next/`, `.env*`)
+- Preservar (NÃO sobrescrever): `.gitignore`, `docs/`, `.env`, `.superpowers/`
 
 **Interfaces:**
 - Produces: projeto Next.js 16 rodável com `npm run dev`
 
-- [ ] **Step 1: Criar o projeto**
+**Atenção — Tailwind v4 não usa `tailwind.config.ts`.** A v4 é CSS-first: o tema é
+declarado com `@theme` dentro de `src/app/globals.css`. Se o scaffold gerar um
+`tailwind.config.ts`, não o use como fonte de configuração; qualquer customização
+de tema vai no CSS.
+
+- [ ] **Step 1: Confirmar o que já existe antes de scaffoldar**
+
+O diretório NÃO está vazio — já contém `.git/`, `.gitignore`, `.env`, `docs/` e
+`.superpowers/`. Registre o estado antes de mexer:
+
+Run: `ls -a`
+Anote no relatório os arquivos existentes. Nenhum deles pode ser perdido pelo
+scaffold. Em particular, `.gitignore` já contém `node_modules/`, `.next/`, `.env`,
+`.env.local`, `*.log` e `.superpowers/` — se o `create-next-app` sobrescrevê-lo,
+restaure essas linhas.
+
+- [ ] **Step 2: Criar o projeto (modo não-interativo)**
 
 ```bash
-npx create-next-app@latest . --typescript --tailwind --app --eslint --src-dir --import-alias "@/*" --no-turbopack
+npx --yes create-next-app@latest . --typescript --tailwind --app --eslint --src-dir --import-alias "@/*" --yes
 ```
-Responder "Yes" para usar o diretório atual mesmo não estando vazio (já existe `docs/`).
 
-- [ ] **Step 2: Verificar que sobe**
+O `--yes` final aceita os padrões sem abrir prompt — necessário porque este
+ambiente não tem terminal interativo e qualquer pergunta travaria a execução até
+o timeout. Se ainda assim o comando exigir confirmação por causa do diretório
+não-vazio, use `--force`.
 
-Run: `npm run dev`
-Expected: servidor sobe em `http://localhost:3000` sem erro, página padrão do Next.js visível.
-Encerrar com Ctrl+C.
+Se alguma flag for rejeitada pela versão atual do `create-next-app`, NÃO adivinhe:
+rode `npx create-next-app@latest --help`, use as flags equivalentes que existirem e
+registre no relatório o comando que de fato funcionou.
 
-- [ ] **Step 3: Inicializar shadcn/ui**
+- [ ] **Step 3: Verificar que o build passa e que nada foi perdido**
+
+Run: `npm run build`
+Expected: build conclui sem erro.
+
+Run: `ls -a && cat .gitignore`
+Expected: `docs/`, `.env`, `.superpowers/` intactos; `.gitignore` contendo as seis
+linhas listadas no Step 1 (restaure as que faltarem).
+
+Use `npm run build` em vez de `npm run dev` para verificação: o dev server fica em
+execução indefinidamente e não retorna o controle.
+
+- [ ] **Step 4: Inicializar shadcn/ui**
 
 ```bash
-npx shadcn@latest init -d
+npx --yes shadcn@latest init -d --yes
 ```
-Isso cria `components.json` e `src/components/ui/`.
+Isso cria `components.json` e `src/components/ui/`. O `-d` usa os padrões e o
+`--yes` evita qualquer prompt.
 
-- [ ] **Step 4: Adicionar os componentes shadcn usados nas próximas tasks**
+- [ ] **Step 5: Adicionar os componentes shadcn usados nas próximas tasks**
 
 ```bash
-npx shadcn@latest add button input label form card table badge dropdown-menu dialog select textarea toast avatar separator skeleton
+npx --yes shadcn@latest add button input label form card table badge dropdown-menu dialog select textarea sonner avatar separator skeleton --yes
 ```
 
-- [ ] **Step 5: Commit**
+`sonner` é o componente de toast atual do shadcn — o antigo `toast` foi
+descontinuado. Se algum nome da lista não existir mais, rode
+`npx shadcn@latest add` sem argumentos para ver os disponíveis, escolha o
+equivalente e registre a troca no relatório.
+
+- [ ] **Step 6: Commit**
 
 ```bash
 git add .
@@ -1424,25 +1466,31 @@ git commit -m "feat: gating de módulos no menu e helper de 404 por rota"
 
 ---
 
-### Task 11: Configuração de Vitest, Playwright e Sentry
+### Task 11: Configuração de Vitest e Playwright
 
 **Files:**
 - Create: `vitest.config.ts`
 - Create: `playwright.config.ts`
-- Create: `sentry.client.config.ts`, `sentry.server.config.ts`, `sentry.edge.config.ts`
 - Modify: `package.json` (scripts `test`, `test:e2e`)
 
 **Interfaces:**
 - Produces: `npm run test` e `npm run test:e2e`
 
+**Sentry fica fora desta task, deliberadamente.** O `@sentry/wizard` é interativo
+(pede login e escolha de projeto no terminal) e travaria a execução automatizada.
+Além disso, o projeto ainda não tem conta Sentry. Monitoramento de erro entra como
+pendência documentada na seção final deste plano — configurar manualmente não
+bloqueia nenhuma das outras tasks.
+
 - [ ] **Step 1: Instalar dependências**
 
 ```bash
 npm install -D vitest @vitejs/plugin-react vite-tsconfig-paths @playwright/test
-npx playwright install --with-deps chromium
-npx @sentry/wizard@latest -i nextjs
+npx --yes playwright install chromium
 ```
-O wizard do Sentry pede login/projeto — se não houver conta Sentry disponível agora, pular este passo e deixar registrado em `docs/superpowers/plans/` como pendência; os arquivos `sentry.*.config.ts` podem ficar com DSN vazio (`SENTRY_DSN=""` no `.env.example`).
+
+`playwright install` sem `--with-deps`: a flag de dependências de sistema é para
+Linux e exige privilégio de administrador; aqui o ambiente é Windows.
 
 - [ ] **Step 2: Configurar Vitest**
 
@@ -1501,8 +1549,8 @@ Expected: PASS — todos os testes das Tasks 3, 5, 7, 8.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add vitest.config.ts playwright.config.ts sentry.*.config.ts package.json package-lock.json .env.example
-git commit -m "chore: configura Vitest, Playwright e Sentry"
+git add vitest.config.ts playwright.config.ts package.json package-lock.json
+git commit -m "chore: configura Vitest e Playwright"
 ```
 
 ---
@@ -1594,15 +1642,31 @@ git commit -m "feat: deduplicação de contato por telefone"
 ### Task 13: Server Actions de Lead — criação manual e movimentação de etapa
 
 **Files:**
+- Create: `src/core/auth/session.ts`
+- Create: `src/core/leads/service.ts`
 - Create: `src/core/leads/actions.ts`
 - Create: `src/core/leads/queries.ts`
 - Test: `tests/unit/stage-transition.test.ts`
 
 **Interfaces:**
-- Produces: `criarLeadManual(input: { nome: string; telefone: string; email?: string; responsavelId: string; usuarioId: string }): Promise<Lead>`
-- Produces: `moverLeadDeEtapa(input: { leadId: string; novaStageId: string; usuarioId: string }): Promise<Lead>`
+- Produces: `usuarioAtual(): Promise<User>` em `session.ts` — deriva o usuário da sessão Auth.js; lança `Error("Não autenticado")` se não houver sessão
+- Produces (service, autor explícito — camada testável): `criarLead(input: { nome: string; telefone: string; email?: string; responsavelId: string; autorId: string }): Promise<Lead>`
+- Produces (service): `moverEtapa(input: { leadId: string; novaStageId: string; autorId: string }): Promise<Lead>`
+- Produces (action, `"use server"`, sem autor no input): `criarLeadManual(input: { nome: string; telefone: string; email?: string; responsavelId: string }): Promise<Lead>`
+- Produces (action): `moverLeadDeEtapa(input: { leadId: string; novaStageId: string }): Promise<Lead>`
 - Produces: `listarLeadsPorEtapa(): Promise<Record<string, LeadComRelacoes[]>>` em `queries.ts`, onde `LeadComRelacoes = Lead & { contact: Contact | null; responsavel: User | null }`
-- Consumes: `encontrarOuCriarContact` (Task 12), `registrarAuditoria` (Task 8), `listarEtapas` (Task 9)
+- Consumes: `encontrarOuCriarContact` (Task 12), `registrarAuditoria` (Task 8), `listarEtapas` (Task 9), `auth` (Task 5), `hasPermission` (Task 5)
+
+**Decisão de segurança (governa todas as tasks seguintes):** Server Actions são
+endpoints HTTP públicos. A identidade de quem age NUNCA vem do cliente — é sempre
+derivada da sessão no servidor via `usuarioAtual()`. Nenhum componente cliente
+recebe ou envia `usuarioId`/`autorId`. O `responsavelId` continua vindo do
+formulário (é escolha legítima do gestor), mas a action valida a permissão de quem
+chamou antes de atribuir a outro usuário.
+
+A lógica fica em `service.ts` com `autorId` explícito — é o que os testes Vitest
+exercitam, sem precisar de sessão HTTP. As actions em `actions.ts` são finas:
+derivam o autor e delegam.
 
 - [ ] **Step 1: Escrever o teste de transição de etapa**
 
@@ -1610,54 +1674,54 @@ git commit -m "feat: deduplicação de contato por telefone"
 ```typescript
 import { describe, it, expect, beforeAll } from "vitest";
 import { prisma } from "../../src/lib/prisma";
-import { criarLeadManual, moverLeadDeEtapa } from "../../src/core/leads/actions";
+import { criarLead, moverEtapa } from "../../src/core/leads/service";
 
 describe("movimentação de lead entre etapas", () => {
-  let usuarioId: string;
+  let autorId: string;
   let etapaOrigemId: string;
   let etapaDestinoId: string;
 
   beforeAll(async () => {
     const usuario = await prisma.user.findFirstOrThrow({ where: { papel: "ADMIN" } });
-    usuarioId = usuario.id;
+    autorId = usuario.id;
     const etapas = await prisma.pipelineStage.findMany({ orderBy: { ordem: "asc" } });
     etapaOrigemId = etapas[0].id;
     etapaDestinoId = etapas[1].id;
   });
 
   it("cria o lead na primeira etapa do funil", async () => {
-    const lead = await criarLeadManual({
+    const lead = await criarLead({
       nome: "Teste Transição",
       telefone: "11988887001",
-      responsavelId: usuarioId,
-      usuarioId,
+      responsavelId: autorId,
+      autorId,
     });
     expect(lead.stageId).toBe(etapaOrigemId);
   });
 
   it("move o lead para a nova etapa e atualiza ultimaInteracaoEm", async () => {
-    const lead = await criarLeadManual({
+    const lead = await criarLead({
       nome: "Teste Transição 2",
       telefone: "11988887002",
-      responsavelId: usuarioId,
-      usuarioId,
+      responsavelId: autorId,
+      autorId,
     });
 
     const antes = lead.ultimaInteracaoEm;
-    const movido = await moverLeadDeEtapa({ leadId: lead.id, novaStageId: etapaDestinoId, usuarioId });
+    const movido = await moverEtapa({ leadId: lead.id, novaStageId: etapaDestinoId, autorId });
 
     expect(movido.stageId).toBe(etapaDestinoId);
     expect(movido.ultimaInteracaoEm.getTime()).toBeGreaterThanOrEqual(antes.getTime());
   });
 
   it("registra um AuditLog ao mover o lead", async () => {
-    const lead = await criarLeadManual({
+    const lead = await criarLead({
       nome: "Teste Transição 3",
       telefone: "11988887003",
-      responsavelId: usuarioId,
-      usuarioId,
+      responsavelId: autorId,
+      autorId,
     });
-    await moverLeadDeEtapa({ leadId: lead.id, novaStageId: etapaDestinoId, usuarioId });
+    await moverEtapa({ leadId: lead.id, novaStageId: etapaDestinoId, autorId });
 
     const registros = await prisma.auditLog.findMany({
       where: { entidade: "Lead", entidadeId: lead.id, acao: "mover_etapa" },
@@ -1670,25 +1734,40 @@ describe("movimentação de lead entre etapas", () => {
 - [ ] **Step 2: Rodar e confirmar falha**
 
 Run: `npx vitest run tests/unit/stage-transition.test.ts`
-Expected: FAIL — `src/core/leads/actions.ts` não existe.
+Expected: FAIL — `src/core/leads/service.ts` não existe.
 
-- [ ] **Step 3: Implementar**
+- [ ] **Step 3: Implementar a leitura da sessão**
 
-`src/core/leads/actions.ts`:
+`src/core/auth/session.ts`:
 ```typescript
-"use server";
+import { auth } from "@/lib/auth";
+import { prisma } from "@/lib/prisma";
+import type { User } from "@prisma/client";
 
+export async function usuarioAtual(): Promise<User> {
+  const session = await auth();
+  if (!session?.user?.email) {
+    throw new Error("Não autenticado");
+  }
+  return prisma.user.findUniqueOrThrow({ where: { email: session.user.email } });
+}
+```
+
+- [ ] **Step 4: Implementar o service (lógica pura, autor explícito)**
+
+`src/core/leads/service.ts`:
+```typescript
 import { prisma } from "@/lib/prisma";
 import { encontrarOuCriarContact } from "./dedupe";
 import { registrarAuditoria } from "@/core/audit/log";
 import type { Lead } from "@prisma/client";
 
-export async function criarLeadManual(input: {
+export async function criarLead(input: {
   nome: string;
   telefone: string;
   email?: string;
   responsavelId: string;
-  usuarioId: string;
+  autorId: string;
 }): Promise<Lead> {
   const contact = await encontrarOuCriarContact({
     nome: input.nome,
@@ -1708,7 +1787,7 @@ export async function criarLeadManual(input: {
   });
 
   await registrarAuditoria({
-    userId: input.usuarioId,
+    userId: input.autorId,
     acao: "criar_lead",
     entidade: "Lead",
     entidadeId: lead.id,
@@ -1718,10 +1797,10 @@ export async function criarLeadManual(input: {
   return lead;
 }
 
-export async function moverLeadDeEtapa(input: {
+export async function moverEtapa(input: {
   leadId: string;
   novaStageId: string;
-  usuarioId: string;
+  autorId: string;
 }): Promise<Lead> {
   const antes = await prisma.lead.findUniqueOrThrow({ where: { id: input.leadId } });
 
@@ -1731,7 +1810,7 @@ export async function moverLeadDeEtapa(input: {
   });
 
   await registrarAuditoria({
-    userId: input.usuarioId,
+    userId: input.autorId,
     acao: "mover_etapa",
     entidade: "Lead",
     entidadeId: depois.id,
@@ -1743,7 +1822,63 @@ export async function moverLeadDeEtapa(input: {
 }
 ```
 
-- [ ] **Step 4: Implementar as leituras**
+- [ ] **Step 5: Implementar as Server Actions (finas, derivam o autor)**
+
+`src/core/leads/actions.ts`:
+```typescript
+"use server";
+
+import { usuarioAtual } from "@/core/auth/session";
+import { hasPermission } from "@/core/auth/permissions";
+import { criarLead, moverEtapa } from "./service";
+import type { Lead } from "@prisma/client";
+
+export async function criarLeadManual(input: {
+  nome: string;
+  telefone: string;
+  email?: string;
+  responsavelId: string;
+}): Promise<Lead> {
+  const autor = await usuarioAtual();
+
+  if (!hasPermission(autor.papel, "criar_lead")) {
+    throw new Error("Sem permissão para criar lead");
+  }
+
+  // Só ADMIN e GESTOR atribuem lead a outra pessoa; VENDEDOR fica com o próprio.
+  const responsavelId =
+    input.responsavelId !== autor.id && !hasPermission(autor.papel, "ver_dashboard_geral")
+      ? autor.id
+      : input.responsavelId;
+
+  return criarLead({
+    nome: input.nome,
+    telefone: input.telefone,
+    email: input.email,
+    responsavelId,
+    autorId: autor.id,
+  });
+}
+
+export async function moverLeadDeEtapa(input: {
+  leadId: string;
+  novaStageId: string;
+}): Promise<Lead> {
+  const autor = await usuarioAtual();
+
+  if (!hasPermission(autor.papel, "mover_lead")) {
+    throw new Error("Sem permissão para mover lead");
+  }
+
+  return moverEtapa({
+    leadId: input.leadId,
+    novaStageId: input.novaStageId,
+    autorId: autor.id,
+  });
+}
+```
+
+- [ ] **Step 6: Implementar as leituras**
 
 `src/core/leads/queries.ts`:
 ```typescript
@@ -1770,16 +1905,16 @@ export async function listarLeadsPorEtapa(): Promise<Record<string, LeadComRelac
 }
 ```
 
-- [ ] **Step 5: Rodar e confirmar sucesso**
+- [ ] **Step 7: Rodar e confirmar sucesso**
 
 Run: `npx vitest run tests/unit/stage-transition.test.ts`
 Expected: PASS (3 testes)
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
-git add src/core/leads/actions.ts src/core/leads/queries.ts tests/unit/stage-transition.test.ts
-git commit -m "feat: server actions de criação e movimentação de lead"
+git add src/core/auth/session.ts src/core/leads/service.ts src/core/leads/actions.ts src/core/leads/queries.ts tests/unit/stage-transition.test.ts
+git commit -m "feat: service e server actions de lead com autor derivado da sessao"
 ```
 
 ---
@@ -1818,27 +1953,27 @@ const schema = z.object({
 type FormData = z.infer<typeof schema>;
 
 export function LeadForm({
-  usuarioId,
+  responsavelPadraoId,
   vendedores,
 }: {
-  usuarioId: string;
+  responsavelPadraoId: string;
   vendedores: { id: string; nome: string }[];
 }) {
   const router = useRouter();
   const { register, handleSubmit, reset, formState: { errors, isSubmitting } } = useForm<FormData>({
     resolver: zodResolver(schema),
-    defaultValues: { responsavelId: usuarioId },
+    defaultValues: { responsavelId: responsavelPadraoId },
   });
 
   async function onSubmit(data: FormData) {
+    // Nenhum identificador de autor é enviado: a action deriva quem age da sessão.
     await criarLeadManual({
       nome: data.nome,
       telefone: data.telefone,
       email: data.email || undefined,
       responsavelId: data.responsavelId,
-      usuarioId,
     });
-    reset({ responsavelId: usuarioId });
+    reset({ responsavelId: responsavelPadraoId });
     router.refresh();
   }
 
@@ -1910,7 +2045,7 @@ export default async function LeadsPage() {
   return (
     <div className="p-6 space-y-6">
       <h1 className="text-xl font-semibold">Leads</h1>
-      <LeadForm usuarioId={usuario.id} vendedores={vendedores} />
+      <LeadForm responsavelPadraoId={usuario.id} vendedores={vendedores} />
     </div>
   );
 }
@@ -2012,11 +2147,9 @@ function Coluna({ etapa, leads }: { etapa: Etapa; leads: LeadResumo[] }) {
 export function KanbanBoard({
   etapas,
   leadsPorEtapa,
-  usuarioId,
 }: {
   etapas: Etapa[];
   leadsPorEtapa: Record<string, LeadResumo[]>;
-  usuarioId: string;
 }) {
   const router = useRouter();
 
@@ -2025,7 +2158,8 @@ export function KanbanBoard({
     if (!over) return;
     const leadId = active.id as string;
     const novaStageId = over.id as string;
-    await moverLeadDeEtapa({ leadId, novaStageId, usuarioId });
+    // Nenhum identificador de autor é enviado: a action deriva quem age da sessão.
+    await moverLeadDeEtapa({ leadId, novaStageId });
     router.refresh();
   }
 
@@ -2046,7 +2180,6 @@ export function KanbanBoard({
 `src/app/(painel)/leads/kanban/page.tsx`:
 ```tsx
 import { auth } from "@/lib/auth";
-import { prisma } from "@/lib/prisma";
 import { listarEtapas } from "@/core/pipeline/stages";
 import { listarLeadsPorEtapa } from "@/core/leads/queries";
 import { KanbanBoard } from "@/components/leads/kanban-board";
@@ -2056,11 +2189,10 @@ export default async function KanbanPage() {
   const session = await auth();
   if (!session?.user?.email) redirect("/login");
 
-  const usuario = await prisma.user.findUniqueOrThrow({ where: { email: session.user.email } });
   const etapas = await listarEtapas();
   const leadsPorEtapa = await listarLeadsPorEtapa();
 
-  return <KanbanBoard etapas={etapas} leadsPorEtapa={leadsPorEtapa} usuarioId={usuario.id} />;
+  return <KanbanBoard etapas={etapas} leadsPorEtapa={leadsPorEtapa} />;
 }
 ```
 
@@ -2268,7 +2400,7 @@ export default async function LeadsPage() {
   return (
     <div className="p-6 space-y-6">
       <h1 className="text-xl font-semibold">Leads</h1>
-      <LeadForm usuarioId={usuario.id} vendedores={vendedores} />
+      <LeadForm responsavelPadraoId={usuario.id} vendedores={vendedores} />
       {linhas.length === 0 ? (
         <EmptyState title="Nenhum lead ainda" description="Use o formulário acima para adicionar o primeiro." />
       ) : (
@@ -2311,7 +2443,7 @@ git commit -m "feat: listagem de leads com TanStack Table e filtro"
 import { describe, it, expect, beforeAll } from "vitest";
 import { prisma } from "../../src/lib/prisma";
 import { adicionarNota, listarNotas } from "../../src/core/leads/notes";
-import { criarLeadManual } from "../../src/core/leads/actions";
+import { criarLead } from "../../src/core/leads/service";
 
 describe("notas de lead", () => {
   let usuarioId: string;
@@ -2320,11 +2452,11 @@ describe("notas de lead", () => {
   beforeAll(async () => {
     const usuario = await prisma.user.findFirstOrThrow({ where: { papel: "ADMIN" } });
     usuarioId = usuario.id;
-    const lead = await criarLeadManual({
+    const lead = await criarLead({
       nome: "Teste Notas",
       telefone: "11988887100",
       responsavelId: usuarioId,
-      usuarioId,
+      autorId: usuarioId,
     });
     leadId = lead.id;
   });
@@ -2384,6 +2516,7 @@ Expected: PASS (2 testes)
 ```tsx
 import { prisma } from "@/lib/prisma";
 import { auth } from "@/lib/auth";
+import { usuarioAtual } from "@/core/auth/session";
 import { listarNotas, adicionarNota } from "@/core/leads/notes";
 import { redirect } from "next/navigation";
 import { Textarea } from "@/components/ui/textarea";
@@ -2395,7 +2528,6 @@ export default async function LeadDetalhePage({ params }: { params: Promise<{ id
   const session = await auth();
   if (!session?.user?.email) redirect("/login");
 
-  const usuario = await prisma.user.findUniqueOrThrow({ where: { email: session.user.email } });
   const lead = await prisma.lead.findUniqueOrThrow({
     where: { id },
     include: { contact: true, stage: true, responsavel: true },
@@ -2406,7 +2538,9 @@ export default async function LeadDetalhePage({ params }: { params: Promise<{ id
     "use server";
     const texto = formData.get("texto") as string;
     if (!texto?.trim()) return;
-    await adicionarNota({ leadId: id, autorId: usuario.id, texto });
+    // Autor derivado da sessão dentro da action, não capturado do escopo do componente.
+    const autor = await usuarioAtual();
+    await adicionarNota({ leadId: id, autorId: autor.id, texto });
   }
 
   return (
@@ -2460,6 +2594,7 @@ git commit -m "feat: notas de lead e página de detalhe"
 ### Task 18: Tarefas (Task) — criação, vencimento, conclusão
 
 **Files:**
+- Create: `src/core/tasks/service.ts`
 - Create: `src/core/tasks/actions.ts`
 - Create: `src/core/tasks/queries.ts`
 - Create: `src/app/(painel)/tasks/page.tsx`
@@ -2468,9 +2603,18 @@ git commit -m "feat: notas de lead e página de detalhe"
 - Test: `tests/unit/tasks.test.ts`
 
 **Interfaces:**
-- Produces: `criarTask(input: { titulo: string; descricao?: string; vencimento: Date; responsavelId: string; leadId?: string }): Promise<Task>`
-- Produces: `concluirTask(taskId: string): Promise<Task>`
-- Produces: `listarTasksPendentes(responsavelId?: string): Promise<Task[]>`
+- Produces (service, testável): `criarTask(input: { titulo: string; descricao?: string; vencimento: Date; responsavelId: string; leadId?: string }): Promise<Task>`
+- Produces (service): `concluirTask(input: { taskId: string; autorId: string }): Promise<Task>` — lança `Error("Tarefa não encontrada")` se a tarefa não pertence ao autor
+- Produces (service): `listarTasksPendentes(responsavelId?: string): Promise<Task[]>`
+- Produces (action, `"use server"`): `criarMinhaTask(input: { titulo: string; descricao?: string; vencimento: Date; leadId?: string }): Promise<Task>` — responsável é sempre quem chamou
+- Produces (action): `concluirMinhaTask(taskId: string): Promise<Task>`
+- Consumes: `usuarioAtual` (Task 13)
+
+Mesma decisão de segurança da Task 13: a action deriva o usuário da sessão. Na
+Fase 1 a tarefa é sempre do próprio usuário — atribuir tarefa a outra pessoa é
+funcionalidade de fase posterior, não um campo escondido do formulário. E concluir
+tarefa exige ser dono dela: sem essa checagem, qualquer usuário autenticado
+encerraria a tarefa de qualquer colega chamando a action com um id arbitrário.
 
 - [ ] **Step 1: Escrever o teste**
 
@@ -2478,7 +2622,7 @@ git commit -m "feat: notas de lead e página de detalhe"
 ```typescript
 import { describe, it, expect, beforeAll } from "vitest";
 import { prisma } from "../../src/lib/prisma";
-import { criarTask, concluirTask, listarTasksPendentes } from "../../src/core/tasks/actions";
+import { criarTask, concluirTask, listarTasksPendentes } from "../../src/core/tasks/service";
 
 describe("tarefas", () => {
   let usuarioId: string;
@@ -2504,7 +2648,7 @@ describe("tarefas", () => {
       vencimento: new Date(Date.now() + 86_400_000),
       responsavelId: usuarioId,
     });
-    const concluida = await concluirTask(task.id);
+    const concluida = await concluirTask({ taskId: task.id, autorId: usuarioId });
     expect(concluida.concluidaEm).not.toBeNull();
   });
 
@@ -2519,7 +2663,7 @@ describe("tarefas", () => {
       vencimento: new Date(Date.now() + 86_400_000),
       responsavelId: usuarioId,
     });
-    await concluirTask(concluida.id);
+    await concluirTask({ taskId: concluida.id, autorId: usuarioId });
 
     const pendentes = await listarTasksPendentes(usuarioId);
     const ids = pendentes.map((t) => t.id);
@@ -2534,12 +2678,10 @@ describe("tarefas", () => {
 Run: `npx vitest run tests/unit/tasks.test.ts`
 Expected: FAIL
 
-- [ ] **Step 3: Implementar `actions.ts`**
+- [ ] **Step 3: Implementar `service.ts`**
 
-`src/core/tasks/actions.ts`:
+`src/core/tasks/service.ts`:
 ```typescript
-"use server";
-
 import { prisma } from "@/lib/prisma";
 import type { Task } from "@prisma/client";
 
@@ -2561,9 +2703,14 @@ export async function criarTask(input: {
   });
 }
 
-export async function concluirTask(taskId: string): Promise<Task> {
+export async function concluirTask(input: { taskId: string; autorId: string }): Promise<Task> {
+  const task = await prisma.task.findUnique({ where: { id: input.taskId } });
+  if (!task || task.responsavelId !== input.autorId) {
+    throw new Error("Tarefa não encontrada");
+  }
+
   return prisma.task.update({
-    where: { id: taskId },
+    where: { id: input.taskId },
     data: { concluidaEm: new Date() },
   });
 }
@@ -2576,6 +2723,32 @@ export async function listarTasksPendentes(responsavelId?: string): Promise<Task
     },
     orderBy: { vencimento: "asc" },
   });
+}
+```
+
+- [ ] **Step 3b: Implementar `actions.ts` (finas, derivam o usuário)**
+
+`src/core/tasks/actions.ts`:
+```typescript
+"use server";
+
+import { usuarioAtual } from "@/core/auth/session";
+import { criarTask, concluirTask } from "./service";
+import type { Task } from "@prisma/client";
+
+export async function criarMinhaTask(input: {
+  titulo: string;
+  descricao?: string;
+  vencimento: Date;
+  leadId?: string;
+}): Promise<Task> {
+  const autor = await usuarioAtual();
+  return criarTask({ ...input, responsavelId: autor.id });
+}
+
+export async function concluirMinhaTask(taskId: string): Promise<Task> {
+  const autor = await usuarioAtual();
+  return concluirTask({ taskId, autorId: autor.id });
 }
 ```
 
@@ -2612,7 +2785,7 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { criarTask } from "@/core/tasks/actions";
+import { criarMinhaTask } from "@/core/tasks/actions";
 
 const schema = z.object({
   titulo: z.string().min(2, "Informe o título"),
@@ -2621,14 +2794,15 @@ const schema = z.object({
 
 type FormData = z.infer<typeof schema>;
 
-export function TaskForm({ responsavelId }: { responsavelId: string }) {
+export function TaskForm() {
   const router = useRouter();
   const { register, handleSubmit, formState: { errors, isSubmitting } } = useForm<FormData>({
     resolver: zodResolver(schema),
   });
 
   async function onSubmit(data: FormData) {
-    await criarTask({ titulo: data.titulo, vencimento: new Date(data.vencimento), responsavelId });
+    // Responsavel e derivado da sessao dentro da action.
+    await criarMinhaTask({ titulo: data.titulo, vencimento: new Date(data.vencimento) });
     router.refresh();
   }
 
@@ -2658,7 +2832,7 @@ export function TaskForm({ responsavelId }: { responsavelId: string }) {
 
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
-import { concluirTask } from "@/core/tasks/actions";
+import { concluirMinhaTask } from "@/core/tasks/actions";
 import { EmptyState } from "@/components/empty-state";
 
 type TaskLinha = { id: string; titulo: string; vencimento: Date; leadContatoNome?: string };
@@ -2667,7 +2841,7 @@ export function TaskList({ tasks }: { tasks: TaskLinha[] }) {
   const router = useRouter();
 
   async function handleConcluir(id: string) {
-    await concluirTask(id);
+    await concluirMinhaTask(id);
     router.refresh();
   }
 
@@ -2724,7 +2898,7 @@ export default async function TasksPage() {
   return (
     <div className="p-6 space-y-6">
       <h1 className="text-xl font-semibold">Tarefas</h1>
-      <TaskForm responsavelId={usuario.id} />
+      <TaskForm />
       <TaskList tasks={linhas} />
     </div>
   );
@@ -2773,7 +2947,7 @@ npm install resend @react-email/components
 import { describe, it, expect, beforeAll } from "vitest";
 import { prisma } from "../../src/lib/prisma";
 import { notificarNovoLead, listarNotificacoesNaoLidas, marcarComoLida } from "../../src/core/notifications/dispatch";
-import { criarLeadManual } from "../../src/core/leads/actions";
+import { criarLead } from "../../src/core/leads/service";
 
 describe("notificações", () => {
   let usuarioId: string;
@@ -2782,11 +2956,11 @@ describe("notificações", () => {
   beforeAll(async () => {
     const usuario = await prisma.user.findFirstOrThrow({ where: { papel: "ADMIN" } });
     usuarioId = usuario.id;
-    const lead = await criarLeadManual({
+    const lead = await criarLead({
       nome: "Teste Notificação",
       telefone: "11988887200",
       responsavelId: usuarioId,
-      usuarioId,
+      autorId: usuarioId,
     });
     leadId = lead.id;
   });
@@ -2904,11 +3078,23 @@ Expected: PASS (2 testes)
 
 - [ ] **Step 7: Conectar ao fluxo de criação de lead**
 
-Modificar `src/core/leads/actions.ts`, adicionando ao final de `criarLeadManual` (antes do `return lead;`):
+Modificar `src/core/leads/service.ts`: adicionar o import no topo do arquivo
+(import estático normal — não há ciclo, porque `dispatch.ts` não importa
+`service.ts`):
 ```typescript
-  const { notificarNovoLead } = await import("@/core/notifications/dispatch");
+import { notificarNovoLead } from "@/core/notifications/dispatch";
+```
+
+E, dentro de `criarLead`, chamar a notificação depois de gravar a auditoria e
+antes do `return lead;`:
+```typescript
   await notificarNovoLead(lead.id);
 ```
+
+A notificação vem por último de propósito: o lead e a auditoria já estão
+persistidos quando ela roda. Conforme a spec seção 6, falha de notificação não
+pode derrubar a criação do lead — o `try/catch` interno de `notificarNovoLead`
+(Step 5) já garante isso para o e-mail.
 
 - [ ] **Step 8: Sino de notificações**
 
@@ -2954,7 +3140,7 @@ Run: `npm run test` — Expected: todos os testes unitários PASS.
 - [ ] **Step 11: Commit**
 
 ```bash
-git add src/core/notifications src/components/notifications src/components/painel-nav.tsx src/core/leads/actions.ts tests/unit/notifications.test.ts .env.example package.json package-lock.json
+git add src/core/notifications src/components/notifications src/components/painel-nav.tsx src/core/leads/service.ts tests/unit/notifications.test.ts .env.example package.json package-lock.json
 git commit -m "feat: notificações in-app e por e-mail ao criar lead"
 ```
 
@@ -3032,7 +3218,7 @@ import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { listarEtapas } from "@/core/pipeline/stages";
 import { listarLeadsPorEtapa } from "@/core/leads/queries";
-import { listarTasksPendentes } from "@/core/tasks/actions";
+import { listarTasksPendentes } from "@/core/tasks/service";
 import { StageSummary } from "@/components/dashboard/stage-summary";
 import { ConversionChart } from "@/components/dashboard/conversion-chart";
 import { redirect } from "next/navigation";
@@ -3307,5 +3493,5 @@ git commit -m "chore: fecha Fase 0 + Fase 1 do CRM base"
 ## Pendências que ficam fora deste plano
 
 - **Fase 2 em diante** (catálogo, site público, analytics, Cloudflare, campanhas pagas, financeiro) — cada uma recebe seu próprio ciclo spec → plano.
-- **Sentry**: se a Task 11 não tiver conta Sentry disponível no momento da execução, o projeto sobe sem monitoramento de erro até essa lacuna ser fechada manualmente.
+- **Sentry**: removido da Task 11 — o wizard é interativo e falha com `ERR_TTY_INIT_FAILED` em execução automatizada (verificado), e ainda não há conta Sentry. O projeto sobe sem monitoramento de erro. Para fechar essa lacuna, rode o wizard num terminal interativo antes de colocar um cliente real em produção.
 - **Deploy na Vercel**: este plano cobre apenas o código; conectar o repositório à Vercel e configurar variáveis de ambiente de produção é uma ação manual fora do escopo de tasks de código.
