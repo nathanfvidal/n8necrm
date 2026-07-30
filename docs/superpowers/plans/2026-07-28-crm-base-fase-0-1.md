@@ -416,12 +416,52 @@ git commit -m "feat: schema Prisma do núcleo e cliente de banco"
 ### Task 3: `config/client.ts` — o arquivo do fork
 
 **Files:**
+- Create: `vitest.config.ts`
 - Create: `config/client.ts`
 - Create: `config/client.schema.ts`
 - Test: `tests/unit/client-config.test.ts`
+- Modify: `package.json` (script `test`)
 
 **Interfaces:**
 - Produces: `export const client: ClientConfig` — consumido por Task 6 (permissions), Task 9 (seed de PipelineStage) e futuramente pelo módulo catalog
+- Produces: `npm run test` funcionando — todas as tasks seguintes com teste dependem disto
+
+**Correção de ordenação:** esta é a primeira task com teste, então o Vitest é
+instalado e configurado AQUI, não na Task 11. A Task 11 cuida apenas do Playwright.
+
+- [ ] **Step 0: Instalar e configurar o Vitest**
+
+```bash
+npm install -D vitest @vitejs/plugin-react vite-tsconfig-paths
+```
+
+`vitest.config.ts`:
+```typescript
+import { defineConfig } from "vitest/config";
+import react from "@vitejs/plugin-react";
+import tsconfigPaths from "vite-tsconfig-paths";
+
+export default defineConfig({
+  plugins: [react(), tsconfigPaths()],
+  test: {
+    environment: "node",
+    include: ["tests/unit/**/*.test.ts"],
+  },
+});
+```
+
+O plugin `vite-tsconfig-paths` faz o alias `@/` do tsconfig funcionar nos testes —
+as tasks seguintes importam por `@/core/...` e quebram sem ele.
+
+Adicionar ao `package.json`:
+```json
+{
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest"
+  }
+}
+```
 
 - [ ] **Step 1: Escrever o schema de validação da config**
 
@@ -535,8 +575,8 @@ Expected: PASS (3 testes)
 - [ ] **Step 6: Commit**
 
 ```bash
-git add config tests/unit/client-config.test.ts
-git commit -m "feat: config/client.ts com schema de validação"
+git add config vitest.config.ts tests/unit/client-config.test.ts package.json package-lock.json
+git commit -m "feat: config/client.ts com schema de validacao e setup do Vitest"
 ```
 
 ---
@@ -1466,48 +1506,35 @@ git commit -m "feat: gating de módulos no menu e helper de 404 por rota"
 
 ---
 
-### Task 11: Configuração de Vitest e Playwright
+### Task 11: Configuração do Playwright
 
 **Files:**
-- Create: `vitest.config.ts`
 - Create: `playwright.config.ts`
-- Modify: `package.json` (scripts `test`, `test:e2e`)
+- Modify: `package.json` (script `test:e2e`)
 
 **Interfaces:**
-- Produces: `npm run test` e `npm run test:e2e`
+- Produces: `npm run test:e2e`
+- Consumes: Vitest já instalado e configurado na Task 3
+
+**O Vitest NÃO entra aqui** — ele foi instalado e configurado na Task 3, que é a
+primeira task com teste. Esta task cuida apenas do Playwright. Se `vitest.config.ts`
+não existir quando você chegar aqui, algo deu errado na Task 3: pare e reporte.
 
 **Sentry fica fora desta task, deliberadamente.** O `@sentry/wizard` é interativo
-(pede login e escolha de projeto no terminal) e travaria a execução automatizada.
-Além disso, o projeto ainda não tem conta Sentry. Monitoramento de erro entra como
-pendência documentada na seção final deste plano — configurar manualmente não
-bloqueia nenhuma das outras tasks.
+(pede login e escolha de projeto no terminal) e travaria a execução automatizada
+(falha verificada: `ERR_TTY_INIT_FAILED`). Além disso, o projeto ainda não tem conta
+Sentry. Monitoramento de erro entra como pendência documentada na seção final deste
+plano — configurar manualmente não bloqueia nenhuma das outras tasks.
 
 - [ ] **Step 1: Instalar dependências**
 
 ```bash
-npm install -D vitest @vitejs/plugin-react vite-tsconfig-paths @playwright/test
+npm install -D @playwright/test
 npx --yes playwright install chromium
 ```
 
 `playwright install` sem `--with-deps`: a flag de dependências de sistema é para
 Linux e exige privilégio de administrador; aqui o ambiente é Windows.
-
-- [ ] **Step 2: Configurar Vitest**
-
-`vitest.config.ts`:
-```typescript
-import { defineConfig } from "vitest/config";
-import react from "@vitejs/plugin-react";
-import tsconfigPaths from "vite-tsconfig-paths";
-
-export default defineConfig({
-  plugins: [react(), tsconfigPaths()],
-  test: {
-    environment: "node",
-    include: ["tests/unit/**/*.test.ts"],
-  },
-});
-```
 
 - [ ] **Step 3: Configurar Playwright**
 
@@ -1528,14 +1555,13 @@ export default defineConfig({
 });
 ```
 
-- [ ] **Step 4: Scripts no `package.json`**
+- [ ] **Step 4: Script no `package.json`**
 
-Adicionar:
+Adicionar ao bloco `scripts` já existente (que hoje tem `test` e `test:watch`,
+criados na Task 3 — não os remova nem os duplique):
 ```json
 {
   "scripts": {
-    "test": "vitest run",
-    "test:watch": "vitest",
     "test:e2e": "playwright test"
   }
 }
@@ -1544,13 +1570,13 @@ Adicionar:
 - [ ] **Step 5: Rodar toda a suíte unitária existente**
 
 Run: `npm run test`
-Expected: PASS — todos os testes das Tasks 3, 5, 7, 8.
+Expected: PASS — todos os testes das Tasks 3, 5, 7, 8, 10.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add vitest.config.ts playwright.config.ts package.json package-lock.json
-git commit -m "chore: configura Vitest e Playwright"
+git add playwright.config.ts package.json package-lock.json
+git commit -m "chore: configura Playwright para testes e2e"
 ```
 
 ---
