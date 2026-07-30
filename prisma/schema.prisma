@@ -1,0 +1,129 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  ADMIN
+  GESTOR
+  VENDEDOR
+}
+
+enum LeadChannel {
+  FORMULARIO
+  WHATSAPP
+  MANUAL
+}
+
+model User {
+  id            String         @id @default(cuid())
+  nome          String
+  email         String         @unique
+  senhaHash     String
+  papel         Role
+  ativo         Boolean        @default(true)
+  criadoEm      DateTime       @default(now())
+  leadsAtribuidos Lead[]       @relation("LeadResponsavel")
+  tasks         Task[]
+  notes         LeadNote[]
+  notifications Notification[]
+  auditLogs     AuditLog[]
+}
+
+model Contact {
+  id        String   @id @default(cuid())
+  nome      String
+  telefone  String   @unique
+  email     String?
+  criadoEm  DateTime @default(now())
+  leads     Lead[]
+}
+
+model PipelineStage {
+  id        String   @id @default(cuid())
+  nome      String
+  ordem     Int
+  cor       String
+  ehGanho   Boolean  @default(false)
+  ehPerdido Boolean  @default(false)
+  leads     Lead[]
+
+  @@unique([ordem])
+}
+
+model Lead {
+  id                 String        @id @default(cuid())
+  contactId          String?
+  contact            Contact?      @relation(fields: [contactId], references: [id])
+  itemId             String?
+  stageId            String
+  stage              PipelineStage @relation(fields: [stageId], references: [id])
+  responsavelId      String?
+  responsavel        User?         @relation("LeadResponsavel", fields: [responsavelId], references: [id])
+  canal              LeadChannel
+  valorEstimado      Decimal?
+  sessionId          String?
+  utm                Json?
+  criadoEm           DateTime      @default(now())
+  ultimaInteracaoEm  DateTime      @default(now())
+  notes              LeadNote[]
+  tasks              Task[]
+
+  @@index([stageId, responsavelId])
+  @@index([criadoEm])
+}
+
+model LeadNote {
+  id        String   @id @default(cuid())
+  leadId    String
+  lead      Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  autorId   String
+  autor     User     @relation(fields: [autorId], references: [id])
+  texto     String
+  criadoEm  DateTime @default(now())
+}
+
+model Task {
+  id            String    @id @default(cuid())
+  titulo        String
+  descricao     String?
+  vencimento    DateTime
+  concluidaEm   DateTime?
+  responsavelId String
+  responsavel   User      @relation(fields: [responsavelId], references: [id])
+  leadId        String?
+  lead          Lead?     @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  criadoEm      DateTime  @default(now())
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  tipo      String
+  payload   Json
+  lidaEm    DateTime?
+  criadoEm  DateTime @default(now())
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id])
+  acao       String
+  entidade   String
+  entidadeId String
+  antes      Json?
+  depois     Json?
+  ip         String?
+  criadoEm   DateTime @default(now())
+}
+
+model RateLimit {
+  chave        String   @id
+  janelaInicio DateTime
+  contagem     Int      @default(0)
+}
