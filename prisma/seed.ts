@@ -31,10 +31,19 @@ const CORES = ["#94A3B8", "#60A5FA", "#FBBF24", "#F97316", "#22C55E"];
  *   prisma/migrations/20260730211315_init/migration.sql) — como este mesmo
  *   seed cria Leads apontando para a primeira etapa, um `deleteMany()` em
  *   PipelineStage quebraria já na segunda execução, com leads existentes
- *   referenciando as etapas que se está tentando apagar.
- * - User: upsert por `email` (único no schema). `update: {}` propositalmente
- *   não regrava `senhaHash` numa reexecução — bcrypt.hash tem salt
- *   aleatório, então o hash mudaria a cada run sem necessidade nenhuma.
+ *   referenciando as etapas que se está tentando apagar. Depois do upsert,
+ *   o seed também reconcilia órfãos (etapas com `ordem >= client.funil.length`
+ *   que sobraram de uma execução anterior com um funil maior — ver
+ *   `reconciliarEtapasOrfas` abaixo) e confere explicitamente que exatamente
+ *   1 etapa ficou com `ehGanho: true` (fix round 1/5: encolher o funil sem
+ *   isso deixava a etapa removida órfã com `ehGanho: true` para sempre,
+ *   fazendo `ehGanho` apontar para duas etapas ao mesmo tempo).
+ * - User: upsert por `email` (único no schema). `senhaHash` só é regravado
+ *   numa reexecução quando `SEED_PASSWORD` está explicitamente definida (ver
+ *   comentário junto a `senhaPlanoExplicita` abaixo) — fix round 1/5: antes
+ *   `update: {}` nunca regravava o hash, então `SEED_PASSWORD` definida
+ *   depois do primeiro seed não tinha efeito nenhum e a senha antiga
+ *   continuava válida.
  * - Contact: upsert por `telefone` (único no schema).
  * - Lead: não tem chave natural única no schema. Para não duplicar a cada
  *   execução, só cria um Lead para o contato se ainda não existir nenhum
@@ -61,6 +70,9 @@ export async function seed(): Promise<void> {
     });
   }
 
+  await reconciliarEtapasOrfas();
+  await confirmarInvarianteEhGanho();
+
   // "senha123" é um literal público (está no repo). Nada nesta função
   // detecta com segurança se DATABASE_URL aponta pro Postgres real de um
   // cliente em produção — não há trigger automático de seed em nenhum
@@ -71,18 +83,27 @@ export async function seed(): Promise<void> {
   // A mitigação cabível aqui é dar um jeito barato de trocar a senha sem
   // tocar em código: SEED_PASSWORD, com o literal documentado como
   // fallback (mantém dev/demo/testes funcionando sem configuração extra).
-  const senhaPlano = process.env.SEED_PASSWORD ?? "senha123";
+  //
+  // `senhaPlanoExplicita` (fix round 1/5): distinguimos "SEED_PASSWORD não
+  // foi definida" de "foi definida com algum valor". Só regravamos
+  // `senhaHash` numa reexecução quando a variável foi explicitamente
+  // passada — o objetivo é rotacionar a senha de verdade quando alguém pede
+  // isso deliberadamente, sem reescrever o hash (com salt novo, toda vez)
+  // numa reexecução comum onde ninguém pediu troca nenhuma.
+  const senhaPlanoExplicita = process.env.SEED_PASSWORD;
+  const senhaPlano = senhaPlanoExplicita ?? "senha123";
   const senhaHash = await bcrypt.hash(senhaPlano, 10);
+  const atualizarSenhaNaReexecucao = senhaPlanoExplicita !== undefined;
 
   const admin = await prisma.user.upsert({
     where: { email: "admin@exemplo.com" },
-    update: {},
+    update: atualizarSenhaNaReexecucao ? { senhaHash } : {},
     create: { nome: "Admin Exemplo", email: "admin@exemplo.com", senhaHash, papel: "ADMIN" },
   });
 
   const vendedor = await prisma.user.upsert({
     where: { email: "vendedor@exemplo.com" },
-    update: {},
+    update: atualizarSenhaNaReexecucao ? { senhaHash } : {},
     create: { nome: "Vendedor Exemplo", email: "vendedor@exemplo.com", senhaHash, papel: "VENDEDOR" },
   });
 
@@ -110,6 +131,71 @@ export async function seed(): Promise<void> {
   }
 
   console.log("Seed concluído.");
+}
+
+/**
+ * Remove do banco as `PipelineStage` que sobraram de uma execução anterior
+ * com um `client.funil` maior (ex.: funil tinha 5 etapas, alguém removeu uma
+ * em `config/client.ts` e reduziu pra 4 — a antiga etapa de `ordem: 4` não é
+ * mais tocada pelo loop de upsert em `seed()`, que só cobre
+ * `0..client.funil.length - 1`).
+ *
+ * Fix round 1/5: sem isso, a etapa órfã ficava no banco pra sempre com o
+ * `ehGanho: true` que tinha antes de virar órfã (era a última etapa do
+ * funil anterior), enquanto a nova última etapa também virava `ehGanho:
+ * true` — duas linhas com a flag ligada ao mesmo tempo, silenciosamente.
+ * `listarEtapas()` não filtra por comprimento, então também devolveria a
+ * órfã pra sempre.
+ *
+ * `Lead.stageId` é `ON DELETE RESTRICT`, então apagar uma etapa que ainda
+ * tem lead não é uma opção silenciosa: mover ou perder leads de um cliente
+ * de verdade é pior do que o bug que este fix resolve. Por isso, se algum
+ * lead ainda aponta pra uma etapa órfã, o seed falha alto e explica o que
+ * o operador precisa fazer antes de rodar de novo — em vez de deixar o
+ * Postgres estourar uma violação de FK crua, ou (pior) apagar o lead junto.
+ */
+async function reconciliarEtapasOrfas(): Promise<void> {
+  const orfas = await prisma.pipelineStage.findMany({
+    where: { ordem: { gte: client.funil.length } },
+    orderBy: { ordem: "asc" },
+  });
+
+  for (const orfa of orfas) {
+    const leadsNaEtapa = await prisma.lead.count({ where: { stageId: orfa.id } });
+    if (leadsNaEtapa > 0) {
+      throw new Error(
+        `Seed abortado: a etapa "${orfa.nome}" (ordem ${orfa.ordem}, id ${orfa.id}) não existe mais em ` +
+          `client.funil, mas ainda tem ${leadsNaEtapa} lead(s) apontando pra ela. Apagar essa etapa ` +
+          `automaticamente moveria ou descartaria esses leads sem confirmação — o seed não faz isso. ` +
+          `Mova os leads pra uma etapa que continua existindo antes de rodar o seed de novo, por exemplo: ` +
+          `prisma.lead.updateMany({ where: { stageId: "${orfa.id}" }, data: { stageId: <idDaNovaEtapa> } })`
+      );
+    }
+    await prisma.pipelineStage.delete({ where: { id: orfa.id } });
+  }
+}
+
+/**
+ * Confere explicitamente, depois do upsert e da reconciliação de órfãs, que
+ * o banco tem exatamente 1 `PipelineStage` com `ehGanho: true` — a Task 20
+ * calcula a taxa de conversão a partir exatamente dessa flag.
+ *
+ * Fix round 1/5: o loop de upsert em `seed()` já marca exatamente 1 etapa
+ * como `ehGanho` por construção (`index === client.funil.length - 1`), e
+ * `reconciliarEtapasOrfas` já remove qualquer etapa fora dessa faixa — mas
+ * confiar nisso implicitamente foi exatamente como o bug original passou:
+ * o loop "parecia" bastar. Esta checagem é o alarme que dispara se alguma
+ * mudança futura nessas duas funções voltar a violar o invariante, em vez
+ * de deixar o dado errado seguir silenciosamente pro dashboard da Task 20.
+ */
+async function confirmarInvarianteEhGanho(): Promise<void> {
+  const etapasGanhas = await prisma.pipelineStage.count({ where: { ehGanho: true } });
+  if (etapasGanhas !== 1) {
+    throw new Error(
+      `Invariante violada: esperava exatamente 1 PipelineStage com ehGanho=true, encontrei ${etapasGanhas}. ` +
+        `Task 20 calcula a taxa de conversão a partir dessa flag — não é seguro continuar o seed assim.`
+    );
+  }
 }
 
 // O Vitest define process.env.VITEST em todo processo de teste. Sem essa
