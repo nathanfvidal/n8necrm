@@ -24,6 +24,65 @@ import { auth } from "@/lib/auth";
  * `startsWith("/site")`. Essa foi a causa do bug original desta função: um
  * check que nunca podia ser verdadeiro e que só passava a falsa impressão
  * de existir uma exceção pública ativa.
+ *
+ * **Por que `isLoggedIn` não checa `User.ativo` (fix round 2/5):**
+ * `isLoggedIn` só confirma que existe um JWT válido — não que o usuário
+ * continua ativo, porque desativar alguém não invalida um cookie já
+ * emitido (mesma causa raiz do fix round 1/5 em
+ * `src/core/auth/session.ts#usuarioAtual`). Cogitamos consultar
+ * `User.ativo` aqui também, e DESCARTAMOS, por dois motivos:
+ *
+ * 1. Ao contrário do que uma leitura rápida da documentação mais antiga do
+ *    Next.js sugere, Proxy NÃO está preso ao runtime Edge nesta versão —
+ *    "Proxy defaults to using the Node.js runtime" desde o v16
+ *    (node_modules/next/dist/docs/.../file-conventions/proxy.md, seção
+ *    "Runtime" e "Version history"). Então uma consulta ao Postgres via
+ *    Prisma não quebraria por incompatibilidade de runtime só por rodar
+ *    aqui — ao contrário do que se poderia supor por experiência com
+ *    versões anteriores do Next.js (isto é exatamente o tipo de mudança
+ *    que a AGENTS.md deste repo avisa para não presumir do treinamento).
+ * 2. Mesmo assim, a própria doc do Proxy recomenda não depender de módulos
+ *    ou globais compartilhados aqui ("Proxy is meant to be invoked
+ *    separately of your render code and in optimized cases deployed to
+ *    your CDN... you should not attempt relying on shared modules or
+ *    globals") — o singleton do Prisma em `src/lib/prisma.ts`
+ *    (`globalForPrisma`) é exatamente esse tipo de global, pensado para
+ *    reuso de conexão dentro do runtime principal da aplicação, não para
+ *    um ambiente que pode ser otimizado/distribuído separadamente. Somado
+ *    a isso, o `matcher` abaixo roda em quase toda requisição — inclusive
+ *    _next/data e qualquer navegação, não só páginas do painel — então uma
+ *    query aqui custaria uma consulta ao banco por requisição roteada,
+ *    não uma por página protegida renderizada.
+ *
+ * `(painel)/layout.tsx` fecha esse gap sozinho, de forma suficiente: TODA
+ * página sob `(painel)` (presente e futura) passa por `usuarioAtual()`
+ * antes de renderizar, e `/login` foi movida para fora desse layout
+ * exatamente para não entrar nesse gate. `isLoggedIn` aqui continua
+ * servindo de filtro barato e rápido — nenhuma requisição sem cookie
+ * nenhum chega perto do layout/render — mas a palavra final sobre "esta
+ * sessão ainda é válida" é do `usuarioAtual()` chamado no layout, não desta
+ * função.
+ *
+ * **Por que esta função NÃO redireciona `isLoggedIn && isLoginPage` para
+ * `/` (removido no fix round 2/5 — bug pego rodando HTTP de verdade, não
+ * por leitura de código):** a primeira versão deste fix tinha essa regra
+ * (poupa quem já está logado de ver o formulário de novo). Ela cria um
+ * loop de redirecionamento infinito assim que existe uma sessão com JWT
+ * válido mas usuário desativado: proxy vê `isLoggedIn: true` (JWT ainda
+ * decodifica — desativação não invalida o cookie) e deixa passar; o layout
+ * chama `usuarioAtual()`, que rejeita, e manda para `/login`; o proxy
+ * intercepta essa NOVA requisição para `/login`, vê `isLoggedIn: true` de
+ * novo (mesmo JWT) e manda de volta para `/`; o layout rejeita nesse `/`
+ * de novo — infinito, sempre entre proxy e layout, nunca chega a renderizar
+ * nada. Reproduzido ao vivo com `curl`/browser real contra
+ * `vendedor@exemplo.com` desativado: `ERR_TOO_MANY_REDIRECTS`. A causa raiz
+ * é a MESMA de não checar `ativo` aqui: este proxy não tem uma noção de
+ * "logado" forte o bastante para decidir com segurança quando pular
+ * `/login` — só quem chama `usuarioAtual()` tem. Por isso essa decisão foi
+ * movida para dentro de `src/app/login/page.tsx` (Server Component): ele
+ * chama `usuarioAtual()` e só redireciona para `/` quando ela resolve de
+ * verdade — o mesmo critério do layout, sem duplicar uma versão mais fraca
+ * aqui que pudesse discordar dele.
  */
 export default auth(function proxy(req) {
   const isLoggedIn = !!req.auth;
@@ -31,10 +90,6 @@ export default auth(function proxy(req) {
 
   if (!isLoggedIn && !isLoginPage) {
     return NextResponse.redirect(new URL("/login", req.url));
-  }
-
-  if (isLoggedIn && isLoginPage) {
-    return NextResponse.redirect(new URL("/", req.url));
   }
 
   return NextResponse.next();

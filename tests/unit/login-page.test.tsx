@@ -15,9 +15,14 @@ vi.mock("next/navigation", () => ({
 }));
 
 // Importado após os mocks acima, para que o componente use os stubs.
-const { default: LoginPage } = await import("../../src/app/(painel)/login/page");
+// Fix round 2/5: o form em si (client, testável com RTL) foi extraído para
+// login-form.tsx; src/app/login/page.tsx virou um Server Component (async,
+// chama usuarioAtual()) que este arquivo NÃO exercita — RTL não renderiza
+// Server Components async diretamente. Esse comportamento tem cobertura
+// própria em tests/unit/login-page-guard.test.tsx.
+const { LoginForm } = await import("../../src/app/login/login-form");
 
-describe("LoginPage", () => {
+describe("LoginForm", () => {
   beforeEach(() => {
     signInMock.mockReset();
     pushMock.mockReset();
@@ -29,7 +34,7 @@ describe("LoginPage", () => {
   });
 
   async function preencherESubmeter() {
-    render(<LoginPage />);
+    render(<LoginForm />);
     fireEvent.change(screen.getByLabelText("E-mail"), {
       target: { value: "usuario@example.com" },
     });

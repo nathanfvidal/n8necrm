@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
-export default function LoginPage() {
+export function LoginForm() {
   const router = useRouter();
   const [erro, setErro] = useState<string | null>(null);
 
