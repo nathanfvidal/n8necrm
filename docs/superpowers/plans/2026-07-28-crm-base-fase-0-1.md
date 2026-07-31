@@ -3456,7 +3456,11 @@ test("cria um lead manualmente e move até a etapa final do funil", async ({ pag
 - [ ] **Step 2: Rodar o teste**
 
 Garantir que o banco de teste tem o seed aplicado (`npx prisma db seed`) e que `.env` aponta para um banco onde `admin@exemplo.com` / `senha123` existe.
-Run: `npx playwright test tests/e2e/lead-to-won.spec.ts`
+Run: `npm run test:e2e -- tests/e2e/lead-to-won.spec.ts`
+
+Use o script `test:e2e`, nunca `npx playwright test` direto: o script roda antes um
+guard que aborta se a porta 3000 ja estiver ocupada. Sem ele, o Playwright reusa o
+servidor existente, pula o build e roda a suite contra codigo obsoleto em silencio.
 Expected: PASS
 
 Se o drag-and-drop do dnd-kit não for capturado pelo `dragTo` padrão do Playwright (comum com bibliotecas de drag customizadas), substituir por sequência manual de mouse:
