@@ -10,7 +10,7 @@
     "postinstall": "prisma generate",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:e2e": "playwright test",
+    "test:e2e": "tsx scripts/e2e-port-guard.ts && playwright test",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
