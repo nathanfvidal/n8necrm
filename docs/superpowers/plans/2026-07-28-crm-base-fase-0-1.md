@@ -21,6 +21,7 @@ Referência de design: [`docs/superpowers/specs/2026-07-28-crm-base-design.md`](
 - Rate limiting é implementado em PostgreSQL (tabela `RateLimit`), não Redis — ver spec seção 7
 - `Lead.contactId` é opcional (spec seção 4.6) — leads de canal WHATSAPP podem nascer sem contato identificado
 - Todo teste de regra de negócio usa Vitest; todo teste de fluxo ponta-a-ponta usa Playwright — nenhum CRUD trivial ganha teste dedicado (spec seção 8)
+- **Teste de componente (React Testing Library + jsdom) é permitido apenas para lógica de ramificação dentro de componentes cliente** — por exemplo, decidir o que fazer conforme o retorno de uma Server Action. NÃO é licença para testar layout, snapshot de componentes shadcn ou renderização estática: isso continua fora de escopo. Infra já instalada na Task 5
 - Commits pequenos, um por task concluída, seguindo o padrão `tipo: descrição` (feat, fix, test, chore, docs)
 
 ---
