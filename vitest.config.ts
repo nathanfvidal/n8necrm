@@ -6,6 +6,6 @@ export default defineConfig({
   plugins: [react(), tsconfigPaths()],
   test: {
     environment: "node",
-    include: ["tests/unit/**/*.test.ts"],
+    include: ["tests/unit/**/*.test.ts", "tests/unit/**/*.test.tsx"],
   },
 });

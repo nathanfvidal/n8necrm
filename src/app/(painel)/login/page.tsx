@@ -19,7 +19,7 @@ export default function LoginPage() {
       redirect: false,
     });
 
-    if (resultado?.error) {
+    if (!resultado || resultado.error) {
       setErro("E-mail ou senha inválidos.");
       return;
     }
