@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { moduloAtivo } from "../../src/lib/modules";
+import { moduloAtivo } from "../../src/lib/module-gate";
 import { client } from "../../config/client";
 
 describe("moduloAtivo", () => {

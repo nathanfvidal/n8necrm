@@ -1,6 +1,6 @@
 import Link from "next/link";
 
-import { moduloAtivo } from "@/lib/modules";
+import { moduloAtivo } from "@/lib/module-gate";
 
 const linksFixos = [
   { href: "/", label: "Dashboard" },
