@@ -168,14 +168,27 @@ export function LeadForm({
           // próprio autor sempre que quem chama não tem `ver_dashboard_geral`
           // (ver actions.ts). Oferecer aqui um <select> com outros nomes
           // prometeria uma escolha que seria descartada em silêncio; em vez
-          // disso mostramos só o próprio nome, sem opção de troca, e o campo
-          // vai preenchido via input escondido (o valor nunca muda, então
-          // não precisa de um controle editável).
+          // disso mostramos só o próprio nome, sem opção de troca.
+          //
+          // Dois elementos, de propósito, não um só: `<input type="hidden">`
+          // não é "labelable" pela spec de HTML (a lista de elementos que um
+          // `<label for>` pode apontar exclui explicitamente
+          // `input[type=hidden]`), então associar o Label acima a ele seria
+          // uma associação tão inválida quanto a anterior (que apontava para
+          // um `<p>`, também não-labelable). Em vez disso: um `<input>`
+          // visível, desabilitado, só para exibição — esse SIM é labelable,
+          // é o que `id="responsavelId"` recebe — e um `<input type="hidden">`
+          // à parte, sem id/label (não precisa: nunca é percebido nem
+          // interagido), carregando o valor de verdade via `register`.
           <>
+            <Input
+              id="responsavelId"
+              value={`Você (${nomeUsuario})`}
+              disabled
+              readOnly
+              aria-readonly="true"
+            />
             <input type="hidden" {...register("responsavelId")} />
-            <p id="responsavelId" className="flex h-8 items-center text-sm text-muted-foreground">
-              Você ({nomeUsuario})
-            </p>
           </>
         )}
         {errors.responsavelId && (

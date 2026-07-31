@@ -69,7 +69,10 @@ describe("LeadForm", () => {
     );
 
     expect(screen.queryByRole("combobox")).toBeNull();
-    expect(screen.getByText("Você (Bruno Vendedor)")).toBeTruthy();
+    // O texto "Você (nome)" mora no `value` de um <input> desabilitado (não
+    // em texto solto de <p>) — é o que torna o Label htmlFor="responsavelId"
+    // uma associação label/control válida nesta ramificação (fix round 1/5).
+    expect(screen.getByDisplayValue("Você (Bruno Vendedor)")).toBeTruthy();
   });
 
   it("submete sem enviar nenhum identificador de autor e usa o responsavelId escolhido", async () => {
@@ -95,6 +98,32 @@ describe("LeadForm", () => {
       responsavelId: "user-2",
     });
   });
+
+  it(
+    "VENDEDOR (podeAtribuirOutraPessoa=false): a submissão real envia " +
+      "responsavelId === responsavelPadraoId via o input escondido, não um valor " +
+      "digitável — esta é a ramificação que o clamp do servidor (Task 13) existe " +
+      "para proteger, e até agora só tinha cobertura manual em browser",
+    async () => {
+      criarLeadManualMock.mockResolvedValue({ id: "lead-1" });
+      render(
+        <LeadForm
+          responsavelPadraoId="user-2"
+          nomeUsuario="Bruno Vendedor"
+          vendedores={[]}
+          podeAtribuirOutraPessoa={false}
+        />
+      );
+
+      await preencher();
+      fireEvent.click(screen.getByRole("button", { name: "Adicionar lead" }));
+
+      await waitFor(() => expect(criarLeadManualMock).toHaveBeenCalledTimes(1));
+      expect(criarLeadManualMock).toHaveBeenCalledWith(
+        expect.objectContaining({ responsavelId: "user-2" })
+      );
+    }
+  );
 
   it("em caso de sucesso, limpa o formulário e atualiza a rota", async () => {
     criarLeadManualMock.mockResolvedValue({ id: "lead-1" });
