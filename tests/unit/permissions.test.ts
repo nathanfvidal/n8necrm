@@ -1,6 +1,17 @@
 import { describe, it, expect } from "vitest";
 import { hasPermission } from "../../src/core/auth/permissions";
 
+describe("hygiene de configuração de teste", () => {
+  it("este arquivo não toca banco, então não deve ter credenciais reais em process.env (guarda contra vazamento via vitest.config.ts)", () => {
+    // rate-limit.test.ts e audit-log.test.ts carregam DATABASE_URL via
+    // `import "dotenv/config"` dentro deles mesmos, não em vitest.config.ts
+    // — exatamente para que arquivos como este não vejam credenciais que
+    // não pedem. SUPABASE_SERVICE_ROLE_KEY é a mais sensível: se ela
+    // aparecer aqui, algo voltou a injetar o .env inteiro globalmente.
+    expect(process.env.SUPABASE_SERVICE_ROLE_KEY).toBeUndefined();
+  });
+});
+
 describe("hasPermission", () => {
   it("ADMIN pode gerenciar usuários", () => {
     expect(hasPermission("ADMIN", "gerenciar_usuarios")).toBe(true);

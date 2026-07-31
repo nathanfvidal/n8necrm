@@ -1,3 +1,12 @@
+// Este arquivo (e apenas ele, junto com rate-limit.test.ts) usa o Prisma
+// real contra o Postgres do Supabase, então carrega DATABASE_URL do .env
+// aqui — não em vitest.config.ts — para não injetar credenciais
+// (AUTH_SECRET, SUPABASE_SERVICE_ROLE_KEY, ...) em arquivos de teste que não
+// tocam banco. Precisa ser o primeiro import: os módulos abaixo (via
+// src/lib/prisma.ts → src/lib/env.ts) leem process.env.DATABASE_URL no
+// top-level.
+import "dotenv/config";
+
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../../src/lib/prisma";
