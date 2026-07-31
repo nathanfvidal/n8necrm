@@ -26,7 +26,7 @@ const eslintConfig = defineConfig([
         {
           patterns: [
             {
-              group: ["**/modules/*", "@/modules/*"],
+              group: ["@/modules", "@/modules/*", "**/modules", "**/modules/*"],
               message: "src/core não pode importar de src/modules — ver spec seção 3.3",
             },
           ],
