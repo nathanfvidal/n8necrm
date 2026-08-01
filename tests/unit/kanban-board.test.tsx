@@ -197,6 +197,57 @@ describe("useKanbanBoard", () => {
     expect(result.current.leadsPorEtapa["etapa-1"]).toHaveLength(1);
   });
 
+  it(
+    "fix 1/5: duas chamadas de handleDragEnd que compartilham o MESMO fechamento, sem re-render " +
+      "entre elas, não podem deixar o board e o servidor em desacordo — a segunda precisa " +
+      "enxergar o efeito da primeira, não a foto antiga do estado capturada no fechamento",
+    async () => {
+      moverLeadDeEtapaMock.mockResolvedValue(leadFake());
+      const { result } = renderHook(() =>
+        useKanbanBoard({ "etapa-1": [leadFake()], "etapa-2": [], "etapa-3": [] })
+      );
+
+      // Uma ÚNICA referência de `handleDragEnd`, tirada de um único render —
+      // as duas chamadas abaixo compartilham o mesmo fechamento, simulando
+      // duas ativações do sensor (ex.: KeyboardSensor disparando rápido, ou
+      // um double-fire de sensor) antes de o React re-renderizar entre elas.
+      const handleDragEnd = result.current.handleDragEnd;
+
+      await act(async () => {
+        // Disparadas de volta a volta, SEM aguardar a primeira: é
+        // exatamente esse intervalo síncrono (a parte de `handleDragEnd`
+        // antes do primeiro `await`) que reproduz "nenhum re-render entre
+        // elas" — a segunda chamada tem que enxergar o efeito síncrono da
+        // primeira mesmo sem o React ter re-renderizado ainda.
+        const p1 = handleDragEnd(eventoFake("lead-1", "etapa-2"));
+        const p2 = handleDragEnd(eventoFake("lead-1", "etapa-3"));
+        await Promise.all([p1, p2]);
+      });
+
+      // O servidor (mock) recebeu as DUAS movimentações pretendidas: etapa-1
+      // -> etapa-2 pela primeira chamada, depois etapa-2 -> etapa-3 pela
+      // segunda — a intenção do usuário foi "mover, depois mover de novo".
+      expect(moverLeadDeEtapaMock).toHaveBeenNthCalledWith(1, {
+        leadId: "lead-1",
+        novaStageId: "etapa-2",
+      });
+      expect(moverLeadDeEtapaMock).toHaveBeenNthCalledWith(2, {
+        leadId: "lead-1",
+        novaStageId: "etapa-3",
+      });
+
+      // O board TEM que concordar com o que o servidor acabou de confirmar:
+      // o lead termina em etapa-3 — não "preso" em etapa-2 (nem, pior, ainda
+      // em etapa-1) enquanto o banco já registrou etapa-3. Um board que
+      // discorda silenciosamente do banco é o tipo de bug que aparece como
+      // "o CRM perdeu minha alteração".
+      expect(result.current.leadsPorEtapa["etapa-3"].map((lead) => lead.id)).toEqual(["lead-1"]);
+      expect(result.current.leadsPorEtapa["etapa-2"]).toHaveLength(0);
+      expect(result.current.leadsPorEtapa["etapa-1"]).toHaveLength(0);
+      expect(result.current.erro).toBeNull();
+    }
+  );
+
   it("limparErro apaga a mensagem de erro exibida", async () => {
     moverLeadDeEtapaMock.mockRejectedValue(new Error("Sem permissão para mover lead"));
     const { result } = renderHook(() => useKanbanBoard({ "etapa-1": [leadFake()], "etapa-2": [] }));

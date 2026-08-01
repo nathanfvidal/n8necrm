@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
   DndContext,
   KeyboardSensor,
@@ -111,6 +111,24 @@ function mensagemDeErroMover(erro: unknown): string {
  */
 export function useKanbanBoard(leadsPorEtapaInicial: LeadsPorEtapa) {
   const [leadsPorEtapa, setLeadsPorEtapa] = useState(leadsPorEtapaInicial);
+  // Espelha `leadsPorEtapa`, mas é lido e escrito de forma SÍNCRONA, sem
+  // depender de quando o React decide re-renderizar (fix round 1/5, achado
+  // do revisor). A variável de estado `leadsPorEtapa` fica presa ao
+  // fechamento do render em que `handleDragEnd` foi criada — duas chamadas
+  // que compartilham o MESMO fechamento (ex.: `KeyboardSensor` disparando
+  // rápido, ou um double-fire de sensor) e rodam antes do próximo render
+  // enxergariam a MESMA foto antiga do estado, mesmo que a primeira já
+  // tenha, de fato, movido o lead: a segunda calcularia a etapa de origem
+  // errada, `moverLeadNoEstadoLocal` não encontraria o lead lá (guarda
+  // silenciosa) e a atualização otimista da segunda chamada viraria um
+  // no-op — enquanto a chamada ao servidor (que não depende dessa origem,
+  // só do `novaStageId` do próprio evento) prosseguiria normalmente. Board
+  // e banco ficariam em desacordo, em silêncio: o servidor moveu, a tela
+  // não. Como o objeto do ref é o MESMO entre closures de renders
+  // diferentes (só `.current` muda), escrever nele antes de qualquer
+  // `await` garante que a segunda chamada veja o efeito síncrono da
+  // primeira, não uma cópia desatualizada.
+  const leadsPorEtapaRef = useRef(leadsPorEtapaInicial);
   const [erro, setErro] = useState<string | null>(null);
 
   async function handleDragEnd(event: Pick<DragEndEvent, "active" | "over">) {
@@ -119,28 +137,36 @@ export function useKanbanBoard(leadsPorEtapaInicial: LeadsPorEtapa) {
 
     const leadId = String(active.id);
     const novaStageId = String(over.id);
-    const etapaAtualId = encontrarEtapaDoLead(leadsPorEtapa, leadId);
+    // Lê do ref — a fonte de verdade síncrona — não da variável de estado
+    // capturada no fechamento (ver comentário acima).
+    const etapaAtualId = encontrarEtapaDoLead(leadsPorEtapaRef.current, leadId);
 
     if (!etapaAtualId || etapaAtualId === novaStageId) return;
 
     setErro(null);
     // Atualização otimista: a UI reflete o destino antes da confirmação do
-    // servidor. `moverLeadDeEtapa` PODE lançar (sem permissão, etapa
-    // inexistente, sessão rejeitada — ver actions.ts/service.ts, Task 13) —
-    // um card "preso" na coluna nova depois de uma falha real seria pior
-    // que uma reversão visível, então o catch abaixo desfaz exatamente essa
-    // movimentação (não repõe um snapshot antigo, que poderia já estar
-    // desatualizado por outra jogada) e avisa por quê.
-    setLeadsPorEtapa((atual) => moverLeadNoEstadoLocal(atual, leadId, etapaAtualId, novaStageId));
+    // servidor. O ref é escrito IMEDIATAMENTE, antes do `await` abaixo —
+    // é isso que faz uma segunda chamada concorrente (mesmo fechamento)
+    // enxergar este lead já na coluna nova. `setLeadsPorEtapa` dispara o
+    // re-render que reflete essa mudança na tela.
+    const proximo = moverLeadNoEstadoLocal(leadsPorEtapaRef.current, leadId, etapaAtualId, novaStageId);
+    leadsPorEtapaRef.current = proximo;
+    setLeadsPorEtapa(proximo);
 
     try {
       // Nenhum identificador de autor é enviado: a action deriva quem age
       // da sessão (Task 13).
       await moverLeadDeEtapa({ leadId, novaStageId });
     } catch (erroCapturado) {
-      setLeadsPorEtapa((atual) =>
-        moverLeadNoEstadoLocal(atual, leadId, novaStageId, etapaAtualId)
-      );
+      // `moverLeadDeEtapa` PODE lançar (sem permissão, etapa inexistente,
+      // sessão rejeitada — ver actions.ts/service.ts, Task 13) — um card
+      // "preso" na coluna nova depois de uma falha real seria pior que uma
+      // reversão visível. Desfaz a partir do ref (o estado mais recente no
+      // momento do erro, não um snapshot capturado antes do `await`) e
+      // avisa por quê.
+      const revertido = moverLeadNoEstadoLocal(leadsPorEtapaRef.current, leadId, novaStageId, etapaAtualId);
+      leadsPorEtapaRef.current = revertido;
+      setLeadsPorEtapa(revertido);
       setErro(mensagemDeErroMover(erroCapturado));
     }
   }
