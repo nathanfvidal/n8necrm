@@ -107,6 +107,11 @@ model Notification {
   payload   Json
   lidaEm    DateTime?
   criadoEm  DateTime @default(now())
+
+  // Task 19: listarNotificacoesNaoLidas (core/notifications/dispatch.ts) e o
+  // sino de PainelNav consultam exatamente este par em toda navegação sob
+  // (painel)/layout.tsx — ver o comentário lá sobre a decisão de custo.
+  @@index([userId, lidaEm])
 }
 
 model AuditLog {

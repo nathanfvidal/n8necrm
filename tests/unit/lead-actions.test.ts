@@ -157,6 +157,19 @@ describe("criarLeadManual", () => {
     }
   );
 
+  it(
+    "criação com sucesso: revalida o layout do painel (não só a página /leads) — Task 19, para o " +
+      "sino de notificações refletir a contagem nova no próximo router.refresh() do cliente",
+    async () => {
+      usuarioAtualMock.mockResolvedValue(usuarioFake({ id: "vendedor-4" }));
+      criarLeadMock.mockResolvedValue(leadFake({ responsavelId: "vendedor-4" }));
+
+      await criarLeadManual({ nome: "X", telefone: "11988880006", responsavelId: "vendedor-4" });
+
+      expect(revalidatePathMock).toHaveBeenCalledWith("/", "layout");
+    }
+  );
+
   it("o responsavelId do formulário é respeitado quando é o próprio autor (não é atribuição a outra pessoa)", async () => {
     const vendedor = usuarioFake({ id: "vendedor-2", papel: "VENDEDOR" });
     usuarioAtualMock.mockResolvedValue(vendedor);

@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { encontrarOuCriarContact } from "./dedupe";
 import { registrarAuditoria } from "@/core/audit/log";
+import { notificarNovoLead } from "@/core/notifications/dispatch";
 import type { Lead } from "@prisma/client";
 
 /**
@@ -51,6 +52,26 @@ export async function criarLead(input: {
     entidadeId: lead.id,
     depois: lead,
   });
+
+  // Notificação vem por último, de propósito: o lead e a auditoria já estão
+  // persistidos quando ela roda. `try/catch` aqui (não dentro de
+  // `notificarNovoLead`) é a barreira que garante a regra da spec seção 6
+  // ("falha de módulo secundário nunca derruba o principal") para o módulo
+  // de notificação INTEIRO, não só para o e-mail — `notificarNovoLead`
+  // (`notifications/dispatch.ts`) já isola a falha de e-mail (Resend fora do
+  // ar, ou sem `RESEND_API_KEY` configurada — o caso real deste projeto) com
+  // seu próprio try/catch interno, mas deixa propagar um erro na gravação da
+  // própria notificação in-app (ex.: banco fora do ar naquele instante) —
+  // que é exatamente o tipo de falha que não pode, por si só, fazer
+  // `criarLead` lançar depois que o lead já foi criado com sucesso. Um lead
+  // criado sem notificação é uma degradação aceitável; um lead que "falhou
+  // ao criar" só porque a notificação não gravou seria pior — e mais
+  // confuso, porque o registro já estaria no banco apesar do erro.
+  try {
+    await notificarNovoLead(lead.id);
+  } catch (erro) {
+    console.error("Falha ao notificar novo lead (lead já criado, prosseguindo):", erro);
+  }
 
   return lead;
 }

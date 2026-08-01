@@ -36,13 +36,34 @@ export async function criarLeadManual(input: {
       : input.responsavelId;
 
   try {
-    return await criarLead({
+    const lead = await criarLead({
       nome: input.nome,
       telefone: input.telefone,
       email: input.email,
       responsavelId,
       autorId: autor.id,
     });
+
+    // `criarLead` (service.ts, Task 19) já grava uma notificação in-app para
+    // `responsavelId` — mas o sino que a exibe (`NotificationBell`, dentro de
+    // `PainelNav`) vive em `(painel)/layout.tsx`, um segmento COMPARTILHADO
+    // entre rotas, não na página `/leads` em si. `LeadForm` (client) já
+    // chama `router.refresh()` no sucesso, e isso é o bastante para a
+    // TABELA de leads (a própria página) mostrar o novo registro — mas o
+    // Router Cache do lado do cliente trata layouts compartilhados como
+    // reutilizáveis entre navegações (ver
+    // node_modules/next/dist/docs/01-app/03-api-reference/05-config/01-next-config-js/staleTimes.md:
+    // "shared layouts won't automatically be refetched on every
+    // navigation"), então sem isto o sino só mostraria a contagem nova numa
+    // navegação de página inteira, não no refresh do formulário — verificado
+    // ao vivo contra o dev server antes deste fix. `revalidatePath("/",
+    // "layout")` invalida o cache do LADO DO SERVIDOR para o layout inteiro
+    // (mesma chamada que `marcarNotificacaoComoLidaAction`,
+    // `notifications/actions.ts`, já faz), o que faz o próximo
+    // `router.refresh()` do cliente buscar a contagem atualizada.
+    revalidatePath("/", "layout");
+
+    return lead;
   } catch (erro) {
     // `criarLead` (via encontrarOuCriarContact, Task 12) lança quando
     // `telefone` não é um número brasileiro reconhecível — uma falha

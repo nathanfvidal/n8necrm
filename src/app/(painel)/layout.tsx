@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 
 import { PainelNav } from "@/components/painel-nav";
 import { usuarioAtual } from "@/core/auth/session";
+import { listarNotificacoesNaoLidas } from "@/core/notifications/dispatch";
 
 /**
  * Layout do painel autenticado. Toda página sob `(painel)` — hoje só
@@ -30,17 +31,44 @@ import { usuarioAtual } from "@/core/auth/session";
  * sozinho: ele só sabe se existe um JWT válido (`!!req.auth`), não se o
  * usuário continua ativo — ver o comentário em `proxy.ts` sobre por que essa
  * checagem não foi movida para lá.
+ *
+ * Task 19: também busca as notificações não lidas de `usuario` para o sino
+ * de `PainelNav`. Decisão deliberada de custo — uma consulta extra
+ * (`Notification.findMany`) em TODA navegação sob este layout, ou seja, em
+ * toda página do painel:
+ * - Reaproveita o `usuario` que `usuarioAtual()` já resolveu para checar a
+ *   sessão (uma consulta a `User` que já acontecia aqui de qualquer forma)
+ *   em vez de o sino (ou `PainelNav`) buscar a sessão de novo — a consulta
+ *   nova é só a de `Notification`, não duas.
+ * - `Notification` ganhou `@@index([userId, lidaEm])` (prisma/schema.prisma)
+ *   junto com esta task, exatamente para esta consulta: sem índice, `WHERE
+ *   userId = ? AND lidaEm IS NULL` vira sequential scan à medida que a
+ *   tabela cresce (toda criação de lead grava uma linha nova, e linhas lidas
+ *   nunca são apagadas) — com o índice, é uma busca direta.
+ * - Alternativa descartada: mover a busca para dentro de `NotificationBell`
+ *   como um Server Component próprio (padrão "ilha", que só aquele pedaço
+ *   busca dado, sem o resto do layout esperar por ele). Isso pediria
+ *   `<Suspense>` ao redor do sino para não bloquear a navegação nesta fase,
+ *   mais uma segunda chamada a `usuarioAtual()`/`User` (o sino não tem
+ *   acesso ao `usuario` já resolvido aqui) — complexidade que não se paga
+ *   para uma tabela pequena numa CRM de equipe pequena (Fase 0-1). Se o
+ *   volume de notificações crescer a ponto de a consulta pesar na
+ *   navegação, essa é a próxima mudança a fazer — não algo para antecipar
+ *   agora sem dado que justifique.
  */
 export default async function PainelLayout({ children }: { children: React.ReactNode }) {
+  let usuario;
   try {
-    await usuarioAtual();
+    usuario = await usuarioAtual();
   } catch {
     redirect("/login");
   }
 
+  const notificacoesNaoLidas = await listarNotificacoesNaoLidas(usuario.id);
+
   return (
     <div className="min-h-screen">
-      <PainelNav />
+      <PainelNav notificacoesNaoLidas={notificacoesNaoLidas} />
       <main>{children}</main>
     </div>
   );

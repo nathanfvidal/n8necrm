@@ -13,6 +13,22 @@ vi.mock("../../config/client", () => ({
   client: { modulos: ["catalog"] },
 }));
 
+// PainelNav (Task 19) agora renderiza <NotificationBell> como último item —
+// um Client Component que importa `marcarNotificacaoComoLidaAction` de
+// `@/core/notifications/actions` e chama `useRouter()` de "next/navigation".
+// `actions.ts` importa `dispatch.ts` (que tem `import "server-only"`, mesmo
+// padrão de `@/core/leads/actions` em `lead-note-form.test.tsx`) — sem
+// mockar aqui, a importação quebraria fora do pipeline de build do Next
+// (Vitest não aplica a condição de resolução "react-server" que faz
+// "server-only" virar no-op). `useRouter()` sem mock lançaria por falta de
+// contexto de App Router em jsdom puro (mesmo padrão de `task-list.test.tsx`).
+vi.mock("@/core/notifications/actions", () => ({
+  marcarNotificacaoComoLidaAction: vi.fn(),
+}));
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ refresh: vi.fn() }),
+}));
+
 const { PainelNav } = await import("../../src/components/painel-nav");
 
 describe("PainelNav", () => {

@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import { moduloAtivo } from "@/lib/module-gate";
+import { NotificationBell, type NotificacaoNaoLida } from "@/components/notifications/notification-bell";
 
 const linksFixos = [
   { href: "/", label: "Dashboard" },
@@ -17,7 +18,20 @@ const linksDeModulo = [
   { href: "/analytics", label: "Analytics", modulo: "analytics" as const },
 ];
 
-export function PainelNav() {
+/**
+ * `notificacoesNaoLidas` chega por PROP, opcional (default `[]`) — de
+ * propósito, para `PainelNav` continuar uma função SÍNCRONA e sem Prisma,
+ * testável com `render(<PainelNav />)` sem nenhum mock de banco
+ * (`tests/unit/painel-nav.test.tsx`, Task 3, continua passando sem mudança).
+ *
+ * Quem busca o dado é `(painel)/layout.tsx` — o único lugar por onde toda
+ * página do painel passa (mesmo raciocínio da guarda de sessão que já mora
+ * lá) — reaproveitando o `usuario` que `usuarioAtual()` já resolveu ali para
+ * checar a sessão, em vez de este componente (ou o sino) chamar
+ * `usuarioAtual()`/buscar o `User` de novo. Ver o comentário em
+ * `notification-bell.tsx` sobre o custo desta consulta extra por navegação.
+ */
+export function PainelNav({ notificacoesNaoLidas = [] }: { notificacoesNaoLidas?: NotificacaoNaoLida[] } = {}) {
   const links = [
     ...linksFixos,
     ...linksDeModulo.filter((link) => moduloAtivo(link.modulo)),
@@ -30,6 +44,9 @@ export function PainelNav() {
           {link.label}
         </Link>
       ))}
+      <div className="ml-auto">
+        <NotificationBell notificacoes={notificacoesNaoLidas} />
+      </div>
     </nav>
   );
 }
