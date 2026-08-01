@@ -166,7 +166,7 @@ describe("criarLeadManual", () => {
 
       await criarLeadManual({ nome: "X", telefone: "11988880006", responsavelId: "vendedor-4" });
 
-      expect(revalidatePathMock).toHaveBeenCalledWith("/", "layout");
+      expect(revalidatePathMock).toHaveBeenCalledWith("/(painel)", "layout");
     }
   );
 

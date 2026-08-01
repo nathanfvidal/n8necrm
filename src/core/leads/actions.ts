@@ -56,12 +56,25 @@ export async function criarLeadManual(input: {
     // "shared layouts won't automatically be refetched on every
     // navigation"), então sem isto o sino só mostraria a contagem nova numa
     // navegação de página inteira, não no refresh do formulário — verificado
-    // ao vivo contra o dev server antes deste fix. `revalidatePath("/",
-    // "layout")` invalida o cache do LADO DO SERVIDOR para o layout inteiro
-    // (mesma chamada que `marcarNotificacaoComoLidaAction`,
-    // `notifications/actions.ts`, já faz), o que faz o próximo
-    // `router.refresh()` do cliente buscar a contagem atualizada.
-    revalidatePath("/", "layout");
+    // ao vivo contra o dev server antes deste fix.
+    //
+    // `revalidatePath("/(painel)", "layout")` — NÃO `revalidatePath("/",
+    // "layout")` (fix round 1/5, achado do revisor: o comentário anterior
+    // dizia "invalida o layout do painel inteiro", mas o código chamava
+    // literalmente `revalidatePath("/", "layout")`, que a própria doc do
+    // Next classifica à parte como "Revalidating all data" — ver
+    // node_modules/next/dist/docs/01-app/03-api-reference/04-functions/revalidatePath.md,
+    // seção "Revalidating all data": "purge[s] the Client Cache, and
+    // invalidate[s] all cached data", app inteiro, não só este layout).
+    // `revalidatePath` "opera na estrutura de arquivos da rota, não na URL
+    // visível" (mesmo doc, "Using revalidatePath with rewrites") — passar o
+    // caminho do ARQUIVO incluindo o route group (`/(painel)`, o mesmo
+    // prefixo do diretório `src/app/(painel)/`) mira especificamente
+    // `(painel)/layout.tsx`, não o `layout.tsx` raiz (`src/app/layout.tsx`,
+    // ancestral de `/login` também) nem qualquer cache futuro fora do
+    // painel. Verificado ao vivo: o sino ainda atualiza a contagem sem
+    // reload de página inteira com este escopo mais estreito.
+    revalidatePath("/(painel)", "layout");
 
     return lead;
   } catch (erro) {

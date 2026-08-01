@@ -45,8 +45,27 @@ async function limparDadosDeTeste() {
   const leads = await prisma.lead.findMany({ where: { contactId: { in: contatoIds } } });
   const leadIds = leads.map((l) => l.id);
 
-  // Ordem importa por causa das FKs: AuditLog (referencia entidadeId por
-  // string, sem FK real, mas ainda é dado de teste a limpar) → Lead → Contact.
+  // Task 19, fix round 1/5 (achado do revisor — CRITICAL): `criarLead`
+  // (service.ts) agora chama `notificarNovoLead` internamente, que grava uma
+  // `Notification` real para `autorId` (aqui, sempre o usuário ADMIN do
+  // seed) a cada `it()` deste arquivo que cria um lead. Sem esta limpeza, o
+  // sino de notificações do ADMIN real acumulava uma linha por execução da
+  // suíte inteira, para sempre, no Postgres compartilhado — reproduzido pelo
+  // revisor: uma única `vitest run` levou `Notification` de 0 a 5.
+  // `Notification` não tem FK para `Lead` (payload é só um `leadId` solto em
+  // JSON, ver `src/core/notifications/types.ts`), então filtramos em
+  // memória pelo `leadId` gravado no payload, não por uma query relacional.
+  const notificacoes = await prisma.notification.findMany({ where: { tipo: "NOVO_LEAD" } });
+  const notificacaoIds = notificacoes
+    .filter((n) => leadIds.includes((n.payload as { leadId?: string } | null)?.leadId ?? ""))
+    .map((n) => n.id);
+  if (notificacaoIds.length > 0) {
+    await prisma.notification.deleteMany({ where: { id: { in: notificacaoIds } } });
+  }
+
+  // Ordem importa por causa das FKs: Notification (acima, sem FK real) →
+  // AuditLog (referencia entidadeId por string, sem FK real, mas ainda é
+  // dado de teste a limpar) → Lead → Contact.
   await prisma.auditLog.deleteMany({ where: { entidade: "Lead", entidadeId: { in: leadIds } } });
   await prisma.lead.deleteMany({ where: { id: { in: leadIds } } });
   await prisma.contact.deleteMany({ where: { telefone: { in: TELEFONES_ARMAZENADOS_TESTE } } });
