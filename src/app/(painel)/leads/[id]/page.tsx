@@ -28,17 +28,27 @@ import { TaskList, type TaskLinha } from "@/components/tasks/task-list";
  * Seção de tarefas (Task 18): a Task 17 deixou de propósito de fora
  * (comentário acima, versão anterior) porque o CRUD de `Task` só chegava
  * nesta task — uma seção sem nenhuma ação real por trás não valeria a pena.
- * Agora a seção lista as tarefas PENDENTES ligadas a este lead — mas só as
- * do usuário logado (`listarTasksPendentesDoLead`, escopada por
- * `responsavelId`), diferente das notas acima (sem escopo por autor,
- * decisão de negócio da Task 17: qualquer vendedor pode ler o histórico de
- * qualquer lead). Tarefa é lembrete pessoal, não informação compartilhada
- * do lead — ver a checagem de dono em `concluirTask`
- * (`core/tasks/service.ts`): mostrar aqui o lembrete de um colega que a
- * pessoa nem consegue concluir seria mais confuso do que útil. Por isso, ao
- * contrário do resto desta página, aqui SIM chamamos `usuarioAtual()` — não
- * por segurança (o layout já protege a rota), mas para saber de quem é o
- * escopo.
+ * Agora a seção lista TODAS as tarefas PENDENTES ligadas a este lead,
+ * qualquer que seja o responsável — fix round 1/5, achado do revisor,
+ * revertendo a versão original (escopada por `responsavelId`, mesmo
+ * raciocínio de `/tasks`). A versão original escondia de um colega que
+ * outro colega já tinha um lembrete agendado para aquele MESMO lead — na
+ * prática, risco real de contato duplicado com o cliente (ex.: dois
+ * vendedores ligando no mesmo dia sem saber um do outro), pior do que a UI
+ * mostrar um lembrete que a pessoa não pode concluir. Também deixava a
+ * página inconsistente: notas são compartilhadas (Task 17), o lead é
+ * compartilhado (decisão de negócio de `leads/queries.ts`) — só tarefa
+ * ficava escondida.
+ *
+ * `souResponsavel` (calculado abaixo, por tarefa, comparando
+ * `task.responsavelId` com `usuario.id`) é o que faz `TaskList` mostrar o
+ * botão "Concluir" só pra quem pode de fato concluir — a checagem de dono
+ * em `concluirTask` (`core/tasks/service.ts`) continua sendo a barreira
+ * real e não foi tocada; isto aqui é só a UI não oferecer uma ação que vai
+ * falhar pra quem não é dono. Por isso, ao contrário do resto desta página,
+ * aqui SIM chamamos `usuarioAtual()` — não por segurança (o layout já
+ * protege a rota), mas para saber quem é o usuário e computar
+ * `souResponsavel` de cada tarefa.
  */
 export default async function LeadDetalhePage({
   params,
@@ -68,14 +78,13 @@ export default async function LeadDetalhePage({
 
   const notas = await listarNotas(id);
 
-  const tasksPendentes = await listarTasksPendentesDoLead({
-    leadId: id,
-    responsavelId: usuario.id,
-  });
+  const tasksPendentes = await listarTasksPendentesDoLead(id);
   const tarefasLinhas: TaskLinha[] = tasksPendentes.map((task) => ({
     id: task.id,
     titulo: task.titulo,
     vencimento: task.vencimento,
+    responsavelNome: task.responsavel.nome,
+    souResponsavel: task.responsavelId === usuario.id,
   }));
 
   return (

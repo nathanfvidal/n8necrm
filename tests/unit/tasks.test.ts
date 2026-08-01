@@ -148,6 +148,49 @@ describe("tarefas", () => {
     ).rejects.toThrow("Tarefa não encontrada");
   });
 
+  it(
+    "rejeita conclusão por um colega ATIVO quando a tarefa pertence a um usuário DESATIVADO — " +
+      "cenário citado explicitamente no brief da Task 18. concluirTask checa posse por id " +
+      "(task.responsavelId === autorId), não permissão/estado da conta; o dono estar desativado " +
+      "não abre uma exceção para outra pessoa concluir em nome dele. (usuarioAtual(), Task 13, já " +
+      "impediria o PRÓPRIO dono desativado de sequer chegar a esta função via Server Action — mas " +
+      "essa é outra camada, e não é o que este teste cobre.)",
+    async () => {
+      const usuarioDesativado = await prisma.user.create({
+        data: {
+          nome: `${PREFIXO_TESTE}Usuário Desativado`,
+          email: `teste-tasks-desativado-${Date.now()}@teste.local`,
+          senhaHash: "hash-fake-nunca-usado-em-login",
+          papel: "VENDEDOR",
+          ativo: false,
+        },
+      });
+
+      try {
+        const task = await criarTask({
+          titulo: `${PREFIXO_TESTE}Tarefa de usuário desativado`,
+          vencimento: new Date(Date.now() + 86_400_000),
+          responsavelId: usuarioDesativado.id,
+        });
+
+        await expect(
+          concluirTask({ taskId: task.id, autorId: outroUsuarioId })
+        ).rejects.toThrow("Tarefa não encontrada");
+
+        const aindaPendente = await prisma.task.findUniqueOrThrow({ where: { id: task.id } });
+        expect(aindaPendente.concluidaEm).toBeNull();
+      } finally {
+        // Ordem importa por causa da FK (Task.responsavelId → User.id, sem
+        // onDelete em cascade no schema): apagar a tarefa antes do usuário,
+        // sempre, mesmo se alguma asserção acima falhar (try/finally, não
+        // só o `afterAll` prefixado — este usuário não é coberto por
+        // `limparDadosDeTeste`).
+        await prisma.task.deleteMany({ where: { responsavelId: usuarioDesativado.id } });
+        await prisma.user.delete({ where: { id: usuarioDesativado.id } });
+      }
+    }
+  );
+
   it("lista apenas tarefas pendentes de um responsável", async () => {
     const pendente = await criarTask({
       titulo: `${PREFIXO_TESTE}Tarefa pendente`,

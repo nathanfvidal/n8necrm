@@ -13,6 +13,15 @@ export type TaskLinha = {
   titulo: string;
   vencimento: Date;
   leadContatoNome?: string;
+  // Presentes só quando a lista pode conter tarefa de outra pessoa (seção
+  // "Tarefas" de `/leads/[id]`, fix round 1/5 — ver `listarTasksPendentesDoLead`,
+  // queries.ts) — `/tasks` nunca preenche estes dois campos, porque toda
+  // tarefa ali já é do próprio usuário (mostrar "sua" em toda linha seria
+  // ruído). Quando `souResponsavel` é `false`, a lista mostra
+  // `responsavelNome` no lugar do botão "Concluir" — nunca os dois ao
+  // mesmo tempo, e nunca um botão que a pessoa não pode usar.
+  responsavelNome?: string;
+  souResponsavel?: boolean;
 };
 
 /**
@@ -74,11 +83,21 @@ export function useTaskList(tasksIniciais: TaskLinha[]) {
 
 /**
  * Lista de tarefas pendentes com ação de concluir. Reusada em duas telas:
- * `/tasks` (tarefas com `leadContatoNome`, quando vinculadas a um lead) e a
- * seção "Tarefas" de `/leads/[id]` (tarefas já filtradas por lead — ver
- * `listarTasksPendentesDoLead`, queries.ts — então `leadContatoNome` fica
- * de fora ali, seria redundante mostrar o nome do próprio lead na página
- * dele).
+ * `/tasks` (sempre tarefas do próprio usuário, com `leadContatoNome` quando
+ * vinculadas a um lead — `responsavelNome`/`souResponsavel` nunca vêm
+ * preenchidos ali, seria ruído mostrar "Você" em toda linha) e a seção
+ * "Tarefas" de `/leads/[id]` (tarefas de QUALQUER responsável ligadas
+ * àquele lead — fix round 1/5, ver `listarTasksPendentesDoLead`, queries.ts
+ * — com `responsavelNome`/`souResponsavel` preenchidos e `leadContatoNome`
+ * de fora, seria redundante mostrar o nome do próprio lead na página dele).
+ *
+ * `souResponsavel === false` esconde o botão "Concluir" e mostra o nome do
+ * responsável no lugar — de propósito, não um botão desabilitado nem um
+ * botão que renderiza igual e falha com "Tarefa não encontrada" ao clicar
+ * (a checagem de dono em `concluirTask`, service.ts, é a barreira real;
+ * aqui é só a UI não prometer uma ação que vai falhar). `souResponsavel`
+ * `undefined` (caso de `/tasks`) é tratado como "pode concluir" — toda
+ * tarefa ali já é do próprio usuário, por construção de `TasksPage`.
  */
 export function TaskList({ tasks: tasksIniciais }: { tasks: TaskLinha[] }) {
   const router = useRouter();
@@ -104,20 +123,43 @@ export function TaskList({ tasks: tasksIniciais }: { tasks: TaskLinha[] }) {
         <EmptyState title="Nenhuma tarefa pendente" description="Você está em dia." />
       ) : (
         <ul className="space-y-2">
-          {tasks.map((task) => (
-            <li key={task.id} className="flex items-center justify-between rounded border p-3">
-              <div>
-                <p className="text-sm font-medium">{task.titulo}</p>
-                <p className="text-xs text-muted-foreground">
-                  Vence em {formatarDataCivilBR(task.vencimento)}
-                  {task.leadContatoNome ? ` · ${task.leadContatoNome}` : ""}
-                </p>
-              </div>
-              <Button size="sm" variant="outline" onClick={() => concluirEAtualizar(task.id)}>
-                Concluir
-              </Button>
-            </li>
-          ))}
+          {tasks.map((task) => {
+            const podeConcluir = task.souResponsavel !== false;
+            // "Você"/nome do dono aparece UMA vez por linha — no subtítulo,
+            // nunca de novo no lugar do botão — para não repetir a mesma
+            // informação em dois pontos da mesma linha.
+            const quem = task.responsavelNome
+              ? task.souResponsavel
+                ? "Você"
+                : task.responsavelNome
+              : undefined;
+            return (
+              <li key={task.id} className="flex items-center justify-between rounded border p-3">
+                <div>
+                  <p className="text-sm font-medium">{task.titulo}</p>
+                  <p className="text-xs text-muted-foreground">
+                    Vence em {formatarDataCivilBR(task.vencimento)}
+                    {task.leadContatoNome ? ` · ${task.leadContatoNome}` : ""}
+                    {quem ? ` · ${quem}` : ""}
+                  </p>
+                </div>
+                {podeConcluir ? (
+                  <Button size="sm" variant="outline" onClick={() => concluirEAtualizar(task.id)}>
+                    Concluir
+                  </Button>
+                ) : (
+                  // Nenhum botão aqui — nem "desabilitado" (que ainda sugere
+                  // uma ação bloqueada por ora), nem um "Concluir" que
+                  // renderiza igual pra todo mundo e falha silenciosamente
+                  // com "Tarefa não encontrada" pra quem não é dono (o bug
+                  // que este fix corrige). De quem é a tarefa já está dito
+                  // no subtítulo acima ("· Fernanda") — repetir aqui, ao
+                  // lado de um espaço vazio, não acrescentaria nada.
+                  null
+                )}
+              </li>
+            );
+          })}
         </ul>
       )}
     </div>
