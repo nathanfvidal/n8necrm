@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import Link from "next/link";
 import {
   useReactTable,
   getCoreRowModel,
@@ -39,13 +40,13 @@ const columnHelper = createColumnHelper<LeadLinha>();
 const columns = [
   columnHelper.accessor("contatoNome", {
     header: "Contato",
-    // Fix round 1/5: era um `<Link href="/leads/:id">` — mas essa rota não
-    // existe ainda (chega na Task 17). Um link clicável que sempre dá 404
-    // não é um detalhe menor numa revenda pequena usando isto ao vivo; até
-    // a Task 17 criar `/leads/[id]`, o nome fica como texto simples, sem
-    // prometer uma navegação que ainda não existe. Trocar de volta para
-    // `<Link>` nessa hora é a única mudança necessária aqui.
-    cell: (info) => <span className="font-medium">{info.getValue()}</span>,
+    // `/leads/[id]` existe a partir da Task 17 — o nome do contato é o link
+    // de entrada para a página de detalhe (dados do lead + notas).
+    cell: (info) => (
+      <Link href={`/leads/${info.row.original.id}`} className="font-medium hover:underline">
+        {info.getValue()}
+      </Link>
+    ),
   }),
   columnHelper.accessor("telefone", {
     header: "Telefone",

@@ -124,13 +124,14 @@ describe("LeadTable", () => {
   });
 
   it(
-    "o nome do contato é texto simples, não um link — fix round 1/5: /leads/:id só chega na " +
-      "Task 17, um <Link> aqui hoje sempre daria 404",
+    "o nome do contato é um link para /leads/[id] — a Task 17 criou a página de detalhe, " +
+      "restaurando o link removido no fix round 1/5 (antes disso, /leads/:id não existia)",
     () => {
       render(<LeadTable dados={[linhaFake({ id: "lead-42", contatoNome: "Carlos Silva" })]} etapas={["Novo"]} responsaveis={["Admin Exemplo"]} />);
 
-      expect(screen.getByText("Carlos Silva")).toBeTruthy();
-      expect(screen.queryByRole("link", { name: "Carlos Silva" })).toBeNull();
+      const link = screen.getByRole("link", { name: "Carlos Silva" });
+      expect(link).toBeTruthy();
+      expect(link.getAttribute("href")).toBe("/leads/lead-42");
     }
   );
 });
