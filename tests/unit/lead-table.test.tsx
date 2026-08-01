@@ -6,17 +6,9 @@
 // as linhas exibidas, e que a tabela não quebra com dados nulos (contato
 // sem telefone) — a mesma preocupação de nullability da Task 15
 // (kanban-card), agora na tabela.
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup } from "@testing-library/react";
 import type { LeadChannel } from "@prisma/client";
-
-vi.mock("next/link", () => ({
-  default: ({ href, children, className }: { href: string; children: React.ReactNode; className?: string }) => (
-    <a href={href} className={className}>
-      {children}
-    </a>
-  ),
-}));
 
 const { LeadTable } = await import("../../src/components/leads/lead-table");
 import type { LeadLinha } from "../../src/components/leads/lead-table";
@@ -131,10 +123,14 @@ describe("LeadTable", () => {
     expect(screen.getByText("Sem responsável")).toBeTruthy();
   });
 
-  it("o nome do contato é um link para /leads/:id", () => {
-    render(<LeadTable dados={[linhaFake({ id: "lead-42", contatoNome: "Carlos Silva" })]} etapas={["Novo"]} responsaveis={["Admin Exemplo"]} />);
+  it(
+    "o nome do contato é texto simples, não um link — fix round 1/5: /leads/:id só chega na " +
+      "Task 17, um <Link> aqui hoje sempre daria 404",
+    () => {
+      render(<LeadTable dados={[linhaFake({ id: "lead-42", contatoNome: "Carlos Silva" })]} etapas={["Novo"]} responsaveis={["Admin Exemplo"]} />);
 
-    const link = screen.getByRole("link", { name: "Carlos Silva" });
-    expect(link.getAttribute("href")).toBe("/leads/lead-42");
-  });
+      expect(screen.getByText("Carlos Silva")).toBeTruthy();
+      expect(screen.queryByRole("link", { name: "Carlos Silva" })).toBeNull();
+    }
+  );
 });

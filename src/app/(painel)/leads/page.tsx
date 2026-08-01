@@ -34,24 +34,20 @@ export default async function LeadsPage() {
       })
     : [];
 
-  // Reaproveita a MESMA fronteira de `ver_dashboard_geral` usada acima para
-  // decidir quem recebe a lista de vendedores: quem não tem essa permissão
-  // (VENDEDOR) só enxerga, na tabela, os leads dos quais é o próprio
-  // responsável. Sem esta restrição, a tabela desfaria em leitura o que
-  // Task 13/14 já protegem em escrita — um VENDEDOR não pode ATRIBUIR lead
-  // a outra pessoa nem ver o NOME de outros vendedores no formulário, mas
-  // conseguiria ver o TELEFONE de todo cliente da empresa, de qualquer
-  // vendedor, numa lista. A restrição é aplicada aqui, no `where` de
-  // `listarLeads` (Task 16) — server-side, antes de qualquer linha sair do
-  // banco — não como um `.filter()` no componente cliente, que só
-  // esconderia visualmente dados que já teriam trafegado até o navegador
-  // (não é uma permissão de verdade).
-  //
-  // Esta mesma decisão vale para a exportação CSV (Task 21): o mesmo filtro
-  // por `responsavelId` precisa se aplicar lá, pelo mesmo motivo — a
-  // planilha exportada por um VENDEDOR não pode conter telefone/nome de
-  // clientes de outros vendedores.
-  const leads = await listarLeads(podeAtribuirOutraPessoa ? {} : { responsavelId: usuario.id });
+  // Fix round 1/5: a versão original desta página restringia `listarLeads`
+  // por `responsavelId` para quem não tem `ver_dashboard_geral` (VENDEDOR).
+  // O revisor achou que essa restrição era genuína dentro de `/leads`, mas
+  // inútil na prática — `/leads/kanban` (Task 15) já lista TODO lead para
+  // TODO papel sem filtro nenhum, e `moverEtapa` (service.ts) nunca checou
+  // dono, então qualquer VENDEDOR conseguia ver e mover o lead "escondido"
+  // pelo board, a um clique de distância da tabela. Uma barreira que existe
+  // numa tela e não na outra não é controle, é falsa confiança. Decisão de
+  // produto (não deste código): esta é uma revenda pequena, a equipe
+  // trabalha de forma colaborativa, e qualquer vendedor pode precisar do
+  // histórico de um lead que "pertence" a outro para atender um cliente que
+  // chegou na loja. `listarLeads()` voltou a listar todo lead para todo
+  // papel — mesmo comportamento do kanban, sem escopo por responsável.
+  const leads = await listarLeads();
 
   const linhas: LeadLinha[] = leads.map((lead) => ({
     id: lead.id,

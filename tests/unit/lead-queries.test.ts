@@ -19,25 +19,22 @@ describe("listarLeads", () => {
     await seed();
   });
 
-  it("sem filtro: devolve leads de mais de um responsável — a visão irrestrita usada por quem tem `ver_dashboard_geral` (ADMIN/GESTOR, Task 16)", async () => {
-    const admin = await prisma.user.findUniqueOrThrow({ where: { email: "admin@exemplo.com" } });
-    const vendedor = await prisma.user.findUniqueOrThrow({ where: { email: "vendedor@exemplo.com" } });
+  it(
+    "devolve leads de mais de um responsável, para qualquer papel — sem escopo por " +
+      "responsavelId (fix round 1/5: a restrição por responsável foi revertida por decisão " +
+      "de negócio, ver comentário em page.tsx; /leads/kanban já listava tudo sem filtro, e " +
+      "uma barreira só nesta tabela era contornável em um clique)",
+    async () => {
+      const admin = await prisma.user.findUniqueOrThrow({ where: { email: "admin@exemplo.com" } });
+      const vendedor = await prisma.user.findUniqueOrThrow({ where: { email: "vendedor@exemplo.com" } });
 
-    const leads = await listarLeads();
+      const leads = await listarLeads();
 
-    const responsaveisPresentes = new Set(leads.map((lead) => lead.responsavelId));
-    expect(responsaveisPresentes.has(admin.id)).toBe(true);
-    expect(responsaveisPresentes.has(vendedor.id)).toBe(true);
-  });
-
-  it("com filtro responsavelId: devolve só os leads daquele responsável — a restrição que a página aplica para VENDEDOR (Task 16)", async () => {
-    const vendedor = await prisma.user.findUniqueOrThrow({ where: { email: "vendedor@exemplo.com" } });
-
-    const leads = await listarLeads({ responsavelId: vendedor.id });
-
-    expect(leads.length).toBeGreaterThan(0);
-    expect(leads.every((lead) => lead.responsavelId === vendedor.id)).toBe(true);
-  });
+      const responsaveisPresentes = new Set(leads.map((lead) => lead.responsavelId));
+      expect(responsaveisPresentes.has(admin.id)).toBe(true);
+      expect(responsaveisPresentes.has(vendedor.id)).toBe(true);
+    }
+  );
 
   it("cada lead vem com a etapa (`stage`) incluída — a tabela da Task 16 usa `stage.nome` como coluna", async () => {
     const leads = await listarLeads();

@@ -38,19 +38,21 @@ export async function listarLeadsPorEtapa(): Promise<Record<string, LeadComRelac
  * que `listarLeadsPorEtapa` não precisa expor porque a etapa já é a própria
  * chave do agrupamento.
  *
- * `filtro.responsavelId`, quando presente, RESTRINGE a consulta no servidor
- * a leads daquele responsável — não é um filtro de conveniência, é a mesma
- * fronteira de visibilidade que `criarLeadManual` já aplica na escrita (Task
- * 13: só ADMIN/GESTOR, via `ver_dashboard_geral`, atribuem lead a outra
- * pessoa) e que a Task 14 já aplicou na leitura da lista de vendedores. Quem
- * chama esta função (a página) decide QUANDO passar o filtro; esta função só
- * garante que, uma vez passado, nenhuma linha de outro responsável escapa —
- * um filtro aplicado depois, no cliente, não seria uma permissão de verdade
- * (os dados já teriam saído do servidor).
+ * Devolve TODOS os leads, para qualquer papel — sem escopo por
+ * `responsavelId`. Fix round 1/5: a primeira versão desta função filtrava
+ * por responsável para VENDEDOR, mas o revisor encontrou a mesma
+ * inconsistência que motivou a reversão (ver decisão de negócio em
+ * `page.tsx`): `/leads/kanban` (Task 15, `listarLeadsPorEtapa` acima) já
+ * lista todo lead para todo papel, sem filtro nenhum, e `moverEtapa`
+ * (service.ts) nunca checou dono — uma restrição só nesta tabela escondia
+ * dado numa tela e servia o mesmo dado, sem controle nenhum, a um clique de
+ * distância. Uma revenda pequena com equipe colaborativa (qualquer
+ * vendedor pode atender um cliente que "pertence" a outro) tornou a barreira
+ * errada por decisão de produto, não só por bug de superfície — daí ter sido
+ * removida aqui em vez de espalhada para as outras telas.
  */
-export async function listarLeads(filtro: { responsavelId?: string } = {}): Promise<LeadListado[]> {
+export async function listarLeads(): Promise<LeadListado[]> {
   return prisma.lead.findMany({
-    where: filtro.responsavelId ? { responsavelId: filtro.responsavelId } : undefined,
     include: { contact: true, responsavel: true, stage: true },
     orderBy: { criadoEm: "desc" },
   });

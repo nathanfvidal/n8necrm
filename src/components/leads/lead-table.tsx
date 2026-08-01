@@ -8,7 +8,6 @@ import {
   flexRender,
   createColumnHelper,
 } from "@tanstack/react-table";
-import Link from "next/link";
 
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Input } from "@/components/ui/input";
@@ -40,11 +39,13 @@ const columnHelper = createColumnHelper<LeadLinha>();
 const columns = [
   columnHelper.accessor("contatoNome", {
     header: "Contato",
-    cell: (info) => (
-      <Link href={`/leads/${info.row.original.id}`} className="font-medium hover:underline">
-        {info.getValue()}
-      </Link>
-    ),
+    // Fix round 1/5: era um `<Link href="/leads/:id">` — mas essa rota não
+    // existe ainda (chega na Task 17). Um link clicável que sempre dá 404
+    // não é um detalhe menor numa revenda pequena usando isto ao vivo; até
+    // a Task 17 criar `/leads/[id]`, o nome fica como texto simples, sem
+    // prometer uma navegação que ainda não existe. Trocar de volta para
+    // `<Link>` nessa hora é a única mudança necessária aqui.
+    cell: (info) => <span className="font-medium">{info.getValue()}</span>,
   }),
   columnHelper.accessor("telefone", {
     header: "Telefone",
@@ -66,10 +67,13 @@ const columns = [
  * Tabela de leads com busca livre e filtros por etapa, responsável e
  * intervalo de data de criação.
  *
- * `dados` já chega filtrado por visibilidade (Task 16: VENDEDOR só recebe os
- * próprios leads — ver `page.tsx`) — os filtros abaixo são só de
- * conveniência de exibição sobre o que o servidor já decidiu que esta pessoa
- * pode ver, nunca uma barreira de permissão.
+ * `dados` traz TODOS os leads, para qualquer papel — sem escopo por
+ * responsável (decisão de negócio, fix round 1/5: equipe pequena e
+ * colaborativa, qualquer vendedor pode precisar do histórico de um lead de
+ * outro colega — ver `page.tsx` e `listarLeads`, queries.ts). Os filtros
+ * abaixo são só de conveniência de exibição, nunca uma barreira de
+ * permissão — não existe, hoje, nenhuma restrição de visibilidade a
+ * respeitar aqui.
  */
 export function LeadTable({
   dados,
