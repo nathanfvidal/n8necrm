@@ -1,14 +1,24 @@
 import { prisma } from "@/lib/prisma";
 import type { Lead, Contact, User, PipelineStage } from "@prisma/client";
 
+// `responsavel` narrowed para só `id`/`nome` (Task 17, fix round 1/5,
+// achado do revisor): as duas funções abaixo já carregavam a linha inteira
+// de `User` — `senhaHash` incluído — só para que o kanban (Task 15) e a
+// tabela (Task 16) renderizassem `responsavel?.nome`. O hash não chegava ao
+// cliente nesses dois usos (`kanban-card.tsx`/`page.tsx` só leem `.nome`),
+// mas carregar dado sensível "porque não faz mal hoje" é o tipo de coisa
+// que vaza no dia em que alguém passar o objeto inteiro um nível adiante.
+// `contact` continua com o tipo completo — `Contact` não guarda senha.
+type ResponsavelResumido = Pick<User, "id" | "nome">;
+
 export type LeadComRelacoes = Lead & {
   contact: Contact | null;
-  responsavel: User | null;
+  responsavel: ResponsavelResumido | null;
 };
 
 export type LeadListado = Lead & {
   contact: Contact | null;
-  responsavel: User | null;
+  responsavel: ResponsavelResumido | null;
   stage: PipelineStage;
 };
 
@@ -21,7 +31,7 @@ export type LeadListado = Lead & {
 export async function listarLeadsPorEtapa(): Promise<Record<string, LeadComRelacoes[]>> {
   const etapas = await prisma.pipelineStage.findMany({ orderBy: { ordem: "asc" } });
   const leads = await prisma.lead.findMany({
-    include: { contact: true, responsavel: true },
+    include: { contact: true, responsavel: { select: { id: true, nome: true } } },
     orderBy: { criadoEm: "desc" },
   });
 
@@ -53,7 +63,11 @@ export async function listarLeadsPorEtapa(): Promise<Record<string, LeadComRelac
  */
 export async function listarLeads(): Promise<LeadListado[]> {
   return prisma.lead.findMany({
-    include: { contact: true, responsavel: true, stage: true },
+    include: {
+      contact: true,
+      responsavel: { select: { id: true, nome: true } },
+      stage: true,
+    },
     orderBy: { criadoEm: "desc" },
   });
 }

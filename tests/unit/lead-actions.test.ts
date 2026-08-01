@@ -31,7 +31,30 @@ vi.mock("@/core/leads/service", () => ({
   moverEtapa: (...args: unknown[]) => moverEtapaMock(...args),
 }));
 
-const { criarLeadManual, moverLeadDeEtapa } = await import("../../src/core/leads/actions");
+// `actions.ts` passou a importar `./notes` (Task 17) — sem mockar aqui, a
+// importação real puxaria `@/lib/prisma` → `@/lib/env`, que exige
+// DATABASE_URL/AUTH_SECRET no processo. Este arquivo é deliberadamente um
+// teste "puro" (sem Prisma real, ver comentário no topo) — mockar mantém
+// essa propriedade em vez de silenciosamente virar um teste de integração.
+const adicionarNotaMock = vi.fn();
+vi.mock("@/core/leads/notes", () => ({
+  adicionarNota: (...args: unknown[]) => adicionarNotaMock(...args),
+  TEXTO_MAX_LENGTH: 4000,
+}));
+
+// `adicionarNotaAction` chama `revalidatePath` só depois de um `adicionarNota`
+// bem-sucedido — fora de uma requisição real do Next.js, a implementação
+// real lançaria ("Invariant: static generation store missing"). Mockar
+// como no-op deixa este arquivo testar só a autorização/branching da
+// action, que é o que ele testa para as outras duas actions também.
+const revalidatePathMock = vi.fn();
+vi.mock("next/cache", () => ({
+  revalidatePath: (...args: unknown[]) => revalidatePathMock(...args),
+}));
+
+const { criarLeadManual, moverLeadDeEtapa, adicionarNotaAction } = await import(
+  "../../src/core/leads/actions"
+);
 const { hasPermission } = await import("../../src/core/auth/permissions");
 
 function usuarioFake(overrides: Partial<User>): User {
@@ -64,11 +87,19 @@ function leadFake(overrides: Partial<Lead> = {}): Lead {
   };
 }
 
+function formDataComTexto(texto: string): FormData {
+  const formData = new FormData();
+  formData.set("texto", texto);
+  return formData;
+}
+
 beforeEach(() => {
   usuarioAtualMock.mockReset();
   vi.mocked(hasPermission).mockClear();
   criarLeadMock.mockReset();
   moverEtapaMock.mockReset();
+  adicionarNotaMock.mockReset();
+  revalidatePathMock.mockReset();
 });
 
 describe("criarLeadManual", () => {
@@ -192,4 +223,83 @@ describe("moverLeadDeEtapa", () => {
       expect(moverEtapaMock).not.toHaveBeenCalled();
     }
   );
+});
+
+// Fix round 1/5 (Task 17), achado do revisor: uma nota acima do limite de
+// tamanho lançava sem tratamento dentro da Server Action original (não
+// existe `error.tsx` sob src/app), então a pessoa via a tela de erro
+// genérica do Next em vez de uma mensagem. Estes testes cobrem só a
+// autorização/branching de `adicionarNotaAction` — o comportamento real de
+// `adicionarNota` (trim, limite de tamanho, etc.) já é coberto contra
+// Prisma real em tests/unit/lead-notes.test.ts; aqui `adicionarNotaMock`
+// simula cada resposta possível dela.
+describe("adicionarNotaAction", () => {
+  it("deriva autorId da sessão (nunca de FormData) e chama revalidatePath após salvar com sucesso", async () => {
+    const vendedor = usuarioFake({ id: "vendedor-4", papel: "VENDEDOR" });
+    usuarioAtualMock.mockResolvedValue(vendedor);
+    adicionarNotaMock.mockResolvedValue({ id: "nota-1", texto: "Nota qualquer" });
+
+    const resultado = await adicionarNotaAction(
+      "lead-1",
+      { erro: null },
+      formDataComTexto("Nota qualquer")
+    );
+
+    expect(adicionarNotaMock).toHaveBeenCalledWith({
+      leadId: "lead-1",
+      autorId: "vendedor-4",
+      texto: "Nota qualquer",
+    });
+    expect(revalidatePathMock).toHaveBeenCalledWith("/leads/lead-1");
+    expect(resultado).toEqual({ erro: null });
+  });
+
+  it("texto vazio/só-espaço: no-op silencioso, não chama adicionarNota nem revalidatePath", async () => {
+    usuarioAtualMock.mockResolvedValue(usuarioFake({ id: "vendedor-5" }));
+
+    const resultado = await adicionarNotaAction("lead-1", { erro: null }, formDataComTexto("   "));
+
+    expect(adicionarNotaMock).not.toHaveBeenCalled();
+    expect(revalidatePathMock).not.toHaveBeenCalled();
+    expect(resultado).toEqual({ erro: null });
+  });
+
+  it(
+    "nota muito longa: devolve { erro } com a mensagem de adicionarNota em vez de lançar — é " +
+      "exatamente o caso que quebrava antes deste fix",
+    async () => {
+      usuarioAtualMock.mockResolvedValue(usuarioFake({ id: "vendedor-6" }));
+      adicionarNotaMock.mockRejectedValue(
+        new Error("Nota muito longa: o texto tem 4001 caracteres, o máximo permitido é 4000.")
+      );
+
+      const resultado = await adicionarNotaAction(
+        "lead-1",
+        { erro: null },
+        formDataComTexto("a".repeat(4001))
+      );
+
+      expect(resultado.erro).toMatch(/Nota muito longa/);
+      expect(revalidatePathMock).not.toHaveBeenCalled();
+    }
+  );
+
+  it("qualquer outro erro de adicionarNota (ex.: banco fora do ar) propaga sem virar { erro }", async () => {
+    usuarioAtualMock.mockResolvedValue(usuarioFake({ id: "vendedor-7" }));
+    adicionarNotaMock.mockRejectedValue(new Error("Conexão com o banco falhou"));
+
+    await expect(
+      adicionarNotaAction("lead-1", { erro: null }, formDataComTexto("Nota qualquer"))
+    ).rejects.toThrow("Conexão com o banco falhou");
+  });
+
+  it("propaga 'Não autenticado' sem chamar adicionarNota quando usuarioAtual rejeita", async () => {
+    usuarioAtualMock.mockRejectedValue(new Error("Não autenticado"));
+
+    await expect(
+      adicionarNotaAction("lead-1", { erro: null }, formDataComTexto("Nota qualquer"))
+    ).rejects.toThrow("Não autenticado");
+
+    expect(adicionarNotaMock).not.toHaveBeenCalled();
+  });
 });

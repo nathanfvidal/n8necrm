@@ -10,10 +10,30 @@ import type { LeadNote, User } from "@prisma/client";
  * erro de domínio claro, um valor absurdo (ex.: um e-mail inteiro colado por
  * engano, ou um payload de outro sistema) antes que ele infle a linha no
  * banco e distorça o layout da lista de notas na página de detalhe.
+ *
+ * Exportado (não `const` privada do módulo): a página de detalhe
+ * (`src/app/(painel)/leads/[id]/page.tsx`, um Server Component) importa
+ * este valor e passa por PROP para `LeadNoteForm` (Client Component), que
+ * usa no `maxLength` do `<Textarea>` — só um limite client-side de
+ * conveniência, não a validação real, para que o número nunca precise
+ * divergir silenciosamente entre os dois lugares depois de uma mudança
+ * futura. `LeadNoteForm` NÃO importa este módulo diretamente: este arquivo
+ * importa `@/lib/prisma` no top-level, e um Client Component importando
+ * qualquer coisa daqui arrastaria esse módulo (e `pg`, que precisa do `dns`
+ * do Node) para o bundle do navegador — quebra de build, não só um exagero
+ * de tamanho de bundle. A validação que importa continua sendo a de baixo,
+ * no servidor.
  */
-const TEXTO_MAX_LENGTH = 4000;
+export const TEXTO_MAX_LENGTH = 4000;
 
-export type LeadNoteComAutor = LeadNote & { autor: User };
+// Só os campos que a UI de fato renderiza (`autor.nome`, mais `id` para
+// `key`/testes) — nunca a linha inteira de `User`. `senhaHash` em
+// particular não tem por que existir em memória do servidor só para
+// mostrar um nome; carregá-lo aqui via `include: { autor: true }` (versão
+// anterior deste arquivo) não vazava para o cliente hoje, mas é o tipo de
+// coisa que vaza no dia em que alguém passar este objeto um nível adiante
+// para um Client Component. Fix round 1/5, achado do revisor.
+export type LeadNoteComAutor = LeadNote & { autor: Pick<User, "id" | "nome"> };
 
 /**
  * Registra uma nota em um lead.
@@ -21,9 +41,9 @@ export type LeadNoteComAutor = LeadNote & { autor: User };
  * `autorId` é explícito aqui de propósito — mesmo padrão de `criarLead`/
  * `moverEtapa` (service.ts, Task 13): esta função é a camada testável por
  * Vitest sem precisar de sessão HTTP. Quem chama com um `autorId` forjado é
- * responsabilidade de quem chama — a barreira real fica na Server Action da
- * página de detalhe (`src/app/(painel)/leads/[id]/page.tsx`), que deriva
- * `autorId` de `usuarioAtual()` e nunca aceita esse campo do cliente.
+ * responsabilidade de quem chama — a barreira real fica em
+ * `adicionarNotaAction` (`src/core/leads/actions.ts`), que deriva `autorId`
+ * de `usuarioAtual()` e nunca aceita esse campo do cliente.
  *
  * `texto` é aparado (trim) antes de validar e gravar:
  * - Espaço/quebra de linha só nas pontas não é conteúdo; um texto composto
@@ -72,7 +92,7 @@ export async function adicionarNota(input: {
 export async function listarNotas(leadId: string): Promise<LeadNoteComAutor[]> {
   return prisma.leadNote.findMany({
     where: { leadId },
-    include: { autor: true },
+    include: { autor: { select: { id: true, nome: true } } },
     orderBy: { criadoEm: "desc" },
   });
 }
