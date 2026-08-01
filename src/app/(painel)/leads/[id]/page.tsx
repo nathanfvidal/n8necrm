@@ -1,9 +1,13 @@
 import { notFound } from "next/navigation";
 
 import { prisma } from "@/lib/prisma";
+import { usuarioAtual } from "@/core/auth/session";
 import { listarNotas, TEXTO_MAX_LENGTH } from "@/core/leads/notes";
+import { listarTasksPendentesDoLead } from "@/core/tasks/queries";
 import { EmptyState } from "@/components/empty-state";
 import { LeadNoteForm } from "@/components/leads/lead-note-form";
+import { TaskForm } from "@/components/tasks/task-form";
+import { TaskList, type TaskLinha } from "@/components/tasks/task-list";
 
 /**
  * Página de detalhe de um lead: dados básicos + histórico de notas.
@@ -21,14 +25,20 @@ import { LeadNoteForm } from "@/components/leads/lead-note-form";
  * mostram o mesmo dado sem filtro, não seria controle — seria uma
  * inconsistência a mais.
  *
- * Sem seção de tarefas: o plano de arquivos lista uma seção de tarefas
- * vinculadas ao lead, mas o CRUD de `Task` só chega na Task 18 — hoje não
- * existe nenhuma forma de criar uma tarefa vinculada a um lead, então uma
- * seção "Tarefas" aqui seria sempre um EmptyState estático, sem nenhuma
- * informação real por trás e sem ação possível (nem "adicionar tarefa" nem
- * listagem de verdade). Preferimos deixar a seção de fora agora — a Task 18
- * adiciona a consulta e a UI juntas — a exibir uma seção permanentemente
- * vazia que parece funcionalidade e não é.
+ * Seção de tarefas (Task 18): a Task 17 deixou de propósito de fora
+ * (comentário acima, versão anterior) porque o CRUD de `Task` só chegava
+ * nesta task — uma seção sem nenhuma ação real por trás não valeria a pena.
+ * Agora a seção lista as tarefas PENDENTES ligadas a este lead — mas só as
+ * do usuário logado (`listarTasksPendentesDoLead`, escopada por
+ * `responsavelId`), diferente das notas acima (sem escopo por autor,
+ * decisão de negócio da Task 17: qualquer vendedor pode ler o histórico de
+ * qualquer lead). Tarefa é lembrete pessoal, não informação compartilhada
+ * do lead — ver a checagem de dono em `concluirTask`
+ * (`core/tasks/service.ts`): mostrar aqui o lembrete de um colega que a
+ * pessoa nem consegue concluir seria mais confuso do que útil. Por isso, ao
+ * contrário do resto desta página, aqui SIM chamamos `usuarioAtual()` — não
+ * por segurança (o layout já protege a rota), mas para saber de quem é o
+ * escopo.
  */
 export default async function LeadDetalhePage({
   params,
@@ -36,6 +46,7 @@ export default async function LeadDetalhePage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
+  const usuario = await usuarioAtual();
 
   // `responsavel` narrowed para só `id`/`nome` (fix round 1/5, achado do
   // revisor): `include: { responsavel: true }` carregava a linha inteira de
@@ -56,6 +67,16 @@ export default async function LeadDetalhePage({
   }
 
   const notas = await listarNotas(id);
+
+  const tasksPendentes = await listarTasksPendentesDoLead({
+    leadId: id,
+    responsavelId: usuario.id,
+  });
+  const tarefasLinhas: TaskLinha[] = tasksPendentes.map((task) => ({
+    id: task.id,
+    titulo: task.titulo,
+    vencimento: task.vencimento,
+  }));
 
   return (
     <div className="space-y-6 p-6">
@@ -95,6 +116,12 @@ export default async function LeadDetalhePage({
             </div>
           ))
         )}
+      </div>
+
+      <div className="space-y-2">
+        <h2 className="text-lg font-semibold">Tarefas</h2>
+        <TaskForm leadId={id} />
+        <TaskList tasks={tarefasLinhas} />
       </div>
     </div>
   );
