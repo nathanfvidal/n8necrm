@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useEffect, useState } from "react";
+import { useActionState, useState } from "react";
 
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
@@ -34,36 +34,54 @@ const estadoInicial: SalvarNotaState = { erro: null };
  * normalmente mesmo no caso de erro (`{ erro: "..." }` é um retorno, não uma
  * exceção). Um campo não-controlado seria limpo nos dois casos (sucesso E
  * "nota muito longa"), exatamente o comportamento que este fix existe para
- * evitar. Como campo controlado, só o `useEffect` abaixo decide quando
- * limpar — e ele só limpa quando `estado.erro` é nulo.
+ * evitar.
+ *
+ * Limpar o campo quando `estado` muda: de propósito NÃO usa `useEffect`
+ * (fix round 2/5, achado do revisor — `react-hooks/set-state-in-effect` é
+ * erro de lint neste projeto: `setState` síncrono dentro de um Effect força
+ * um ciclo extra de render/commit a cada submissão). Em vez disso, compara
+ * `estado` com a cópia guardada em `estadoProcessado` DURANTE a
+ * renderização e, se mudou, chama `setState` ali mesmo — o padrão
+ * "ajustar estado quando algo muda" documentado em
+ * react.dev/learn/you-might-not-need-an-effect#adjusting-state-when-a-prop-changes:
+ * React re-renderiza imediatamente com o estado atualizado antes de pintar
+ * a tela, sem o commit+Effect+re-commit extra, e sem disparar a regra de
+ * lint (que mira especificamente `setState` dentro do corpo de um Effect,
+ * não durante a renderização). A guarda `estado !== estadoProcessado` evita
+ * loop infinito: só executa uma vez por identidade nova de `estado` (ou
+ * seja, uma vez por submissão que de fato terminou).
  *
  * `textoMaxLength` chega por PROP, calculada no Server Component
  * (`page.tsx`, que importa `TEXTO_MAX_LENGTH` de `@/core/leads/notes`) —
- * não importamos essa constante direto aqui. `notes.ts` importa
- * `@/lib/prisma` no top-level; importar qualquer coisa dele (mesmo só um
- * número) faz o bundler incluir esse módulo inteiro no bundle do
- * navegador, e `@prisma/adapter-pg` → `pg` precisa do módulo `dns` do
- * Node, que não existe no browser — o build quebra ("Module not found:
- * Can't resolve 'dns'"). Só `adicionarNotaAction` (de `actions.ts`, que
- * tem `"use server"` no topo do arquivo) pode ser importada aqui: o
- * compilador do Next troca a implementação real por uma referência RPC
- * antes de gerar o bundle do cliente, então nunca arrasta Prisma junto.
+ * não importamos essa constante direto aqui. `notes.ts` (e `@/lib/prisma`,
+ * que ele importa) tem `import "server-only"` no topo (fix round 2/5) —
+ * este componente importando qualquer coisa de lá faria o BUILD falhar com
+ * um erro explícito, não um comportamento silenciosamente quebrado em
+ * runtime. Só `adicionarNotaAction` (de `actions.ts`, que tem `"use
+ * server"` no topo do arquivo — uma coisa diferente de `"server-only"`)
+ * pode ser importada aqui: o compilador do Next troca a implementação real
+ * por uma referência RPC antes de gerar o bundle do cliente, então nunca
+ * arrasta Prisma junto.
  */
 export function LeadNoteForm({ leadId, textoMaxLength }: { leadId: string; textoMaxLength: number }) {
   const acao = adicionarNotaAction.bind(null, leadId);
   const [estado, formAction, pendente] = useActionState(acao, estadoInicial);
   const [texto, setTexto] = useState("");
 
-  // Dispara só quando `estado` muda de identidade — ou seja, só depois de
-  // uma submissão de verdade ter terminado (não a cada re-render). Sem
-  // erro: limpa o campo — cobre tanto uma gravação bem-sucedida quanto o
-  // no-op de texto vazio/só-espaço (a action devolve `{ erro: null }` nos
-  // dois casos; no segundo o campo já estava vazio, então limpar não muda
-  // nada visível). Com erro: não toca `texto` — o que a pessoa digitou
-  // continua ali, exatamente como estava, para ela poder corrigir.
-  useEffect(() => {
+  // `estadoProcessado` guarda a última identidade de `estado` já tratada.
+  // Quando `useActionState` devolve um `estado` novo (uma submissão de
+  // verdade terminou — nunca acontece a cada re-render comum), a
+  // comparação abaixo detecta a mudança AQUI, durante a renderização, e
+  // ajusta `texto` antes do commit. Sem erro: limpa o campo — cobre tanto
+  // uma gravação bem-sucedida quanto o no-op de texto vazio/só-espaço (a
+  // action devolve `{ erro: null }` nos dois casos; no segundo o campo já
+  // estava vazio, então limpar não muda nada visível). Com erro: não toca
+  // `texto` — o que a pessoa digitou continua ali, exatamente como estava.
+  const [estadoProcessado, setEstadoProcessado] = useState(estado);
+  if (estado !== estadoProcessado) {
+    setEstadoProcessado(estado);
     if (!estado.erro) setTexto("");
-  }, [estado]);
+  }
 
   return (
     <form action={formAction} className="space-y-2">

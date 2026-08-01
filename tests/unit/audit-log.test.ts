@@ -7,7 +7,17 @@
 // top-level.
 import "dotenv/config";
 
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
+
+// "server-only" só resolve para um no-op sob a condição de resolução
+// "react-server" que o Next.js aplica no build — fora desse pipeline (aqui,
+// sob Vitest) ele sempre lança, independente de quem importa (ver
+// tests/unit/storage.test.ts, onde este mock foi documentado pela primeira
+// vez). `src/lib/prisma.ts` ganhou `import "server-only"` na Task 17 (fix
+// round 2/5), e este arquivo importa `prisma` direto — sem mockar aqui, TODO
+// teste deste arquivo quebraria na importação, não por causa da lógica
+// testada.
+vi.mock("server-only", () => ({}));
 import { Prisma } from "@prisma/client";
 import { prisma } from "../../src/lib/prisma";
 import { registrarAuditoria } from "../../src/core/audit/log";

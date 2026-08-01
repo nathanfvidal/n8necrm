@@ -1,3 +1,5 @@
+import "server-only";
+
 import { prisma } from "@/lib/prisma";
 import type { LeadNote, User } from "@prisma/client";
 
@@ -17,11 +19,14 @@ import type { LeadNote, User } from "@prisma/client";
  * usa no `maxLength` do `<Textarea>` — só um limite client-side de
  * conveniência, não a validação real, para que o número nunca precise
  * divergir silenciosamente entre os dois lugares depois de uma mudança
- * futura. `LeadNoteForm` NÃO importa este módulo diretamente: este arquivo
- * importa `@/lib/prisma` no top-level, e um Client Component importando
- * qualquer coisa daqui arrastaria esse módulo (e `pg`, que precisa do `dns`
- * do Node) para o bundle do navegador — quebra de build, não só um exagero
- * de tamanho de bundle. A validação que importa continua sendo a de baixo,
+ * futura. `LeadNoteForm` NÃO importa este módulo diretamente: com
+ * `import "server-only"` no topo deste arquivo (fix round 2/5, achado do
+ * revisor — mesmo padrão de `src/lib/storage.ts`/`src/lib/prisma.ts`), um
+ * Client Component que importar qualquer coisa daqui recebe um erro de
+ * build explícito ("This module cannot be imported from a Client
+ * Component..."), não a coincidência de antes (o bundler tropeçando em
+ * `pg`/`dns` por acaso, que pararia de proteger nada no dia em que o driver
+ * do Postgres mudasse). A validação que importa continua sendo a de baixo,
  * no servidor.
  */
 export const TEXTO_MAX_LENGTH = 4000;
