@@ -100,10 +100,13 @@ function formatarDataHoraExibicao(data: Date): string {
  *    delimitado por vírgula, o Excel pt-BR não separa colunas — a linha
  *    inteira cai numa célula só. `;` é o delimitador que o Excel pt-BR
  *    espera por padrão.
- * 2. **Injeção de fórmula (CSV injection)**: um campo cujo primeiro
- *    caractere é `=`, `+`, `-`, `@`, tab ou retorno de carro é interpretado
- *    pelo Excel/LibreOffice como início de fórmula ao abrir o arquivo — não
- *    como texto literal. `Contact.nome` (e, por composição, qualquer outro
+ * 2. **Injeção de fórmula (CSV injection)**: um campo que começa — cru, ou
+ *    depois de qualquer espaço em branco líder (fix round 1/5, ver
+ *    comentário dentro de `escaparCampoCsv`) — com `=`, `+`, `-` ou `@`, OU
+ *    que começa CRU com tab ou retorno de carro, é interpretado pelo
+ *    Excel/LibreOffice como início de fórmula (ou tratado de forma especial
+ *    na importação) ao abrir o arquivo — não como texto literal.
+ *    `Contact.nome` (e, por composição, qualquer outro
  *    campo de texto desta exportação, por simetria e porque é barato demais
  *    para pular) é dado que, a partir da Fase 2, chega de um formulário
  *    público na web — ou seja, um agente de fora do CRM decide o que vai
@@ -126,7 +129,38 @@ function formatarDataHoraExibicao(data: Date): string {
 const DELIMITADOR = ";";
 
 function escaparCampoCsv(valor: string): string {
-  const neutralizado = /^[=+\-@\t\r]/.test(valor) ? `'${valor}` : valor;
+  // Fix round 1/5, achado do revisor: a versão original testava só o
+  // primeiro BYTE (`/^[=+\-@\t\r]/.test(valor)`), e um nome como " =1+1"
+  // (um único espaço na frente) passava intacto, sem apóstrofo — bypass
+  // documentado desta mitigação: o Excel ainda avalia como fórmula um valor
+  // que começa com espaço(s) em branco seguidos de "=" (e afins), então a
+  // defesa contra `=`/`+`/`-`/`@` precisa olhar o primeiro caractere depois
+  // de qualquer espaço líder, não só a posição 0 crua.
+  //
+  // Tab e retorno de carro são tratados à parte, contra o VALOR CRU (sem
+  // `trimStart()`) — de propósito: `trimStart()` remove tab/CR/quebra de
+  // linha como "espaço em branco" pela definição do ECMAScript, então
+  // aplicar a mesma técnica a esses dois casos teria o efeito CONTRÁRIO ao
+  // pretendido: um campo como "\tOlá" (tab cru na frente, sem `=`/`+`/`-`/`@`
+  // depois) pularia o tab durante o `trimStart()`, sobraria "Olá" — que não
+  // dispara nada — e o campo sairia sem o apóstrofo que a lista da OWASP
+  // pede para todo campo que começa com tab/CR, independente do que vem
+  // depois. Checar os dois separadamente contra `valor.charAt(0)` mantém
+  // esse caso protegido exatamente como estava antes deste fix, sem reabrir
+  // o buraco que ele veio fechar.
+  //
+  // Em nenhum dos dois ramos `valor` é cortado — o apóstrofo (quando
+  // necessário) é prefixado no valor ORIGINAL, então um nome que
+  // genuinamente começa com espaço (sem `=`/`+`/`-`/`@` na sequência)
+  // continua exportado com esse espaço intacto, só muda a condição que
+  // decide se o apóstrofo entra na frente.
+  const primeiroCaractereCru = valor.charAt(0);
+  const primeiroCaractereAposEspacos = valor.trimStart().charAt(0);
+  const precisaNeutralizar =
+    primeiroCaractereCru === "\t" ||
+    primeiroCaractereCru === "\r" ||
+    /[=+\-@]/.test(primeiroCaractereAposEspacos);
+  const neutralizado = precisaNeutralizar ? `'${valor}` : valor;
 
   if (
     neutralizado.includes(DELIMITADOR) ||
@@ -180,6 +214,35 @@ export async function GET() {
     return NextResponse.json({ erro: "Sem permissão" }, { status: 403 });
   }
 
+  // Fix round 1/5 — teto de escala, registrado de propósito (achado do
+  // revisor: o brief pedia para o volume de dado ser endereçado, e a
+  // primeira versão desta rota não documentava nada sobre isso).
+  //
+  // `listarLeads()` carrega TODO lead (com os 3 joins) de uma vez na
+  // memória do processo; o CSV inteiro é montado como uma única string
+  // (`csv` abaixo) e devolvido como resposta bufferizada — sem paginação,
+  // sem streaming. Decisão deliberada, correta NESTA escala (revenda
+  // pequena, 4 leads no seed, dezenas/centenas no cliente real de Fase
+  // 0-1): implementar streaming ou paginação agora seria complexidade sem
+  // uso, sem nenhum sinal de que o volume atual precise disso.
+  //
+  // O que quebra primeiro quando o volume crescer (Fase 2, formulário
+  // público alimentando lead em volume): NÃO é memória — alguns milhares de
+  // leads como string CSV ainda cabe folgado num processo Node comum. O que
+  // quebra primeiro é o LIMITE DE TEMPO DE EXECUÇÃO de uma function
+  // serverless (Vercel etc.): esta rota faz uma query, monta a string
+  // inteira e só então começa a enviar bytes — para um volume grande o
+  // bastante, montar a resposta inteira antes do primeiro byte sair pode
+  // estourar esse limite antes de qualquer dado chegar ao navegador, mesmo
+  // que o processo tivesse memória de sobra.
+  //
+  // Quando esse teto for atingido de verdade (sintoma: exportação que timeout
+  // ou nunca inicia o download em produção, não em dev), a correção não é
+  // "adicionar cache" — é trocar para uma `ReadableStream` que gera e envia
+  // cada linha conforme lê do banco (ou pagina a query em lotes), para o
+  // primeiro byte sair antes da última linha existir. Não fazer isso agora,
+  // sem sinal real do volume que vai bater esse teto, é a escolha
+  // deliberada — não uma omissão.
   const leads = await listarLeads();
 
   const cabecalho = ["Contato", "Telefone", "Etapa", "Responsável", "Canal", "Criado em"];

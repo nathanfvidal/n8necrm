@@ -316,6 +316,65 @@ describe("GET /export/leads — injeção de fórmula CSV (CSV injection)", () =
     expect(corpo).toContain("Carlos = Silva");
     expect(corpo).not.toContain("'Carlos");
   });
+
+  it(
+    "fix round 1/5 (achado do revisor): nome com UM ÚNICO ESPAÇO antes do '=' não passa mais " +
+      "intacto — bypass documentado da defesa original, que só olhava a posição 0 crua",
+    async () => {
+      usuarioAtualMock.mockResolvedValue(usuarioFake({ papel: "ADMIN" }));
+      listarLeadsMock.mockResolvedValue([leadFake({ contact: contactFake({ nome: " =1+1" }) })]);
+
+      const resposta = await GET();
+      const corpo = await resposta.text();
+      const [, linhaDoLead] = corpo.split("\r\n");
+
+      // Nunca solto sem prefixo — a linha não pode começar com o espaço
+      // seguido direto do "=" sem o apóstrofo entre os dois:
+      expect(linhaDoLead.startsWith(" =1+1")).toBe(false);
+      // Neutralizado com apóstrofo à frente do valor ORIGINAL — o espaço
+      // continua lá, só o apóstrofo entra antes dele:
+      expect(linhaDoLead.startsWith("' =1+1")).toBe(true);
+    }
+  );
+
+  it("um nome que genuinamente começa com espaço, mas SEM caractere perigoso na sequência, exporta com o espaço intacto — a defesa não apaga dado legítimo", async () => {
+    usuarioAtualMock.mockResolvedValue(usuarioFake({ papel: "ADMIN" }));
+    listarLeadsMock.mockResolvedValue([leadFake({ contact: contactFake({ nome: " Ana Paula" }) })]);
+
+    const resposta = await GET();
+    const corpo = await resposta.text();
+    const [, linhaDoLead] = corpo.split("\r\n");
+
+    expect(linhaDoLead.startsWith(" Ana Paula")).toBe(true);
+  });
+
+  it("nome começando com tab (\\t) cru é neutralizado, mesmo sem '=' na sequência — conjunto de gatilho da OWASP", async () => {
+    usuarioAtualMock.mockResolvedValue(usuarioFake({ papel: "ADMIN" }));
+    listarLeadsMock.mockResolvedValue([
+      leadFake({ contact: contactFake({ nome: "\tCarlos" }) }),
+    ]);
+
+    const resposta = await GET();
+    const corpo = await resposta.text();
+    const [, linhaDoLead] = corpo.split("\r\n");
+
+    expect(linhaDoLead.startsWith("'\tCarlos")).toBe(true);
+  });
+
+  it("nome começando com retorno de carro (\\r) cru é neutralizado, mesmo sem '=' na sequência", async () => {
+    usuarioAtualMock.mockResolvedValue(usuarioFake({ papel: "ADMIN" }));
+    listarLeadsMock.mockResolvedValue([
+      leadFake({ contact: contactFake({ nome: "\rCarlos" }) }),
+    ]);
+
+    const resposta = await GET();
+    const corpo = await resposta.text();
+
+    // O valor contém \r, então também cai na regra de quoting (item 4 da
+    // suíte de escapaCampoCsv) — o apóstrofo entra ANTES do \r, dentro do
+    // campo entre aspas.
+    expect(corpo).toContain('"\'\rCarlos"');
+  });
 });
 
 describe("GET /export/leads — escapaCampoCsv (aspas, ';', quebra de linha)", () => {
