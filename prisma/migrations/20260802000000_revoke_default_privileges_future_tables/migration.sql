@@ -1,0 +1,23 @@
+-- The previous migration (20260730212500_enable_rls_and_revoke_anon_grants)
+-- locked down every table that existed at the time, but it only touched
+-- privileges on EXISTING objects. Supabase's default privileges for the
+-- `public` schema still grant ALL on any table/sequence created AFTER that
+-- migration to `anon` and `authenticated` (verified live via
+-- `pg_default_acl` -- see final-fixes-report.md for the query and output).
+--
+-- Prisma does not emit RLS or REVOKE statements for new models on its own,
+-- so every future `prisma migrate dev` that adds a table (e.g. Phase 2's
+-- Item/ItemImage/Event/DailyItemStat, publicly reachable because the anon
+-- key ships to the browser for the public showroom) would silently create
+-- a table that is fully readable/writable/truncatable through the public
+-- PostgREST API from the moment it exists, until someone remembers to hand
+-- -write a REVOKE for it.
+--
+-- ALTER DEFAULT PRIVILEGES changes what grants are attached automatically to
+-- objects created in the future by the role running this migration -- it
+-- does not touch any existing table (those are already covered by the prior
+-- migration) and it does not enable RLS by itself. New models still need
+-- their own `ALTER TABLE ... ENABLE ROW LEVEL SECURITY` (belt) on top of
+-- this (suspenders), same reasoning as the comment in the prior migration.
+ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON TABLES FROM anon, authenticated;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON SEQUENCES FROM anon, authenticated;
