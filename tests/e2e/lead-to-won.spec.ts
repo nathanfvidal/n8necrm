@@ -150,7 +150,13 @@ function cardEm(coluna: Locator, nomeContato: string): Locator {
 async function esperarLeadNaEtapaNoBanco(
   telefone: string,
   nomeEtapaEsperado: string,
-  timeoutMs = 5000
+  // 5000ms flakou uma vez (achado da revisão final de branch): o orçamento
+  // precisa cobrir ativação do sensor de arrasto + round-trip da Server
+  // Action + a escrita chegar no Postgres REMOTO do Supabase, não um banco
+  // local — 15s dá folga real para jitter de rede sem esconder uma
+  // regressão de verdade (o teste segue falhando se o lead nunca chegar na
+  // etapa esperada, só espera mais antes de declarar isso).
+  timeoutMs = 15_000
 ): Promise<void> {
   const inicio = Date.now();
   let ultimaEtapaObservada: string | undefined;

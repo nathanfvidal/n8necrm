@@ -61,7 +61,15 @@ describe("checarRateLimit", () => {
 
   it("depois que a janela expira, a contagem reseta e a janela avança (janela fixa, não deslizante)", async () => {
     const chave = "teste:formulario:sessao-janela";
-    const janelaMs = 100;
+    // janelaMs=100 com uma espera de +50ms flakou repetidamente (achado da
+    // revisão final de branch): cada checarRateLimit() é uma ida e volta ao
+    // Postgres REMOTO do Supabase, então os 150ms totais de folga podiam
+    // não sobrar depois do round-trip das duas primeiras chamadas, fazendo
+    // a terceira chamada ainda cair dentro da janela "antiga" por sorte de
+    // latência de rede — não por a janela fixa estar errada. Alargar a
+    // janela e a folga pós-expiração não muda o que o teste prova (ainda
+    // reseta a contagem e avança a janela); só dá margem real para jitter.
+    const janelaMs = 1000;
 
     const primeira = await checarRateLimit(chave, 1, janelaMs);
     expect(primeira).toBe(true);
@@ -70,8 +78,8 @@ describe("checarRateLimit", () => {
     const segunda = await checarRateLimit(chave, 1, janelaMs);
     expect(segunda).toBe(false);
 
-    // Espera a janela expirar.
-    await new Promise((resolve) => setTimeout(resolve, janelaMs + 50));
+    // Espera a janela expirar, com folga generosa para jitter de rede.
+    await new Promise((resolve) => setTimeout(resolve, janelaMs + 1000));
 
     const terceira = await checarRateLimit(chave, 1, janelaMs);
     expect(terceira).toBe(true);
