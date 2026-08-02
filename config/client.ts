@@ -8,7 +8,7 @@ export const client: ClientConfig = {
     corPrimaria: "#0F62FE",
     fonte: "Inter",
   },
-  modulos: ["catalog", "analytics"],
+  modulos: [],
   entidade: {
     singular: "Veículo",
     plural: "Veículos",

@@ -4,11 +4,12 @@ import { render, screen, cleanup } from "@testing-library/react";
 
 // A grade de módulos exibidos hoje (catalog, analytics) é definida dentro de
 // painel-nav.tsx, não em config/client.ts — então não dá pra provar a
-// filtragem lendo o config real: as duas entradas de módulo existentes hoje
-// (catalog, analytics) estão ATIVAS em config/client.ts (Task 3). Por isso
-// mockamos config/client aqui, controlando explicitamente um módulo ligado e
-// um desligado, sem depender do estado atual do arquivo real — se um fork
-// mudar client.modulos, este teste continua válido.
+// filtragem lendo o config real: config/client.ts envia modulos: [] (nenhuma
+// rota de módulo existe ainda — Fases 2 e 3), então não haveria módulo ativo
+// para checar o caminho "aparece". Por isso mockamos config/client aqui,
+// controlando explicitamente um módulo ligado e um desligado, sem depender
+// do estado atual do arquivo real — se um fork mudar client.modulos, este
+// teste continua válido.
 vi.mock("../../config/client", () => ({
   client: { modulos: ["catalog"] },
 }));
