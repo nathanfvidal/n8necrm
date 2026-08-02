@@ -5,6 +5,7 @@ import { LeadForm } from "@/components/leads/lead-form";
 import { LeadTable, type LeadLinha } from "@/components/leads/lead-table";
 import { listarLeads } from "@/core/leads/queries";
 import { EmptyState } from "@/components/empty-state";
+import { buttonVariants } from "@/components/ui/button";
 
 /**
  * `(painel)/layout.tsx` já chama `usuarioAtual()` e redireciona para
@@ -25,6 +26,13 @@ export default async function LeadsPage() {
   // vai descartar em silêncio seria enganoso, e buscar dados de outras
   // contas que a pessoa não pode usar não tem propósito.
   const podeAtribuirOutraPessoa = hasPermission(usuario.papel, "ver_dashboard_geral");
+
+  // `GET /export/leads` (Task 21) já checa `exportar_leads` no servidor
+  // independente do que acontece aqui — este flag só decide se o botão
+  // aparece. ADMIN e GESTOR têm a permissão; VENDEDOR não (ver matriz em
+  // core/auth/permissions.ts). Sem essa checagem, um VENDEDOR veria um link
+  // que sempre resolve em 403 — pior que não oferecer a ação.
+  const podeExportar = hasPermission(usuario.papel, "exportar_leads");
 
   const vendedores = podeAtribuirOutraPessoa
     ? await prisma.user.findMany({
@@ -68,7 +76,19 @@ export default async function LeadsPage() {
 
   return (
     <div className="space-y-6 p-6">
-      <h1 className="text-xl font-semibold">Leads</h1>
+      <div className="flex items-center justify-between">
+        <h1 className="text-xl font-semibold">Leads</h1>
+        {podeExportar && (
+          // Link nativo, não `router.push`/`onClick` com `fetch`: a rota
+          // devolve `Content-Disposition: attachment` (Task 21), então o
+          // próprio navegador trata a navegação como download e permanece
+          // em `/leads` — não precisa de `target="_blank"` (abriria uma aba
+          // em branco à toa) nem de JS extra para disparar o download.
+          <a href="/export/leads" className={buttonVariants({ variant: "outline" })}>
+            Exportar CSV
+          </a>
+        )}
+      </div>
       <LeadForm
         responsavelPadraoId={usuario.id}
         nomeUsuario={usuario.nome}
