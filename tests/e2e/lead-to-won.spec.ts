@@ -246,14 +246,36 @@ async function arrastarComPonteiro(page: Page, card: Locator, colunaDestino: Loc
  * `.focus()` agora move `document.activeElement` para esse elemento antes de
  * remover a instrumentação de diagnóstico.
  */
-async function arrastarComTeclado(page: Page, card: Locator, tecla: "ArrowLeft" | "ArrowRight"): Promise<void> {
+/**
+ * Fix (achado do revisor na verificação da rodada final): a versão anterior
+ * apostava num `page.waitForTimeout(100)` fixo entre a seta e o Space de
+ * soltar, torcendo para que o `handleDragMove`/colisão do dnd-kit já tivesse
+ * re-renderizado sobre a coluna de destino nesse intervalo. Sob 4 workers
+ * paralelos (`playwright.config.ts`) nem sempre bastava: o revisor rodou a
+ * suíte 3x e pegou uma falha real — "última etapa observada: Fechado" depois
+ * de 15s, ou seja, o Space de soltar chegou com `over` ainda `null`
+ * (`handleDragEnd` em kanban-board.tsx devolve cedo quando `!over`, sem
+ * mover nada) — não uma execução lenta que só precisava de mais tempo.
+ *
+ * A correção segue o mesmo princípio de `esperarLeadNaEtapaNoBanco`: esperar
+ * por um sinal observável real, não chutar uma duração. `Coluna` (
+ * kanban-board.tsx) usa `useDroppable` e aplica a classe `bg-muted/50`
+ * exatamente quando `isOver` fica `true` para aquela coluna — esse estado é
+ * calculado pelo mesmo motor de colisão do `DndContext` (`closestCenter`)
+ * para os dois sensores, ponteiro e teclado, então esperar essa classe
+ * aparecer na coluna de destino é prova de que o dnd-kit já reconhece a
+ * coluna como alvo, não uma suposição sobre timing de re-render do React.
+ */
+async function arrastarComTeclado(
+  page: Page,
+  card: Locator,
+  colunaDestino: Locator,
+  tecla: "ArrowLeft" | "ArrowRight"
+): Promise<void> {
   await card.focus();
   await page.keyboard.press("Space");
   await page.keyboard.press(tecla);
-  // Pequena folga: o `handleDragMove`/colisão do dnd-kit reage à tecla via
-  // re-render do React — sem qualquer pausa, o `Space` de soltar pode chegar
-  // antes do estado de colisão ter sido recalculado sobre a nova posição.
-  await page.waitForTimeout(100);
+  await expect(colunaDestino).toHaveClass(/bg-muted\/50/);
   await page.keyboard.press("Space");
 }
 
@@ -311,14 +333,14 @@ test("cria um lead manualmente e move até a etapa final do funil", async ({ pag
   // nos dois sentidos e terminar o teste com o lead de volta na etapa final
   // (o estado de negócio que a task pede).
   await test.step("arrasto por teclado: Fechado → Proposta", async () => {
-    await arrastarComTeclado(page, cardEm(colunaFechado, NOME_TESTE), "ArrowLeft");
+    await arrastarComTeclado(page, cardEm(colunaFechado, NOME_TESTE), colunaProposta, "ArrowLeft");
     await esperarLeadNaEtapaNoBanco(TELEFONE_TESTE, "Proposta");
     await page.reload();
     await expect(cardEm(colunaProposta, NOME_TESTE)).toBeVisible();
   });
 
   await test.step("arrasto por teclado: Proposta → Fechado", async () => {
-    await arrastarComTeclado(page, cardEm(colunaProposta, NOME_TESTE), "ArrowRight");
+    await arrastarComTeclado(page, cardEm(colunaProposta, NOME_TESTE), colunaFechado, "ArrowRight");
     await esperarLeadNaEtapaNoBanco(TELEFONE_TESTE, "Fechado");
     await page.reload();
     await expect(cardEm(colunaFechado, NOME_TESTE)).toBeVisible();

@@ -6,11 +6,14 @@ import tsconfigPaths from "vite-tsconfig-paths";
 // variáveis (AUTH_SECRET, SUPABASE_SERVICE_ROLE_KEY, ...) em todo arquivo de
 // teste, mesmo os que não tocam banco (client-config, permissions, storage).
 // Os arquivos que realmente precisam de DATABASE_URL carregam `dotenv/config`
-// eles mesmos — mesmo padrão que prisma.config.ts já usa. São 14 arquivos
-// hoje (todo teste que importa `src/lib/prisma` direto ou via `prisma/seed.ts`
-// contra o Postgres real do Supabase); listar cada um aqui viraria manutenção
-// obrigada a cada teste novo que toque banco. Para achar a lista atual:
-// `grep -rl "dotenv/config" tests/`.
+// eles mesmos — mesmo padrão que prisma.config.ts já usa (todo teste que
+// importa `src/lib/prisma` direto ou via `prisma/seed.ts` contra o Postgres
+// real do Supabase). Não listamos quantos são nem quais aqui de propósito —
+// esse número muda a cada teste novo que toque banco, e um comentário com
+// contagem fixa só fica desatualizado (já aconteceu uma vez). Para achar a
+// lista atual: `grep -rlE '^import "dotenv/config";' tests/` — âncora no
+// início da linha, não pega comentário que só MENCIONA a string (ex.: o
+// comentário deste próprio arquivo, ou o de permissions.test.ts).
 export default defineConfig({
   plugins: [react(), tsconfigPaths()],
   test: {
