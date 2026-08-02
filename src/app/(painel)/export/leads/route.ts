@@ -4,6 +4,7 @@ import type { LeadChannel } from "@prisma/client";
 import { usuarioAtual } from "@/core/auth/session";
 import { hasPermission } from "@/core/auth/permissions";
 import { listarLeads } from "@/core/leads/queries";
+import { formatarDataHoraBR } from "@/lib/date";
 
 // Mesma rotulagem de canal do card do kanban (kanban-card.tsx, Task 15) e da
 // tabela (lead-table.tsx, Task 16) — mantida em sincronia de propósito para
@@ -55,36 +56,6 @@ function formatarTelefoneExibicao(telefone: string): string {
   // formato. Preferimos exportar o valor cru a quebrar a exportação inteira
   // por causa de um único contato com dado fora do padrão.
   return telefone;
-}
-
-/**
- * Formata `Lead.criadoEm` (um `DateTime` do Postgres, sempre UTC) como
- * "DD/MM/AAAA HH:mm" no fuso de São Paulo — em vez do ISO 8601 cru do
- * rascunho original desta rota.
- *
- * Fuso fixado explicitamente em "America/Sao_Paulo" (não
- * `toLocaleString` sem `timeZone`, que herdaria o fuso do processo Node):
- * o servidor de produção não necessariamente roda no fuso do Brasil, e um
- * horário de criação que muda dependendo de onde o processo está hospedado
- * seria pior que inútil numa exportação que existe para auditoria.
- * `Intl.DateTimeFormat` + `formatToParts` (em vez de `toLocaleString`
- * direto) evita o "," que o locale pt-BR insere entre data e hora por
- * padrão — controle explícito do formato final, sem depender de como a ICU
- * do ambiente formata `toLocaleString` hoje.
- */
-function formatarDataHoraExibicao(data: Date): string {
-  const partes = new Intl.DateTimeFormat("pt-BR", {
-    timeZone: "America/Sao_Paulo",
-    day: "2-digit",
-    month: "2-digit",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).formatToParts(data);
-
-  const valor = (tipo: string) => partes.find((parte) => parte.type === tipo)?.value ?? "";
-  return `${valor("day")}/${valor("month")}/${valor("year")} ${valor("hour")}:${valor("minute")}`;
 }
 
 /**
@@ -257,7 +228,7 @@ export async function GET() {
       lead.stage.nome,
       lead.responsavel?.nome ?? "Sem responsável",
       rotuloCanal[lead.canal],
-      formatarDataHoraExibicao(lead.criadoEm),
+      formatarDataHoraBR(lead.criadoEm),
     ])
   );
 

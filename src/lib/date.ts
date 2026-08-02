@@ -71,3 +71,107 @@ export function parseDataCivil(valor: string): Date {
 export function formatarDataCivilBR(data: Date): string {
   return data.toLocaleDateString("pt-BR", { timeZone: "UTC" });
 }
+
+/**
+ * ---------------------------------------------------------------------
+ * A partir daqui: helpers de TIMESTAMP (um INSTANTE — `Lead.criadoEm`,
+ * `LeadNote.criadoEm`, `AuditLog.criadoEm`, todo `DateTime` que representa
+ * "quando algo aconteceu", não um dia digitado num `<input type="date">`).
+ *
+ * Isto é DELIBERADAMENTE o oposto da âncora UTC de `parseDataCivil`/
+ * `formatarDataCivilBR` acima, e as duas famílias não devem ser misturadas:
+ *
+ * - Uma data civil (vencimento de tarefa) é o dia que a pessoa DIGITOU —
+ *   sempre o mesmo dia, em qualquer fuso de quem olha a tela depois. Por
+ *   isso ancora e formata em UTC: um "instante" fixo e arbitrário que
+ *   ninguém nunca vê como hora, só como data.
+ * - Um timestamp (`criadoEm`) é um INSTANTE real que aconteceu num
+ *   momento do mundo — formatá-lo em UTC (ou no fuso do processo Node, que
+ *   pode não ser o do Brasil em produção) mostraria a hora errada para
+ *   quem está olhando de São Paulo, e pior: o mesmo instante apareceria
+ *   com dia diferente dependendo de QUEM formatou (servidor vs. máquina
+ *   local de quem roda `npm run dev`) se cada site da aplicação decidisse
+ *   o fuso por conta própria via `toLocaleString`/`toLocaleDateString`
+ *   sem `timeZone` — exatamente o bug que estas funções existem para
+ *   fechar (ver `tests/unit/date.test.ts`, "criadoEm exibido e o ISO usado
+ *   para filtrar teriam que concordar").
+ *
+ * "America/Sao_Paulo" fixo (não o fuso do processo) porque o servidor de
+ * produção não necessariamente roda no Brasil, e a base de usuários desta
+ * fase é 100% brasileira — mesma decisão já tomada em
+ * `export/leads/route.ts` (Task 21), só que ali vivia como uma cópia local
+ * da função; as três telas com o mesmo bug em potencial (`leads/page.tsx`,
+ * `leads/[id]/page.tsx`, dashboard `page.tsx`) chamavam `toLocaleDateString`/
+ * `toLocaleString("pt-BR")` sem `timeZone` nenhum, herdando o fuso do
+ * processo Node — daí o "05/08" que a exportação mostra virar "04/08" na
+ * tela, ou vice-versa, dependendo de onde o processo está hospedado.
+ * ---------------------------------------------------------------------
+ */
+const FUSO_BRASIL = "America/Sao_Paulo";
+
+/**
+ * Formata um timestamp como "DD/MM/AAAA HH:mm" no fuso de São Paulo.
+ * `Intl.DateTimeFormat` + `formatToParts` (em vez de `toLocaleString`
+ * direto) evita o "," que o locale pt-BR insere entre data e hora por
+ * padrão — controle explícito do formato final, sem depender de como a ICU
+ * do ambiente formata `toLocaleString` hoje. Mesma implementação que
+ * `export/leads/route.ts` (Task 21) tinha embutida localmente; movida para
+ * cá para ser o único lugar que decide isso.
+ */
+export function formatarDataHoraBR(data: Date): string {
+  const partes = new Intl.DateTimeFormat("pt-BR", {
+    timeZone: FUSO_BRASIL,
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(data);
+
+  const valor = (tipo: string) => partes.find((parte) => parte.type === tipo)?.value ?? "";
+  return `${valor("day")}/${valor("month")}/${valor("year")} ${valor("hour")}:${valor("minute")}`;
+}
+
+/**
+ * Formata um timestamp como "DD/MM/AAAA" (sem hora) no fuso de São Paulo —
+ * para telas como a lista de leads, que mostram só o dia de criação.
+ */
+export function formatarDataBR(data: Date): string {
+  return new Intl.DateTimeFormat("pt-BR", {
+    timeZone: FUSO_BRASIL,
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  }).format(data);
+}
+
+/**
+ * Devolve "AAAA-MM-DD" (dia civil no fuso de São Paulo) para um timestamp —
+ * a chave que `lead-table.tsx` usa para o filtro "De"/"Até" por data de
+ * criação (comparação de string, formato ISO ordena igual a data).
+ *
+ * Existe para acompanhar `formatarDataBR` (mesmo fuso, mesmo dia) — antes
+ * desta função, `leads/page.tsx` calculava esse valor com
+ * `criadoEm.toISOString().slice(0, 10)` (dia civil em UTC) enquanto exibia
+ * o dia com `toLocaleDateString("pt-BR")` sem fuso (dia civil no fuso do
+ * processo). Os dois quase sempre concordam, exceto exatamente na janela
+ * de ~3h ao redor da meia-noite em São Paulo (UTC-3) — onde um lead criado
+ * "04/08 23h" no relógio de São Paulo é "05/08 02h" em UTC: a tela
+ * mostrava "04/08" (fuso do processo, se o processo rodasse no fuso do
+ * Brasil) mas o filtro usava a chave "2026-08-05" (UTC) — filtrar por
+ * "04/08" não encontrava a própria linha rotulada "04/08". Usar o mesmo
+ * fuso (São Paulo) para os dois elimina a divergência por construção, não
+ * por coincidência de qual fuso o processo roda.
+ */
+export function dataISOEmSaoPaulo(data: Date): string {
+  const partes = new Intl.DateTimeFormat("en-CA", {
+    timeZone: FUSO_BRASIL,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(data);
+
+  const valor = (tipo: string) => partes.find((parte) => parte.type === tipo)?.value ?? "";
+  return `${valor("year")}-${valor("month")}-${valor("day")}`;
+}

@@ -6,6 +6,7 @@ import { LeadTable, type LeadLinha } from "@/components/leads/lead-table";
 import { listarLeads } from "@/core/leads/queries";
 import { EmptyState } from "@/components/empty-state";
 import { buttonVariants } from "@/components/ui/button";
+import { dataISOEmSaoPaulo, formatarDataBR } from "@/lib/date";
 
 /**
  * `(painel)/layout.tsx` já chama `usuarioAtual()` e redireciona para
@@ -67,8 +68,13 @@ export default async function LeadsPage() {
     etapaNome: lead.stage.nome,
     responsavelNome: lead.responsavel?.nome ?? "Sem responsável",
     canal: lead.canal,
-    criadoEm: lead.criadoEm.toLocaleDateString("pt-BR"),
-    criadoEmISO: lead.criadoEm.toISOString().slice(0, 10),
+    // Mesmo fuso (São Paulo) para o rótulo exibido e para a chave usada no
+    // filtro "De"/"Até" (lead-table.tsx) — de propósito, ver comentário de
+    // `dataISOEmSaoPaulo` em `@/lib/date`: usar fusos diferentes para os
+    // dois é o bug que fazia "filtrar por 04/08" não achar uma linha
+    // rotulada "04/08" perto da virada da meia-noite.
+    criadoEm: formatarDataBR(lead.criadoEm),
+    criadoEmISO: dataISOEmSaoPaulo(lead.criadoEm),
   }));
 
   const etapasUnicas = [...new Set(linhas.map((linha) => linha.etapaNome))];

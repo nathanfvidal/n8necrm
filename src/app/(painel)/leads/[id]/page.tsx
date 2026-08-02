@@ -8,6 +8,7 @@ import { EmptyState } from "@/components/empty-state";
 import { LeadNoteForm } from "@/components/leads/lead-note-form";
 import { TaskForm } from "@/components/tasks/task-form";
 import { TaskList, type TaskLinha } from "@/components/tasks/task-list";
+import { formatarDataHoraBR } from "@/lib/date";
 
 /**
  * Página de detalhe de um lead: dados básicos + histórico de notas.
@@ -120,7 +121,7 @@ export default async function LeadDetalhePage({
                   interpretado como HTML/script, só exibido como texto. */}
               <p className="whitespace-pre-wrap break-words">{nota.texto}</p>
               <p className="mt-1 text-xs text-muted-foreground">
-                {nota.autor.nome} · {nota.criadoEm.toLocaleString("pt-BR")}
+                {nota.autor.nome} · {formatarDataHoraBR(nota.criadoEm)}
               </p>
             </div>
           ))

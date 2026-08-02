@@ -7,6 +7,7 @@ import { StageSummary } from "@/components/dashboard/stage-summary";
 import { ConversionChart } from "@/components/dashboard/conversion-chart";
 import { EmptyState } from "@/components/empty-state";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { formatarDataHoraBR } from "@/lib/date";
 
 /**
  * Dashboard — a página que TODO usuário vê primeiro depois do login
@@ -112,7 +113,7 @@ export default async function DashboardPage() {
           <ul className="space-y-1 text-sm">
             {atividadeRecente.map((log) => (
               <li key={log.id} className="text-muted-foreground">
-                {log.user.nome} — {log.acao} — {log.entidade} — {log.criadoEm.toLocaleString("pt-BR")}
+                {log.user.nome} — {log.acao} — {log.entidade} — {formatarDataHoraBR(log.criadoEm)}
               </li>
             ))}
           </ul>
