@@ -65,7 +65,7 @@ export async function notificarNovoLead(leadId: string): Promise<void> {
 
   const payload: NovoLeadPayload = {
     leadId: lead.id,
-    contatoNome: lead.contact?.nome ?? "Sem contato",
+    contatoNome: lead.contact?.nome ?? "Sem contato identificado",
   };
 
   await prisma.notification.create({

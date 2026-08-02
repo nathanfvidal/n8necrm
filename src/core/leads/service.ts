@@ -20,6 +20,16 @@ import type { Lead } from "@prisma/client";
  * vaza detalhe de infraestrutura, e nenhum Contact/Lead chega a ser
  * gravado — o `await` abaixo nunca chega ao `prisma.lead.create` nesse caso.
  * `actions.ts` decide o que fazer com ela na borda pública.
+ *
+ * `responsavelId` chega, em produção, de `criarLeadManual` (`actions.ts`) —
+ * ou o autor logado, ou (quando quem chama tem permissão) um id escolhido no
+ * formulário público, ou seja, um cliente HTTP não confiável, igual
+ * `novaStageId` em `moverEtapa` abaixo e `leadId` em `criarTask`
+ * (`tasks/service.ts`). `Lead.responsavelId` é uma FK opcional para `User`,
+ * então um id que não corresponde a nenhum usuário faria o
+ * `prisma.lead.create` abaixo estourar uma violação de constraint (`P2003`)
+ * crua do Postgres em vez de um erro de domínio legível — mesma razão da
+ * checagem explícita em `moverEtapa`.
  */
 export async function criarLead(input: {
   nome: string;
@@ -28,6 +38,13 @@ export async function criarLead(input: {
   responsavelId: string;
   autorId: string;
 }): Promise<Lead> {
+  const responsavel = await prisma.user.findUnique({ where: { id: input.responsavelId } });
+  if (!responsavel) {
+    throw new Error(
+      `Responsável não encontrado: "${input.responsavelId}" não corresponde a nenhum usuário.`
+    );
+  }
+
   const contact = await encontrarOuCriarContact({
     nome: input.nome,
     telefone: input.telefone,
