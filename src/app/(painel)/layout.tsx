@@ -5,6 +5,19 @@ import { usuarioAtual } from "@/core/auth/session";
 import { listarNotificacoesNaoLidas } from "@/core/notifications/dispatch";
 
 /**
+ * Força renderização dinâmica em TODA página sob este layout — segment
+ * config em layout se propaga para as rotas filhas. Sem isso, `next build`
+ * tenta pré-renderizar páginas protegidas como estáticas: a Vercel expôs
+ * isso (ambiente local mascarava o problema por acaso conseguir alcançar o
+ * banco em build-time). Duas consequências reais, não só o build quebrar:
+ * (1) o build faria uma chamada ao banco sem contexto de usuário algum,
+ * e (2) se a chamada tivesse sucesso, a página ficaria "congelada" com o
+ * dado daquele instante do deploy — todo visitante veria a mesma foto
+ * antiga do funil/dashboard/leads, não o dado ao vivo por sessão.
+ */
+export const dynamic = "force-dynamic";
+
+/**
  * Layout do painel autenticado. Toda página sob `(painel)` — hoje só
  * `page.tsx`, mas também qualquer página que as Tasks 14-21 adicionarem
  * (lista de leads, kanban, dashboard, dados de contato) — passa por aqui.
