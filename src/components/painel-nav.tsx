@@ -12,10 +12,14 @@ const linksFixos = [
 
 // Rotas /catalogo e /analytics ainda não existem (Fases 2 e 3) — até lá o
 // link aparece (se o módulo estiver ativo) e a navegação dá 404, o que é o
-// comportamento esperado nesta fase.
+// comportamento esperado nesta fase. /conversas (Fatia 1 do WhatsApp) já
+// existe de verdade — `exigirModulo("whatsapp")` no topo daquela página
+// devolve 404 se o módulo for desligado num fork, mesmo padrão dos outros
+// dois.
 const linksDeModulo = [
   { href: "/catalogo", label: "Catálogo", modulo: "catalog" as const },
   { href: "/analytics", label: "Analytics", modulo: "analytics" as const },
+  { href: "/conversas", label: "Conversas", modulo: "whatsapp" as const },
 ];
 
 /**

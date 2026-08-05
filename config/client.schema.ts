@@ -16,7 +16,7 @@ export const clientConfigSchema = z.object({
     corPrimaria: z.string(),
     fonte: z.string(),
   }),
-  modulos: z.array(z.enum(["catalog", "analytics", "automation", "campaigns", "finance"])),
+  modulos: z.array(z.enum(["catalog", "analytics", "automation", "campaigns", "finance", "whatsapp"])),
   entidade: z.object({
     singular: z.string(),
     plural: z.string(),

@@ -47,6 +47,11 @@ describe("PainelNav", () => {
     expect(screen.queryByRole("link", { name: "Analytics" })).toBeNull();
   });
 
+  it("não mostra o link de Conversas (whatsapp) quando o módulo está desligado", () => {
+    render(<PainelNav />);
+    expect(screen.queryByRole("link", { name: "Conversas" })).toBeNull();
+  });
+
   it("sempre mostra os links fixos, independente dos módulos", () => {
     render(<PainelNav />);
     expect(screen.getByRole("link", { name: "Dashboard" })).toBeTruthy();
