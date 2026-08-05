@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 
 import { NextResponse } from "next/server";
+import { DuplicateMessageError } from "@vercel/queue";
 
 import { checarRateLimit } from "@/core/rate-limit/limiter";
 import { whatsappGateway } from "@/modules/whatsapp/gateway";
@@ -23,18 +24,42 @@ import { publicarTurno } from "@/modules/whatsapp/fila";
  *    Vercel, de qualquer proxy no meio) — mitigação aceita para esta fatia,
  *    revisitável se algum dia importar rotacionar o token periodicamente.
  * 2. **Rate limit por IP**, via `checarRateLimit` — primeiro chamador real
- *    deste limiter (existia desde a Task 11, sem uso). Protege contra
- *    flood mesmo que o token vaze.
+ *    deste limiter (existia desde a Task 11, sem uso). Fix round 1/5,
+ *    achado do revisor (I2): isto protege contra flood/abuso de quem
+ *    descobriu o token, NÃO é (e nunca foi) uma proteção de custo por
+ *    cliente — todo tráfego legítimo vem de UM IP (a instância Evolution),
+ *    e a Evolution manda TODO tipo de evento aqui, não só mensagem (um
+ *    burst de confirmação de leitura/presença podia esgotar um limite
+ *    apertado e derrubar mensagem de cliente de verdade em 429 bem na hora
+ *    de mais tráfego). O limite foi alargado para refletir isso — é uma
+ *    trava contra uma instância Evolution com bug/comprometida, não um
+ *    throttle por cliente. A proteção de CUSTO real (N conversas = N leases
+ *    paralelos = N chamadas à OpenAI, todas dentro do orçamento de UM IP)
+ *    é outra: um teto de respostas de IA por conversa por hora, em
+ *    `turno.ts` — e, fora do código, um teto de gasto mensal configurado no
+ *    painel da OpenAI (isso é responsabilidade humana, não algo que este
+ *    código possa impor).
  * 3. **Verificação do adapter** (`whatsappGateway.verificarOrigem`) — conferência
  *    específica do protocolo Evolution (campo `instance` do corpo).
  *
- * Devolve 200 rápido para qualquer coisa que não seja um erro de
- * autenticação — inclusive payload malformado ou evento que não é mensagem
- * — porque a Evolution reage a não-200 com retry, e um retry-storm sobre um
- * payload que nunca vai processar só piora a situação. Erros DE INGESTÃO
- * (banco fora do ar, etc.) também não derrubam a resposta: um evento que
- * falha na ingestão é logado e pulado, os demais eventos do mesmo payload
- * continuam sendo processados.
+ * ## Resposta
+ *
+ * Devolve 200 para autenticação/formato ok E todo evento processado (ou
+ * genuinamente duplicado — ver `DuplicateMessageError` abaixo) com sucesso.
+ * Devolve 500 quando pelo menos um evento falhou de ponta a ponta (ingestão
+ * OU publicação) — fix round 1/5, achado IMPORTANTE do revisor (I3): antes,
+ * esta rota sempre devolvia 200, então uma falha ao publicar o turno
+ * (rede, fila fora do ar) tornava a mensagem invisível para a Evolution — e
+ * mesmo que a Evolution tentasse reentregar por conta própria, o código
+ * verificava `resultado.duplicada` e PULAVA a publicação nesse caminho,
+ * então o reenvio nunca curava o problema: a mensagem ficava presa para
+ * sempre com `processadoEm: null`. Agora: (a) publica o turno em TODO
+ * evento, inclusive os reconhecidos como duplicados — o `idempotencyKey`
+ * da fila já torna essa republicação um no-op seguro; (b) devolve 500
+ * quando algo falha de verdade, deixando o retry NATIVO da Evolution
+ * (ela reenvia webhook em erro) fazer a recuperação — seguro agora que
+ * tanto `ingerirMensagem` (idExterno) quanto `publicarTurno`
+ * (idempotencyKey) são idempotentes de ponta a ponta.
  */
 export async function POST(request: Request, { params }: { params: Promise<{ token: string }> }) {
   const { token } = await params;
@@ -52,11 +77,14 @@ export async function POST(request: Request, { params }: { params: Promise<{ tok
   }
 
   const ip = obterIp(request);
-  // 60 req/min por IP: generoso o bastante para o tráfego normal de UM
-  // número de WhatsApp (mesmo em pico, várias mensagens por segundo de
-  // clientes diferentes não chega perto disso), apertado o bastante para
-  // conter um flood de quem descobriu o token pelo log.
-  const permitido = await checarRateLimit(`whatsapp:webhook:${ip}`, 60, 60_000);
+  // Fix round 1/5 (I2): 60/min era, na prática, um teto GLOBAL (todo
+  // tráfego legítimo vem de um único IP — a instância Evolution), e a
+  // Evolution manda todo tipo de evento por aqui, não só mensagem — um
+  // burst de confirmação de leitura/presença podia consumir o teto e
+  // derrubar mensagem de cliente de verdade em 429. 600/min continua
+  // barrando um flood real (instância comprometida/com bug), sem se
+  // comportar como throttle por cliente.
+  const permitido = await checarRateLimit(`whatsapp:webhook:${ip}`, 600, 60_000);
   if (!permitido) {
     return NextResponse.json({ ok: false }, { status: 429 });
   }
@@ -76,23 +104,36 @@ export async function POST(request: Request, { params }: { params: Promise<{ tok
 
   const eventos = whatsappGateway.normalizarEventos(corpo);
 
+  let algumEventoFalhou = false;
   for (const evento of eventos) {
     try {
       const resultado = await ingerirMensagem(evento);
-      if (!resultado.duplicada) {
+      try {
         await publicarTurno({ conversationId: resultado.conversationId, seq: resultado.bufferSeq });
+      } catch (erroPublicacao) {
+        if (erroPublicacao instanceof DuplicateMessageError) {
+          // Esperado no caminho de redelivery: o job para este MESMO
+          // bufferSeq já tinha sido publicado antes (pela ingestão
+          // original, ou por uma tentativa anterior desta mesma
+          // redelivery) — a fila já deduplicou por `idempotencyKey`, não é
+          // uma falha.
+          continue;
+        }
+        throw erroPublicacao;
       }
     } catch (erro) {
-      // Uma falha ao ingerir UM evento (banco fora do ar, etc.) não deve
-      // impedir os demais eventos do mesmo payload de serem processados,
-      // nem fazer a rota devolver um status que faria a Evolution
-      // reentregar o payload INTEIRO (reprocessando eventos que já deram
-      // certo). Logamos e seguimos.
-      console.error("Falha ao ingerir mensagem do WhatsApp:", erro);
+      // Uma falha de verdade (banco fora do ar, fila indisponível) não deve
+      // impedir os DEMAIS eventos do mesmo payload de serem tentados — mas
+      // marca a resposta como falha (ver `algumEventoFalhou` abaixo) para a
+      // Evolution reentregar o payload inteiro depois. Reentregar é seguro:
+      // `ingerirMensagem` (idExterno) e `publicarTurno` (idempotencyKey)
+      // são idempotentes de ponta a ponta.
+      console.error("Falha ao ingerir/publicar mensagem do WhatsApp:", erro);
+      algumEventoFalhou = true;
     }
   }
 
-  return NextResponse.json({ ok: true });
+  return NextResponse.json({ ok: !algumEventoFalhou }, { status: algumEventoFalhou ? 500 : 200 });
 }
 
 function tokenValido(recebido: string, esperado: string): boolean {
@@ -107,11 +148,25 @@ function tokenValido(recebido: string, esperado: string): boolean {
 }
 
 function obterIp(request: Request): string {
-  // Vercel injeta x-forwarded-for com o IP real do cliente na frente da
-  // cadeia de proxies — pegamos só o primeiro valor (o mais próximo do
-  // cliente original), nunca confiando cegamente no header inteiro (um
-  // cliente poderia mandar seu próprio x-forwarded-for, mas isso só
-  // afetaria a CHAVE do rate limit, nunca autenticação).
+  // Fix round 1/5, achado MENOR do revisor: `x-forwarded-for` é um header
+  // fornecido pelo CLIENTE (qualquer requisição pode mandar o seu próprio),
+  // então confiar nele para a CHAVE do rate limit deixa quem manda a
+  // requisição escolher sua própria chave — na prática, um jeito trivial de
+  // contornar o limite (mandar um `x-forwarded-for` diferente a cada
+  // requisição). `x-vercel-forwarded-for` é o header que a PRÓPRIA Vercel
+  // define na borda com o IP real do cliente — não pode ser forjado por
+  // quem faz a requisição (a plataforma sobrescreve, não concatena, o que
+  // vier de fora com esse nome). `x-real-ip` como fallback (outros proxies
+  // reversos usam esse nome) e `x-forwarded-for` só como último recurso —
+  // nesse último caso a chave ainda pode ser manipulada, mas isso já era
+  // verdade antes deste fix, e é estritamente melhor que assumir sempre o
+  // header não confiável primeiro.
+  const vercelIp = request.headers.get("x-vercel-forwarded-for");
+  if (vercelIp) return vercelIp.split(",")[0]!.trim();
+
+  const realIp = request.headers.get("x-real-ip");
+  if (realIp) return realIp.trim();
+
   const encaminhado = request.headers.get("x-forwarded-for");
   return encaminhado?.split(",")[0]?.trim() ?? "desconhecido";
 }
