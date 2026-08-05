@@ -135,3 +135,66 @@ export async function moverEtapa(input: {
 
   return depois;
 }
+
+/**
+ * Cria um lead com `canal: "WHATSAPP"`, a partir de um telefone JÁ
+ * NORMALIZADO (formato de `encontrarOuCriarContact`/`normalizarTelefone` —
+ * quem chama é responsável por essa normalização; ver
+ * `src/modules/whatsapp/telefone.ts` para a versão não-lançadora usada pelo
+ * atendente de IA).
+ *
+ * PLUMBING sem chamador ainda nesta fatia (Fatia 1 do atendente de
+ * WhatsApp): a inbox desta fatia é só leitura (`(painel)/conversas`), e
+ * nenhuma tela ainda oferece "criar lead a partir desta conversa". Existe
+ * agora porque a Fatia 2 do plano ("o humano assume") precisa dela — e
+ * porque a regra de negócio real que vai acompanhá-la ("adotar" um lead de
+ * WhatsApp já aberto para aquele telefone em vez de criar um segundo,
+ * senão clique e mensagem contam o mesmo cliente duas vezes) é decisão de
+ * produto que ainda não foi tomada; implementá-la especulativamente aqui,
+ * sem um chamador real pra validar contra o fluxo de verdade da tela, seria
+ * a receita para acertar a interface e errar a regra.
+ *
+ * Deliberadamente NÃO reusa `criarLead` (acima): aquela função é a camada
+ * testável de `criarLeadManual` (`actions.ts`), com um contrato (`canal`
+ * sempre "MANUAL") que várias telas e testes já assumem — bifurcar esse
+ * contrato com um parâmetro `canal` opcional trocaria o comportamento de
+ * uma função em produção por causa de uma função sem uso ainda. Duplicar a
+ * poucas linhas de lógica (busca de responsável, contato, primeira etapa,
+ * auditoria) é o preço aceito por manter as duas independentes.
+ */
+export async function criarLeadDeWhatsapp(input: {
+  nome: string;
+  telefone: string;
+  responsavelId: string;
+  autorId: string;
+}): Promise<Lead> {
+  const responsavel = await prisma.user.findUnique({ where: { id: input.responsavelId } });
+  if (!responsavel) {
+    throw new Error(
+      `Responsável não encontrado: "${input.responsavelId}" não corresponde a nenhum usuário.`
+    );
+  }
+
+  const contact = await encontrarOuCriarContact({ nome: input.nome, telefone: input.telefone });
+
+  const primeiraEtapa = await prisma.pipelineStage.findFirstOrThrow({ orderBy: { ordem: "asc" } });
+
+  const lead = await prisma.lead.create({
+    data: {
+      contactId: contact.id,
+      stageId: primeiraEtapa.id,
+      responsavelId: input.responsavelId,
+      canal: "WHATSAPP",
+    },
+  });
+
+  await registrarAuditoria({
+    userId: input.autorId,
+    acao: "criar_lead",
+    entidade: "Lead",
+    entidadeId: lead.id,
+    depois: lead,
+  });
+
+  return lead;
+}
