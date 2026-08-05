@@ -20,8 +20,16 @@ vi.mock("server-only", () => ({}));
 
 import bcrypt from "bcryptjs";
 import { prisma } from "../../src/lib/prisma";
-import { seed } from "../../prisma/seed";
+import { seed, WHATSAPP_SYSTEM_USER_ID } from "../../prisma/seed";
 import { client } from "../../config/client";
+
+// `auth()` (Auth.js) depende de contexto de requisição HTTP real — mockamos
+// só esse ponto de entrada, mesmo padrão de tests/unit/session.test.ts, para
+// provar que `usuarioAtual()` recusa o usuário sistema do WhatsApp de
+// verdade (consultando `ativo` no Postgres real), não por suposição.
+const authMock = vi.fn();
+vi.mock("@/lib/auth", () => ({ auth: () => authMock() }));
+const { usuarioAtual } = await import("../../src/core/auth/session");
 
 const EMAILS_SEED = ["admin@exemplo.com", "vendedor@exemplo.com"];
 const TELEFONE_PREFIXO_SEED = "1199999000";
@@ -175,6 +183,44 @@ describe("prisma/seed.ts", () => {
           expect(etapasGanhas).toBe(1);
         },
         20_000
+      );
+    }
+  );
+
+  describe(
+    "usuário sistema do WhatsApp (Fatia 1: ator de AuditLog para respostas geradas pela IA)",
+    () => {
+      beforeAll(seed);
+
+      it("semeia o usuário sistema com id estável, ativo: false e papel ADMIN", async () => {
+        const usuario = await prisma.user.findUniqueOrThrow({ where: { id: WHATSAPP_SYSTEM_USER_ID } });
+        expect(usuario.ativo).toBe(false);
+        expect(usuario.papel).toBe("ADMIN");
+        expect(usuario.email).toBe("whatsapp-bot@sistema.invalid");
+      });
+
+      it("é idempotente: rodar o seed de novo não regrava o usuário sistema (mesmo senhaHash)", async () => {
+        const antes = await prisma.user.findUniqueOrThrow({ where: { id: WHATSAPP_SYSTEM_USER_ID } });
+        await seed();
+        const depois = await prisma.user.findUniqueOrThrow({ where: { id: WHATSAPP_SYSTEM_USER_ID } });
+        expect(depois.senhaHash).toBe(antes.senhaHash);
+      });
+
+      it("a senha gravada não é um valor conhecido — não verifica com nenhuma senha usada em outro lugar do seed", async () => {
+        const usuario = await prisma.user.findUniqueOrThrow({ where: { id: WHATSAPP_SYSTEM_USER_ID } });
+        expect(await bcrypt.compare("senha123", usuario.senhaHash)).toBe(false);
+        expect(await bcrypt.compare("", usuario.senhaHash)).toBe(false);
+      });
+
+      it(
+        "usuarioAtual() rejeita o usuário sistema exatamente como rejeita qualquer usuário ativo: false " +
+          "— ele nunca consegue manter uma sessão, mesmo que alguém descubra o e-mail",
+        async () => {
+          const usuario = await prisma.user.findUniqueOrThrow({ where: { id: WHATSAPP_SYSTEM_USER_ID } });
+          authMock.mockResolvedValueOnce({ user: { email: usuario.email } });
+
+          await expect(usuarioAtual()).rejects.toThrow("Não autenticado");
+        }
       );
     }
   );
