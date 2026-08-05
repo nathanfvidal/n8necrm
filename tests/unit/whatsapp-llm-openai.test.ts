@@ -5,8 +5,12 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // à OpenAI/Evolution nos testes"). `createMock` é reatribuído em
 // `beforeEach` de cada teste via `mockImplementationOnce`/`mockResolvedValueOnce`.
 const createMock = vi.fn();
+const construtorMock = vi.fn();
 class OpenAiClienteFalso {
   chat = { completions: { create: createMock } };
+  constructor(opcoes: unknown) {
+    construtorMock(opcoes);
+  }
 }
 vi.mock("openai", () => ({ default: OpenAiClienteFalso }));
 
@@ -19,9 +23,10 @@ function completion(conteudo: string | null, finishReason = "stop") {
 describe("OpenAiProvider.gerarResposta", () => {
   beforeEach(() => {
     createMock.mockReset();
+    construtorMock.mockClear();
   });
 
-  it("chama o modelo gpt-4.1-mini com o systemPrompt e o histórico mapeado para user/assistant", async () => {
+  it("chama o modelo gpt-4.1-mini com o systemPrompt, max_tokens e o histórico mapeado para user/assistant", async () => {
     createMock.mockResolvedValueOnce(completion("Claro, posso ajudar!"));
     const provider = new OpenAiProvider("chave-teste");
 
@@ -38,6 +43,11 @@ describe("OpenAiProvider.gerarResposta", () => {
     expect(createMock).toHaveBeenCalledTimes(1);
     const chamada = createMock.mock.calls[0]?.[0];
     expect(chamada.model).toBe("gpt-4.1-mini");
+    // Fix round 1/5, achado do revisor (I5): resposta do modelo precisa de
+    // um teto — sem isso, nada limita quanto tempo/custo uma única chamada
+    // pode consumir.
+    expect(chamada.max_tokens).toBeGreaterThan(0);
+    expect(chamada.max_tokens).toBeLessThanOrEqual(1000); // generoso pra 2-3 balões, longe do "sem limite"
     expect(chamada.messages).toEqual([
       { role: "system", content: "Você é a Ana, atendente virtual." },
       { role: "user", content: "Oi" },
@@ -46,6 +56,22 @@ describe("OpenAiProvider.gerarResposta", () => {
       { role: "user", content: "Quero saber do Gol 2018" },
     ]);
   });
+
+  it(
+    "fix round 1/5, achado CRÍTICO do revisor (C1): constrói o cliente da OpenAI com timeout e maxRetries " +
+      "explícitos — sem isso, o SDK usa o default de 600_000ms (10min) com até 2 retries, tempo suficiente " +
+      "para o lease da conversa (turno.ts) expirar bem no meio de uma única chamada",
+    () => {
+      new OpenAiProvider("chave-teste");
+
+      expect(construtorMock).toHaveBeenCalledTimes(1);
+      const opcoes = construtorMock.mock.calls[0]?.[0] as { timeout?: number; maxRetries?: number };
+      expect(opcoes.timeout).toBeDefined();
+      expect(opcoes.timeout!).toBeLessThanOrEqual(30_000); // bem abaixo do default de 600_000ms
+      expect(opcoes.maxRetries).toBeDefined();
+      expect(opcoes.maxRetries!).toBeLessThanOrEqual(1); // pior caso: timeout * (1 + maxRetries) precisa caber no lease
+    }
+  );
 
   it("devolve uma única mensagem quando a resposta não tem linha em branco", async () => {
     createMock.mockResolvedValueOnce(completion("Resposta de uma linha só."));

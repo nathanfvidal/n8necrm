@@ -16,16 +16,36 @@ const MODELO = "gpt-4.1-mini";
  * construtor (`llm/index.ts` faz essa validação, mesmo raciocínio de
  * `gateway/evolution.ts` vs. `gateway/index.ts`).
  */
+// Fix round 1/5, achado CRÍTICO do revisor: sem timeout explícito, o SDK da
+// OpenAI usa o default de 600_000ms (10 minutos) com até 2 retries — um
+// único handler de turno podia ficar rodando por MINUTOS enquanto o lease
+// (Conversation.processandoAte) já tinha expirado há muito tempo, abrindo
+// espaço para um segundo processador reivindicar a mesma conversa e gerar
+// uma segunda resposta pro mesmo cliente. 20s de timeout + no máximo 1 retry
+// interno do SDK limita o pior caso a ~40s — `LEASE_DURACAO_MS` em turno.ts
+// foi recalibrado para cobrir esse pior caso com folga (ver comentário lá).
+const TIMEOUT_MS = 20_000;
+const MAX_RETRIES = 1;
+
+// Fix round 1/5, achado do revisor (I5): sem `max_tokens`, nada limita o
+// tamanho da resposta que o modelo pode gerar — nem o custo por chamada nem
+// (pior) o tempo de geração, que é o que alimenta diretamente o risco do
+// lease descrito acima. 400 tokens é folgado para 2-3 balões curtos de
+// WhatsApp (a regra de `config/bot.ts` pede respostas curtas); um valor
+// baixo o bastante para nunca aproximar o teto do timeout de 20s.
+const MAX_TOKENS_RESPOSTA = 400;
+
 export class OpenAiProvider implements LlmProvider {
   private readonly client: OpenAI;
 
   constructor(apiKey: string) {
-    this.client = new OpenAI({ apiKey });
+    this.client = new OpenAI({ apiKey, timeout: TIMEOUT_MS, maxRetries: MAX_RETRIES });
   }
 
   async gerarResposta(contexto: ContextoConversa): Promise<{ mensagens: string[] }> {
     const completion = await this.client.chat.completions.create({
       model: MODELO,
+      max_tokens: MAX_TOKENS_RESPOSTA,
       messages: [
         { role: "system", content: contexto.systemPrompt },
         ...contexto.historico.map((mensagem) => ({

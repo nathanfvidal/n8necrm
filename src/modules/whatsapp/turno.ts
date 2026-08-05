@@ -10,13 +10,21 @@ import { montarPromptSistema } from "./prompt";
 
 export type { TurnoJob } from "./fila";
 
-// Tempo que o lease (Conversation.processandoAte) fica reservado por este
-// processo enquanto processa um turno. Precisa cobrir com folga uma chamada
-// de LLM (que pode levar de 5 a 30s, ver plano da Fatia 1) + o envio da(s)
-// resposta(s) via gateway — 25s dá essa folga sem prender a conversa por
-// tempo desproporcional caso o processo morra no meio (o pior caso é a
-// conversa ficar "travada" até 25s, não mais que isso).
-const LEASE_DURACAO_MS = 25_000;
+// Fix round 1/5, achado CRÍTICO do revisor (C1): o valor original (25_000)
+// já era menor que o próprio pior caso documentado aqui ("pode levar de 5 a
+// 30s") — e pior, `llm/openai.ts` não tinha timeout nenhum configurado, então
+// o SDK da OpenAI podia levar até 10 minutos (default) por chamada. Com
+// `TIMEOUT_MS`/`MAX_RETRIES` agora limitando `OpenAiProvider` a ~40s de pior
+// caso (20s * até 2 tentativas), 75s aqui cobre esse pior caso MAIS o tempo
+// de envio via gateway (potencialmente várias mensagens) com folga real — e
+// fica ACIMA de `maxDuration` (60s, api/queues/whatsapp-turn/route.ts): se a
+// função for encerrada pela plataforma antes de rodar o `finally` que libera
+// o lease, ele expira sozinho pouco depois em vez de ficar preso para
+// sempre. O objetivo não é zero possibilidade de expiração (impossível sem
+// lock distribuído de verdade), é tornar a expiração ORGÂNICA (sob operação
+// normal) extremamente rara, para que o fencing token abaixo só precise
+// lidar com o caso raro, não o comum.
+const LEASE_DURACAO_MS = 75_000;
 
 // Quantas mensagens de TEXTO anteriores (nos dois sentidos) entram no
 // histórico passado ao modelo. Não é "todo o histórico da conversa desde o
@@ -27,6 +35,44 @@ const LEASE_DURACAO_MS = 25_000;
 // prazo (isso é problema de outra fatia, se algum dia importar).
 const HISTORICO_MAX_MENSAGENS = 20;
 
+// Fix round 1/5, achado do revisor (I5): `HISTORICO_MAX_MENSAGENS` limita a
+// CONTAGEM de mensagens no contexto, não o TAMANHO de cada uma — uma única
+// mensagem colada com dezenas de milhares de caracteres (nada impede um
+// cliente de colar um texto enorme) entraria inteira no prompt, 20 vezes em
+// potencial, inflando custo e tempo de resposta (o mesmo risco que motivou
+// o timeout/max_tokens em llm/openai.ts, agora do lado da ENTRADA). Cada
+// mensagem individual — tanto do histórico quanto do lote atual — é
+// truncada antes de entrar no contexto.
+const MAX_CARACTERES_POR_MENSAGEM_CONTEXTO = 2000;
+
+// Fix round 1/5, achado CRÍTICO do revisor (C2): reagendar com
+// `delaySeconds: 5` usando a MESMA `idempotencyKey` do job original
+// (`${conversationId}:${seq}`) colidia com a janela de dedupe do Vercel
+// Queues (até 24h) — `publicarTurno` lançava `DuplicateMessageError` em TODA
+// ocorrência de lease ocupado, o handler 500ava, e quem de fato reentregava
+// a mensagem era o retry padrão da fila (`retryAfterSeconds: 30` em
+// vercel.json), não o reagendamento de 5s pretendido. `tentativaReagendamento`
+// dá a cada republish uma `idempotencyKey` própria (ver fila.ts) — sem essa
+// contagem, o job reagendado colidiria consigo mesmo na segunda vez também.
+// Um teto evita reagendar para sempre se algo ficar genuinamente preso (ex.:
+// uma conversa cujo lease nunca é liberado por um bug futuro) — 30 tentativas
+// de 5s é ~2,5min de espera antes de desistir e logar, generoso o bastante
+// para qualquer lease legítimo (no máximo `LEASE_DURACAO_MS` = 60s) liberar
+// no meio do caminho.
+const MAX_TENTATIVAS_REAGENDAMENTO = 30;
+
+// Fix round 1/5, achado do revisor (I2): teto de respostas de IA por
+// CONVERSA por hora — a proteção de custo real (rate limit por IP no
+// webhook não protege isto, ver comentário em `processarMensagensPendentes`).
+// 20 é generoso para qualquer troca legítima de uma revenda (mesmo uma
+// negociação longa não chega a 20 idas e vindas numa hora), apertado o
+// bastante para conter um cliente em loop (ou um número comprometido
+// mandando mensagem em massa) de esgotar o orçamento de OpenAI sozinho. Um
+// teto de GASTO mensal configurado no painel da OpenAI continua sendo o
+// único backstop real contra um vazamento fora deste padrão — isso é
+// configuração humana, não algo que este código possa impor.
+const TETO_RESPOSTAS_IA_POR_HORA = 20;
+
 const FALLBACK_MIDIA_NAO_SUPORTADA =
   "Por enquanto eu ainda não consigo processar áudio, imagem, figurinha ou documento — pode escrever em texto o que você precisa? Assim que possível, a equipe também vai poder ver essa mensagem.";
 
@@ -36,19 +82,32 @@ const FALLBACK_MIDIA_NAO_SUPORTADA =
  * junta as mensagens ENTRADA ainda não respondidas, gera e envia a
  * resposta, marca tudo como processado e libera o lease.
  *
- * ## Lease (exclusão mútua por conversa)
+ * ## Lease (exclusão mútua por conversa) — com fencing token (fix round 1/5)
  *
  * `claimLease` faz UM UPDATE condicional atômico — mesmo idioma de
- * `checarRateLimit` (core/rate-limit/limiter.ts): o Postgres serializa
- * automaticamente duas chamadas concorrentes na mesma linha (a segunda
- * UPDATE só roda depois que a primeira comita, e nesse ponto sua própria
- * condição WHERE já não bate mais, porque `processandoAte` foi setado pela
- * primeira) — sem precisar de lock consultivo do Postgres (descartado no
- * plano: prenderia a conexão durante os 5-30s da chamada ao modelo, e
- * quebra sob pgBouncer). Quando a segunda chamada não consegue o lease
- * (0 linhas afetadas), ela reagenda o MESMO job com `delaySeconds: 5` em vez
- * de descartar a mensagem — outro processo pode estar processando um turno
- * anterior da mesma conversa, e este job ainda precisa rodar depois.
+ * `checarRateLimit` (core/rate-limit/limiter.ts) — e devolve o valor exato
+ * de `processandoAte` que ele mesmo escreveu: esse valor É o "fencing
+ * token" desta reivindicação. `liberarLease` só apaga o lease quando
+ * `processandoAte` no banco AINDA é esse mesmo valor
+ * (`WHERE ... AND "processandoAte" = $token`) — sem isso (achado CRÍTICO do
+ * revisor, C1), um processador A que demora além do próprio lease (relógio
+ * derrapou, GC pausou, rede lenta — não hipotético: o SDK da OpenAI sem
+ * timeout já causava isso) e só termina DEPOIS que um processador B
+ * reivindicou a MESMA conversa (porque o lease de A expirou nesse meio
+ * tempo) apagaria, ao terminar, o lease que B está ativamente usando —
+ * abrindo a porta para um TERCEIRO processador C entrar enquanto B ainda
+ * trabalha, e assim por diante, sem limite superior de quantos processadores
+ * concorrentes acabam empilhados na mesma conversa. Com o fencing token, o
+ * `UPDATE` de A vira um no-op assim que A está "desatualizado" — o lease
+ * nunca tem mais de UM dono ativo por vez, mesmo quando a expiração
+ * acontece de verdade.
+ *
+ * Quando a reivindicação falha (0 linhas afetadas — lease genuinamente
+ * ocupado), reagenda o MESMO job com `delaySeconds: 5` — mas com uma
+ * `idempotencyKey` NOVA a cada tentativa (ver `MAX_TENTATIVAS_REAGENDAMENTO`
+ * acima e `fila.ts`), não descarta a mensagem: outro processo pode estar
+ * processando um turno anterior da mesma conversa, e este job ainda precisa
+ * rodar depois.
  *
  * ## Buffer (fragmentos viram uma resposta só)
  *
@@ -66,7 +125,16 @@ const FALLBACK_MIDIA_NAO_SUPORTADA =
 export async function processarTurno(job: TurnoJob): Promise<void> {
   const lease = await claimLease(job.conversationId);
   if (!lease) {
-    await publicarTurno(job, { delaySeconds: 5 });
+    const tentativa = (job.tentativaReagendamento ?? 0) + 1;
+    if (tentativa > MAX_TENTATIVAS_REAGENDAMENTO) {
+      console.error(
+        `Turno da conversa ${job.conversationId} (seq ${job.seq}) desistiu depois de ` +
+          `${MAX_TENTATIVAS_REAGENDAMENTO} tentativas de lease ocupado — algo está retendo o lease por ` +
+          `tempo desproporcional.`
+      );
+      return;
+    }
+    await publicarTurno({ ...job, tentativaReagendamento: tentativa }, { delaySeconds: 5 });
     return;
   }
 
@@ -77,19 +145,42 @@ export async function processarTurno(job: TurnoJob): Promise<void> {
       return;
     }
 
-    await processarMensagensPendentes(job.conversationId);
+    await processarMensagensPendentes(job.conversationId, lease.processandoAte);
   } finally {
-    await liberarLease(job.conversationId);
+    await liberarLease(job.conversationId, lease.processandoAte);
   }
 }
 
-async function processarMensagensPendentes(conversationId: string): Promise<void> {
+async function processarMensagensPendentes(conversationId: string, meuToken: Date): Promise<void> {
   const pendentes = await prisma.whatsappMessage.findMany({
     where: { conversationId, direcao: "ENTRADA", processadoEm: null },
     orderBy: { criadoEm: "asc" },
   });
 
   if (pendentes.length === 0) return;
+
+  // Fix round 1/5, achado do revisor (I2): o rate limit do webhook é por
+  // IP — e todo tráfego legítimo vem de UM IP (a instância Evolution), então
+  // aquele limite nunca protege CUSTO por cliente: N números de telefone
+  // diferentes são N conversas independentes, cada uma com seu próprio
+  // lease, todas bem dentro do orçamento de um único IP. Este é o teto que
+  // protege a dimensão que importa — conversas por vez, não requisições por
+  // IP. Ultrapassado o teto, as pendentes são marcadas como processadas
+  // (persistidas, visíveis no inbox humano em `/conversas`) mas SEM resposta
+  // automática — "persiste mas para de responder", não "descarta calado":
+  // um humano que abrir a conversa no painel vê as mensagens do cliente
+  // esperando, mesmo sem a IA ter respondido.
+  if (await respostasIaNaUltimaHoraAtingiuTeto(conversationId)) {
+    console.warn(
+      `Conversa ${conversationId} atingiu o teto de ${TETO_RESPOSTAS_IA_POR_HORA} respostas de IA na ` +
+        `última hora — pendentes marcadas como processadas sem resposta automática.`
+    );
+    await prisma.whatsappMessage.updateMany({
+      where: { id: { in: pendentes.map((mensagem) => mensagem.id) } },
+      data: { processadoEm: new Date() },
+    });
+    return;
+  }
 
   const comTexto = pendentes.filter(
     (mensagem) => mensagem.tipo === "TEXTO" && mensagem.texto && mensagem.texto.trim().length > 0
@@ -106,8 +197,12 @@ async function processarMensagensPendentes(conversationId: string): Promise<void
     const historicoAnterior = await buscarHistorico(conversationId, pendentes[0]!.criadoEm);
     // Fragmentos de texto pendentes são unidos numa única mensagem "CLIENTE"
     // no contexto — é literalmente o comportamento que o plano da Fatia 1
-    // pede: "as mensagens fragmentadas juntadas numa resposta só".
-    const textoUnido = comTexto.map((mensagem) => mensagem.texto).join("\n");
+    // pede: "as mensagens fragmentadas juntadas numa resposta só". Cada
+    // fragmento é truncado INDIVIDUALMENTE antes de entrar no join (fix
+    // round 1/5, I5) — truncar a string já unida deixaria fragmentos
+    // depois do primeiro muito longo cortarem informação no meio sem
+    // critério algum.
+    const textoUnido = comTexto.map((mensagem) => truncarParaContexto(mensagem.texto!)).join("\n");
 
     const resultado = await llmProvider.gerarResposta({
       systemPrompt: montarPromptSistema(),
@@ -118,8 +213,43 @@ async function processarMensagensPendentes(conversationId: string): Promise<void
       semTexto.length > 0 ? [...resultado.mensagens, FALLBACK_MIDIA_NAO_SUPORTADA] : resultado.mensagens;
   }
 
+  // Fix round 1/5 (extensão do fencing token de C1, além da liberação):
+  // depois da chamada ao modelo — de longe o trecho mais demorado deste
+  // turno — confirmamos que AINDA somos o titular do lease antes de fazer
+  // qualquer coisa visível ao cliente (enviar mensagem). No cenário exato
+  // que o revisor reproduziu (lease expira DE VERDADE enquanto uma chamada
+  // lenta ao modelo está em voo, um segundo processador reivindica e conclui
+  // o turno inteiro antes do primeiro terminar), isto é o que impede o
+  // primeiro processador — que só descobre isso DEPOIS de já ter pago o
+  // custo da chamada ao modelo, não há como cancelar uma requisição HTTP já
+  // em voo — de mandar uma SEGUNDA resposta ao cliente. `liberarLease` (no
+  // `finally` de `processarTurno`) continua sendo a segunda camada: mesmo
+  // que este check e o envio corram entre si de alguma forma, o release só
+  // afeta a linha se o token ainda bater.
+  const aindaSouTitular = await confirmarTitularidadeLease(conversationId, meuToken);
+  if (!aindaSouTitular) {
+    console.warn(
+      `Turno da conversa ${conversationId} abortado antes de enviar: outro processador assumiu o ` +
+        `lease enquanto este aguardava o modelo. Resposta gerada descartada para não duplicar envio.`
+    );
+    return;
+  }
+
   const conversation = await prisma.conversation.findUniqueOrThrow({ where: { id: conversationId } });
 
+  // Fix round 1/5, achado do revisor (I4): antes, `pendentes` só era marcado
+  // `processadoEm` depois que TODAS as `respostas` terminavam de enviar. Se
+  // o envio da 2ª (ou 3ª) mensagem falhasse, o handler lançava com NENHUMA
+  // pendente marcada — a fila reentregava o job (retry padrão, 30s), o
+  // modelo era chamado de novo com a MESMA entrada, e o cliente recebia a
+  // 1ª mensagem (que já tinha ido) DE NOVO, mais o resto. Marcar as
+  // pendentes assim que a PRIMEIRA resposta é confirmada enviada — não
+  // depois de todas — faz o pior caso de uma falha parcial ser "o cliente
+  // não recebeu a 2ª/3ª mensagem deste turno" em vez de "o cliente recebeu a
+  // 1ª mensagem duplicada". Perder uma mensagem é recuperável (o cliente
+  // reage à falta de resposta, manda outra mensagem, um novo turno roda);
+  // duplicar não é.
+  let pendentesMarcadas = false;
   for (const texto of respostas) {
     const envio = await whatsappGateway.enviarTexto(conversation.waId, texto);
     await prisma.whatsappMessage.create({
@@ -133,34 +263,82 @@ async function processarMensagensPendentes(conversationId: string): Promise<void
         processadoEm: new Date(),
       },
     });
-  }
 
-  await prisma.whatsappMessage.updateMany({
-    where: { id: { in: pendentes.map((mensagem) => mensagem.id) } },
-    data: { processadoEm: new Date() },
-  });
+    if (!pendentesMarcadas) {
+      await prisma.whatsappMessage.updateMany({
+        where: { id: { in: pendentes.map((mensagem) => mensagem.id) } },
+        data: { processadoEm: new Date() },
+      });
+      pendentesMarcadas = true;
+    }
+  }
 }
 
-async function claimLease(conversationId: string): Promise<{ bufferSeq: number } | null> {
+async function respostasIaNaUltimaHoraAtingiuTeto(conversationId: string): Promise<boolean> {
+  const umaHoraAtras = new Date(Date.now() - 60 * 60 * 1000);
+  const contagem = await prisma.whatsappMessage.count({
+    where: { conversationId, direcao: "SAIDA", autor: "IA", criadoEm: { gte: umaHoraAtras } },
+  });
+  return contagem >= TETO_RESPOSTAS_IA_POR_HORA;
+}
+
+function truncarParaContexto(texto: string): string {
+  if (texto.length <= MAX_CARACTERES_POR_MENSAGEM_CONTEXTO) return texto;
+  return `${texto.slice(0, MAX_CARACTERES_POR_MENSAGEM_CONTEXTO)} […mensagem truncada]`;
+}
+
+/**
+ * Confere se `token` ainda é o valor de `processandoAte` gravado agora —
+ * usado depois da chamada (lenta) ao modelo, antes de enviar qualquer
+ * mensagem (ver comentário em `processarMensagensPendentes`). Exportada
+ * (junto com `claimLease`/`liberarLease` abaixo) para
+ * `tests/unit/whatsapp-turno.test.ts` poder provar o mecanismo do fencing
+ * token diretamente, sem depender de temporização real entre chamadas
+ * concorrentes a `processarTurno`.
+ */
+export async function confirmarTitularidadeLease(conversationId: string, token: Date): Promise<boolean> {
+  const conversation = await prisma.conversation.findUnique({
+    where: { id: conversationId },
+    select: { processandoAte: true },
+  });
+  return conversation?.processandoAte?.getTime() === token.getTime();
+}
+
+/**
+ * Reivindica o lease com um UPDATE condicional atômico e devolve o
+ * `processandoAte` (fencing token) que ele mesmo escreveu — `null` quando a
+ * reivindicação falha (lease genuinamente ocupado por outro processador).
+ */
+export async function claimLease(
+  conversationId: string
+): Promise<{ bufferSeq: number; processandoAte: Date } | null> {
   const agora = new Date();
   const ateLease = new Date(agora.getTime() + LEASE_DURACAO_MS);
 
-  const linhas = await prisma.$queryRaw<Array<{ bufferSeq: number }>>`
+  const linhas = await prisma.$queryRaw<Array<{ bufferSeq: number; processandoAte: Date }>>`
     UPDATE "Conversation"
     SET "processandoAte" = ${ateLease}::timestamp(3)
     WHERE "id" = ${conversationId}
       AND ("processandoAte" IS NULL OR "processandoAte" < ${agora}::timestamp(3))
-    RETURNING "bufferSeq"
+    RETURNING "bufferSeq", "processandoAte"
   `;
 
   return linhas[0] ?? null;
 }
 
-async function liberarLease(conversationId: string): Promise<void> {
-  await prisma.conversation.update({
-    where: { id: conversationId },
-    data: { processandoAte: null },
-  });
+/**
+ * Libera o lease SOMENTE se `processandoAte` no banco ainda for exatamente o
+ * `token` que esta chamada reivindicou (fencing token — ver o comentário
+ * grande em `processarTurno`). Quando o lease já foi expirado e reivindicado
+ * por outro processador, este UPDATE afeta 0 linhas — de propósito: liberar
+ * o lease de outro processador seria exatamente o bug que este fix corrige.
+ */
+export async function liberarLease(conversationId: string, token: Date): Promise<void> {
+  await prisma.$executeRaw`
+    UPDATE "Conversation"
+    SET "processandoAte" = NULL
+    WHERE "id" = ${conversationId} AND "processandoAte" = ${token}::timestamp(3)
+  `;
 }
 
 async function buscarHistorico(
@@ -188,5 +366,5 @@ async function buscarHistorico(
 
   return mensagens
     .reverse()
-    .map((mensagem) => ({ autor: mensagem.autor, texto: mensagem.texto ?? "" }));
+    .map((mensagem) => ({ autor: mensagem.autor, texto: truncarParaContexto(mensagem.texto ?? "") }));
 }
