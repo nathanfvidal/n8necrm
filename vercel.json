@@ -1,0 +1,13 @@
+{
+  "functions": {
+    "src/app/api/queues/whatsapp-turn/route.ts": {
+      "experimentalTriggers": [
+        {
+          "type": "queue/v2beta",
+          "topic": "whatsapp-turn",
+          "retryAfterSeconds": 30
+        }
+      ]
+    }
+  }
+}
