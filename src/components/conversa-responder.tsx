@@ -71,7 +71,11 @@ export function ConversaResponder({ conversationId }: { conversationId: string }
           {enviando ? "Enviando…" : "Enviar"}
         </Button>
       </div>
-      {erro && <p className="text-sm text-destructive">{erro}</p>}
+      {erro && (
+        <p role="alert" className="text-sm text-destructive">
+          {erro}
+        </p>
+      )}
     </div>
   );
 }

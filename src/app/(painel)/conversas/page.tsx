@@ -76,9 +76,13 @@ export default async function ConversasPage() {
                   <TableCell className="max-w-xs truncate text-muted-foreground">
                     {ultimaMensagem ? (
                       <>
+                        {/* "Equipe", não "Você" — ver o mesmo comentário em
+                            `conversas/[id]/page.tsx`: `WhatsappMessage` não
+                            guarda qual humano escreveu, e mais de um atendente
+                            usa a mesma inbox. */}
                         {ultimaMensagem.direcao === "SAIDA" && (
                           <Badge variant="secondary" className="mr-1">
-                            {ultimaMensagem.autor === "HUMANO" ? "Você" : "IA"}
+                            {ultimaMensagem.autor === "HUMANO" ? "Equipe" : "IA"}
                           </Badge>
                         )}
                         {resumoConteudo(ultimaMensagem.tipo, ultimaMensagem.texto)}

@@ -5,6 +5,7 @@ import { exigirModulo } from "@/lib/module-gate";
 import { usuarioAtual } from "@/core/auth/session";
 import { hasPermission } from "@/core/auth/permissions";
 import { buscarConversaComMensagens } from "@/modules/whatsapp/queries";
+import { lerConfigBot } from "@/modules/whatsapp/agente";
 import { EmptyState } from "@/components/empty-state";
 import { Badge } from "@/components/ui/badge";
 import { ConversaEstadoIa } from "@/components/conversa-estado-ia";
@@ -41,6 +42,10 @@ export default async function ConversaDetalhePage({
     notFound();
   }
 
+  // Revisão final, achado I1: `ConversaEstadoIa` precisa do interruptor
+  // GLOBAL, não só do estado desta conversa — ver o comentário no componente.
+  const configBot = await lerConfigBot();
+
   return (
     <div className="space-y-6 p-6">
       <div className="flex items-start justify-between">
@@ -65,6 +70,7 @@ export default async function ConversaDetalhePage({
         iaAtiva={conversa.iaAtiva}
         pausadaEm={conversa.iaPausadaEm}
         pausadaPor={conversa.iaPausadaPor?.nome ?? null}
+        botAtivo={configBot.ativo}
       />
 
       {conversa.mensagens.length === 0 ? (
@@ -84,8 +90,14 @@ export default async function ConversaDetalhePage({
                     deEntrada ? "bg-muted" : "bg-primary/10"
                   )}
                 >
+                  {/* "Equipe", não "Você": `WhatsappMessage` não guarda QUAL humano
+                      escreveu, e mais de um atendente usa a mesma inbox — "Você"
+                      afirmaria um fato verificável e falso sempre que quem está
+                      olhando a tela não foi quem mandou a mensagem (revisão final
+                      da fatia, achado sem número). Registrar o autor de verdade é
+                      decisão da próxima fatia (coluna nova + migração). */}
                   {!deEntrada && (
-                    <Badge variant="secondary">{mensagem.autor === "HUMANO" ? "Você" : "IA"}</Badge>
+                    <Badge variant="secondary">{mensagem.autor === "HUMANO" ? "Equipe" : "IA"}</Badge>
                   )}
                   {/* Mesma justificativa de whitespace-pre-wrap/break-words de
                       leads/[id]/page.tsx: preserva quebras de linha reais e
