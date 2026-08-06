@@ -325,11 +325,18 @@ async function processarMensagensPendentes(conversationId: string, meuToken: Dat
 
 /**
  * Marca um lote de mensagens ENTRADA como processadas SEM que uma resposta
- * automática tenha sido enviada — usado nos três pontos onde as pendentes
- * precisam ficar visíveis no inbox humano mesmo sem resposta da IA: a guarda
- * de IA pausada/interruptor desligado, o teto de respostas por hora, e o
- * envio normal (chamado aqui de novo, com o mesmo formato, para não
- * duplicar a query em três lugares).
+ * automática tenha sido enviada — usado nos QUATRO pontos onde as pendentes
+ * precisam ficar visíveis no inbox humano mesmo sem resposta da IA (revisão
+ * final da fatia: o docstring dizia "três pontos" e listava três, mas já
+ * havia um quarto call site desde que `MotivoAborto` existe):
+ *
+ * 1. A guarda de IA pausada/interruptor desligado, ANTES de chamar o modelo.
+ * 2. O teto de respostas por hora.
+ * 3. O aborto por `motivoAborto === "ia-pausada"` DEPOIS da chamada ao
+ *    modelo (um humano assumiu a conversa enquanto o modelo pensava) — o
+ *    caso que motivou o tipo `MotivoAborto` existir, ver o comentário dele.
+ * 4. O envio normal (chamado aqui de novo, com o mesmo formato, para não
+ *    duplicar a query em quatro lugares).
  */
 async function marcarPendentesComoProcessadas(pendentes: Array<{ id: string }>): Promise<void> {
   await prisma.whatsappMessage.updateMany({

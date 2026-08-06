@@ -1,18 +1,32 @@
 /**
- * Persona e regras do atendente de WhatsApp por IA — Fatia 1.
+ * Persona e regras de FÁBRICA do atendente de WhatsApp por IA.
  *
  * Escrito para `gpt-4.1-mini`, não para um modelo de raciocínio mais forte:
  * regras diretivas e concretas, sem depender de inferência implícita
  * ("nunca prometa X" em vez de "seja honesto sobre o estoque"). Curto de
- * propósito — a primeira versão do prompt não precisa cobrir cada objeção
- * de venda possível, só evitar os dois erros que mais custam caro numa
- * revenda: prometer algo que a equipe não pode cumprir, e soar como um
- * robô. Fatia 3 do plano ("personalidade e catálogo") versiona isto de
- * verdade, com catálogo e ferramentas — a FAQ já chega nesta fatia.
+ * propósito — cobre só os dois erros que mais custam caro numa revenda:
+ * prometer algo que a equipe não pode cumprir, e soar como um robô.
  *
- * `src/modules/whatsapp/prompt.ts` monta o texto final a partir deste
- * objeto, sem NENHUM dado dinâmico (sem timestamp, sem nome do cliente) —
- * ver o comentário lá sobre por que isso precisa ser determinístico.
+ * Revisão final: quem manda em produção é o BANCO, não este arquivo — a
+ * linha única de `BotConfig`, editável em `/conversas/agente`
+ * (`src/components/agente-form.tsx`). Este objeto só é lido em dois
+ * momentos, os únicos em que o conteúdo de um FORK entra no jogo:
+ *
+ * 1. O seed (`prisma/seed.ts#semearBotConfig`), na primeira vez que a linha
+ *    de `BotConfig` é criada num banco novo.
+ * 2. "Voltar ao padrão do fork" (`restaurarConfigPadrao` em
+ *    `src/modules/whatsapp/agente.ts`), quando um ADMIN quer descartar
+ *    edições feitas pela tela e recomeçar do que o dono do fork escreveu
+ *    aqui.
+ *
+ * Editar este arquivo é como o dono de um fork define a persona padrão da
+ * própria revenda — mas a edição só chega às respostas de verdade depois de
+ * rodar o seed num banco novo, ou de alguém clicar em "Voltar ao padrão do
+ * fork"; nenhum turno de conversa lê este arquivo diretamente.
+ * `src/modules/whatsapp/prompt.ts` monta o texto final a partir da LINHA DO
+ * BANCO (não deste objeto), sem NENHUM dado dinâmico (sem timestamp, sem
+ * nome do cliente) — ver o comentário lá sobre por que isso precisa ser
+ * determinístico.
  */
 /** Id fixo da linha única de `BotConfig`. Ver o modelo em prisma/schema.prisma. */
 export const BOT_CONFIG_ID = "bot-config";
