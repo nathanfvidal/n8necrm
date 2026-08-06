@@ -52,16 +52,47 @@ import { pausarIa, religarIa, responderComoHumano, RespostaHumanaInvalidaError }
 export type ResultadoAcao = { ok: true } | { ok: false; erro: string };
 
 /**
- * Converte um erro capturado em `ResultadoAcao`. Erros de validação
- * (`RespostaHumanaInvalidaError`) repassam a própria mensagem — ela descreve
- * uma entrada inválida do usuário, é segura de mostrar. Qualquer outro erro
- * (gateway, banco, rede) vira `mensagemGenerica`: o original é só logado no
- * servidor, nunca devolvido ao cliente, porque pode carregar detalhe interno
- * (URL do gateway, mensagem de erro do driver do banco etc.).
+ * Mensagem devolvida quando `usuarioAtual()` rejeita — sessão expirada OU
+ * usuário desativado no meio do expediente (ver `src/core/auth/session.ts`,
+ * que lança a MESMA `Error("Não autenticado")` para os dois casos, de
+ * propósito). Por isso esta mensagem nunca tenta distinguir "sua sessão
+ * expirou" de "sua conta foi desativada": o helper de origem já decidiu que
+ * os dois merecem a mesma orientação, e inventar uma distinção aqui
+ * reintroduziria exatamente o que `usuarioAtual()` evita.
+ */
+const MENSAGEM_SESSAO_INVALIDA = "Sua sessão expirou. Recarregue a página e entre de novo.";
+
+/**
+ * Converte um erro capturado em `ResultadoAcao`. Três casos, nesta ordem:
+ *
+ * 1. `RespostaHumanaInvalidaError` — validação de entrada do próprio
+ *    usuário (mensagem vazia, acima do limite). Repassa a própria mensagem:
+ *    é segura de mostrar.
+ * 2. `Error("Não autenticado")` — o que `usuarioAtual()` lança quando a
+ *    sessão expirou ou o usuário foi desativado (fix round 1, achado
+ *    Importante: antes desta correção, `usuarioAtual()` rodava FORA do
+ *    `try` nas três actions, então essa rejeição nunca passava por aqui —
+ *    a promise rejeitava sem produzir `ResultadoAcao` nenhum, o erro cru
+ *    atravessava a Server Action, e a tela não mostrava nada: nem sucesso
+ *    nem erro. Um atendente com aba aberta há horas, ou desativado no meio
+ *    do expediente, clicava em "Enviar" e não acontecia nada visível).
+ *    Devolve `MENSAGEM_SESSAO_INVALIDA` ao cliente e ainda assim loga no
+ *    servidor — não é um bug de código, mas "sessão vencendo" com o dobro
+ *    de frequência pode ser sintoma de token curto demais, e "usuário
+ *    desativado tentando agir" é o tipo de evento que vale rastro, mesmo
+ *    sendo o sistema se comportando como projetado.
+ * 3. Qualquer outro erro (gateway, banco, rede) vira `mensagemGenerica`: o
+ *    original é só logado no servidor, nunca devolvido ao cliente, porque
+ *    pode carregar detalhe interno (URL do gateway, mensagem de erro do
+ *    driver do banco etc.).
  */
 function paraResultadoErro(erro: unknown, mensagemGenerica: string): { ok: false; erro: string } {
   if (erro instanceof RespostaHumanaInvalidaError) {
     return { ok: false, erro: erro.message };
+  }
+  if (erro instanceof Error && erro.message === "Não autenticado") {
+    console.error("Ação de WhatsApp negada — sessão expirada ou usuário desativado.", erro);
+    return { ok: false, erro: MENSAGEM_SESSAO_INVALIDA };
   }
   console.error(mensagemGenerica, erro);
   return { ok: false, erro: mensagemGenerica };
@@ -71,8 +102,12 @@ export async function responderConversaAction(
   conversationId: string,
   texto: string
 ): Promise<ResultadoAcao> {
-  const usuario = await usuarioAtual();
+  // `usuarioAtual()` DENTRO do try — não fora (fix round 1): fora dele, a
+  // rejeição de sessão inválida atravessa a Server Action sem produzir
+  // `ResultadoAcao`, e a tela não mostra nada. Ver o item 2 de
+  // `paraResultadoErro` acima para o raciocínio completo.
   try {
+    const usuario = await usuarioAtual();
     await responderComoHumano(conversationId, texto, usuario.id);
   } catch (erro) {
     return paraResultadoErro(erro, "Falha ao enviar a resposta. Tente novamente.");
@@ -83,8 +118,8 @@ export async function responderConversaAction(
 }
 
 export async function pausarIaAction(conversationId: string): Promise<ResultadoAcao> {
-  const usuario = await usuarioAtual();
   try {
+    const usuario = await usuarioAtual();
     await pausarIa(conversationId, usuario.id);
   } catch (erro) {
     return paraResultadoErro(erro, "Falha ao pausar a IA. Tente novamente.");
@@ -95,14 +130,16 @@ export async function pausarIaAction(conversationId: string): Promise<ResultadoA
 }
 
 export async function religarIaAction(conversationId: string): Promise<ResultadoAcao> {
-  // Gate de sessão — não decorativo. Diferente das outras duas actions
-  // (que usam `usuario.id` logo depois e por isso quebrariam um teste
-  // sozinhas se a chamada sumisse), esta linha descarta o retorno: é a
-  // ÚNICA defesa desta action contra uma chamada não autenticada. Um
-  // refactor automatizado que remova chamadas "sem efeito aparente" pode
-  // apagá-la sem quebrar nada visível — não remova.
-  await usuarioAtual();
   try {
+    // Gate de sessão — não decorativo. Diferente das outras duas actions
+    // (que usam `usuario.id` logo depois e por isso quebrariam um teste
+    // sozinhas se a chamada sumisse), esta linha descarta o retorno: é a
+    // ÚNICA defesa desta action contra uma chamada não autenticada. Um
+    // refactor automatizado que remova chamadas "sem efeito aparente" pode
+    // apagá-la sem quebrar nada visível — não remova. Continua DENTRO do
+    // try (fix round 1) pelo mesmo motivo das outras duas: fora dele, uma
+    // sessão inválida rejeitava sem produzir `ResultadoAcao`.
+    await usuarioAtual();
     await religarIa(conversationId);
   } catch (erro) {
     return paraResultadoErro(erro, "Falha ao religar a IA. Tente novamente.");

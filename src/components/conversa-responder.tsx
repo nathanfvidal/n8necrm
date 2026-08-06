@@ -43,16 +43,24 @@ export function ConversaResponder({ conversationId }: { conversationId: string }
 
   return (
     <div className="space-y-2 border-t pt-4">
+      {/* `htmlFor`/`id` já dá nome acessível "Resposta" ao campo — sem
+          `aria-label` redundante (fix round 1, achado Menor): um
+          `aria-label` sobrepõe o `<label>` associado no cálculo do nome
+          acessível, então tê-los os dois é inútil e um dos dois fica
+          "morto" sem ninguém perceber. O `<label>` visível também serve a
+          quem enxerga, o que `aria-label` sozinho não faria. */}
       <label htmlFor="resposta" className="text-sm font-medium">
         Resposta
       </label>
       <textarea
         id="resposta"
-        aria-label="Resposta"
         className="w-full rounded-md border p-2 text-sm"
         rows={3}
         value={texto}
-        onChange={(evento) => setTexto(evento.target.value)}
+        onChange={(evento) => {
+          setTexto(evento.target.value);
+          setErro(null);
+        }}
         disabled={enviando}
       />
       <div className="flex items-center justify-between">
