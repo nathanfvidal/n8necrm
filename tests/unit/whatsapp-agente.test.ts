@@ -127,4 +127,15 @@ describe("resposta humana", () => {
     );
     expect(enviarTextoMock).not.toHaveBeenCalled();
   });
+
+  // M1 da rodada de correção 1: o teto de 4000 caracteres era a única regra
+  // de negócio da função sem teste.
+  it("recusa texto acima do limite de 4000 caracteres sem chamar o gateway", async () => {
+    const conversa = await criarConversation();
+    const textoEnorme = "a".repeat(4001);
+    await expect(responderComoHumano(conversa.id, textoEnorme, ID_DO_ADMIN)).rejects.toThrow(
+      /limite de 4000 caracteres/i
+    );
+    expect(enviarTextoMock).not.toHaveBeenCalled();
+  });
 });

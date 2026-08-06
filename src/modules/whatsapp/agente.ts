@@ -49,6 +49,18 @@ export async function salvarConfigBot(
 const MAX_CARACTERES_RESPOSTA_HUMANA = 4000;
 
 /**
+ * Erro de validação de `responderComoHumano` — mensagem vazia ou acima do
+ * limite. Distinto de qualquer outra falha da função (gateway fora do ar,
+ * banco indisponível) porque o TEXTO desta mensagem é seguro para chegar até
+ * a tela de quem está atendendo: descreve uma entrada inválida do próprio
+ * usuário, nunca detalhe interno de infraestrutura. `src/core/whatsapp/actions.ts`
+ * usa `instanceof` para decidir se repassa `error.message` para o cliente ou
+ * troca por uma mensagem genérica — ver o comentário de `paraResultadoErro`
+ * lá, que é a outra metade desta decisão.
+ */
+export class RespostaHumanaInvalidaError extends Error {}
+
+/**
  * Envia uma resposta escrita por um humano.
  *
  * ## A ordem importa e é contraintuitiva: pausa → envia → grava
@@ -73,10 +85,12 @@ export async function responderComoHumano(
 ): Promise<void> {
   const conteudo = texto.trim();
   if (conteudo.length === 0) {
-    throw new Error("Mensagem vazia — nada a enviar.");
+    throw new RespostaHumanaInvalidaError("Mensagem vazia — nada a enviar.");
   }
   if (conteudo.length > MAX_CARACTERES_RESPOSTA_HUMANA) {
-    throw new Error(`Mensagem acima do limite de ${MAX_CARACTERES_RESPOSTA_HUMANA} caracteres.`);
+    throw new RespostaHumanaInvalidaError(
+      `Mensagem acima do limite de ${MAX_CARACTERES_RESPOSTA_HUMANA} caracteres.`
+    );
   }
 
   const conversa = await prisma.conversation.findUniqueOrThrow({
@@ -87,19 +101,42 @@ export async function responderComoHumano(
   // 1. Pausa primeiro — mesmo que tudo depois falhe, a IA fica calada.
   await pausarIa(conversationId, usuarioId);
 
-  // 2. Envia.
-  const envio = await whatsappGateway.enviarTexto(conversa.waId, conteudo);
+  // 2. Envia. Loga no `conversationId` (nunca o texto nem `conversa.waId` —
+  // é o telefone do cliente, dado pessoal) para deixar rastro de quando o
+  // humano precisou repetir o envio.
+  let envio: { idExterno: string };
+  try {
+    envio = await whatsappGateway.enviarTexto(conversa.waId, conteudo);
+  } catch (erro) {
+    console.error(
+      `Falha ao enviar resposta humana (conversationId=${conversationId}) — IA pausada, nada enviado.`,
+      erro
+    );
+    throw erro;
+  }
 
-  // 3. Grava.
-  await prisma.whatsappMessage.create({
-    data: {
-      conversationId,
-      idExterno: envio.idExterno,
-      direcao: "SAIDA",
-      autor: "HUMANO",
-      tipo: "TEXTO",
-      texto: conteudo,
-      processadoEm: new Date(),
-    },
-  });
+  // 3. Grava. Se isto falhar, o cliente JÁ recebeu a mensagem (passo 2 teve
+  // sucesso) e ela não vai aparecer no inbox — o pior caso que a ordem
+  // pausa→envia→grava não elimina, só limita. `idExterno` (id do gateway,
+  // não dado pessoal) fica no log para permitir reconciliação manual.
+  try {
+    await prisma.whatsappMessage.create({
+      data: {
+        conversationId,
+        idExterno: envio.idExterno,
+        direcao: "SAIDA",
+        autor: "HUMANO",
+        tipo: "TEXTO",
+        texto: conteudo,
+        processadoEm: new Date(),
+      },
+    });
+  } catch (erro) {
+    console.error(
+      `Falha ao gravar resposta humana já enviada (conversationId=${conversationId}, ` +
+        `idExterno=${envio.idExterno}) — cliente recebeu a mensagem, mas ela não aparece no inbox.`,
+      erro
+    );
+    throw erro;
+  }
 }
