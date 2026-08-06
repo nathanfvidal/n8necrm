@@ -34,4 +34,26 @@ describe("montarPromptSistema", () => {
   it("é determinística — mesma config, mesmos bytes", () => {
     expect(montarPromptSistema(BASE)).toBe(montarPromptSistema(BASE));
   });
+
+  // Regressão distinta da de determinismo acima, não redundante com ela: o
+  // teste de determinismo só pega valor que muda ENTRE chamadas (ex.:
+  // `new Date().toISOString()` dentro da função). Uma data FIXA — escrita
+  // por engano na persona ou numa regra, o clássico "promoção válida até
+  // 06/08/2026" colado sem querer — produz bytes idênticos nas duas
+  // chamadas, passa no teste de determinismo, e envenenaria todo
+  // atendimento com informação vencida sem ninguém perceber. Esta guarda
+  // por regex é o que pega esse caso.
+  //
+  // Aplicada só a `BASE` (cujo `faq` é ""), não a uma config com FAQ
+  // preenchida: a FAQ é texto livre editável pelo cliente e PODE
+  // legitimamente conter uma data ("atendemos até 24/12") — aplicar a
+  // mesma guarda a esse conteúdo criaria falso positivo para um uso válido.
+  // O que este teste protege é a persona/papel/regras e o esqueleto que o
+  // próprio código gera (numeração, cabeçalhos) — nunca texto livre vindo
+  // da config.
+  it("não introduz nenhum padrão de data reconhecível na persona/regras/esqueleto do prompt", () => {
+    const prompt = montarPromptSistema(BASE);
+    expect(prompt).not.toMatch(/\d{4}-\d{2}-\d{2}/); // ISO date
+    expect(prompt).not.toMatch(/\d{1,2}\/\d{1,2}\/\d{2,4}/); // DD/MM/AAAA
+  });
 });
