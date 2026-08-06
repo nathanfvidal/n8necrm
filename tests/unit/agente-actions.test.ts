@@ -17,26 +17,38 @@ import { idsDeUsuariosSemeados } from "./helpers/whatsapp";
 
 describe("restaurar ao padrão do fork", () => {
   let ID_DO_ADMIN: string;
+  let linhaOriginal: Awaited<ReturnType<typeof lerConfigBot>>;
 
   beforeAll(async () => {
     ({ ID_DO_ADMIN } = await idsDeUsuariosSemeados());
+    // Capturada ANTES de qualquer teste mexer na linha, para o `afterAll`
+    // devolver exatamente o que estava aqui — não uma suposição sobre o que
+    // "deveria" estar. Rodada de correção 1, achado M1: a versão anterior
+    // deste `afterAll` hardcodeava `ativo: true`; se alguém tivesse desligado
+    // o bot no banco de desenvolvimento de propósito (o cenário exato que
+    // esta tarefa protege), rodar esta suíte religava o bot sozinha — o
+    // mesmo problema que `restaurarConfigPadrao` existe para evitar em
+    // produção, só que cometido pelo próprio teste.
+    linhaOriginal = await lerConfigBot();
   });
 
   // `BotConfig` é linha única, compartilhada por todo o banco de
   // desenvolvimento — os dois testes abaixo gravam persona/regras/faq de
   // teste e deixam `ativo: false` (Task 7 diz que `restaurarConfigPadrao` não
   // religa o interruptor de propósito). Sem este `afterAll`, a suíte inteira
-  // fica com o bot de desenvolvimento desligado e com persona de teste depois
-  // de rodar uma vez — mesmo cuidado de tests/unit/bot-config-seed.test.ts.
+  // ficaria com o bot de desenvolvimento no estado deixado pelo último
+  // teste. Restaura para `linhaOriginal` (capturada no `beforeAll` acima),
+  // não para `botConfig`/valores fixos — mesmo cuidado de
+  // tests/unit/bot-config-seed.test.ts.
   afterAll(async () => {
     await prisma.botConfig.update({
       where: { id: BOT_CONFIG_ID },
       data: {
-        personaNome: botConfig.persona.nome,
-        personaPapel: botConfig.persona.papel,
-        regras: botConfig.regras,
-        faq: botConfig.faq,
-        ativo: true,
+        personaNome: linhaOriginal.personaNome,
+        personaPapel: linhaOriginal.personaPapel,
+        regras: linhaOriginal.regras,
+        faq: linhaOriginal.faq,
+        ativo: linhaOriginal.ativo,
       },
     });
   });

@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache";
 import { usuarioAtual } from "@/core/auth/session";
 import { hasPermission } from "@/core/auth/permissions";
 import { restaurarConfigPadrao, salvarConfigBot } from "./agente";
+import { MAX_PERSONA_NOME, MAX_PERSONA_PAPEL, MAX_REGRA, MAX_FAQ } from "./agente-limites";
 import type { ResultadoAcao } from "./actions";
 
 /**
@@ -94,6 +95,18 @@ export async function salvarConfigAgenteAction(dados: {
     if (personaNome.length === 0 || personaPapel.length === 0) {
       throw new ErroConfigAgente("Nome e papel da persona são obrigatórios.");
     }
+    // Tetos de tamanho (rodada de correção 1, achado I1): sem isto, um ADMIN
+    // colando um documento inteiro num destes campos multiplica o custo de
+    // token de TODA resposta a TODO cliente, em silêncio — ver o raciocínio
+    // completo em `agente-limites.ts`. Checado aqui, na action, porque é o
+    // único ponto que nenhuma entrada consegue contornar; o `maxLength` do
+    // formulário é só conveniência de UI, não a defesa de verdade.
+    if (personaNome.length > MAX_PERSONA_NOME) {
+      throw new ErroConfigAgente(`Nome da persona acima do limite de ${MAX_PERSONA_NOME} caracteres.`);
+    }
+    if (personaPapel.length > MAX_PERSONA_PAPEL) {
+      throw new ErroConfigAgente(`Papel da persona acima do limite de ${MAX_PERSONA_PAPEL} caracteres.`);
+    }
 
     // Regras vazias são descartadas em vez de rejeitadas: uma linha em
     // branco no textarea é acidente de digitação, não intenção.
@@ -101,11 +114,16 @@ export async function salvarConfigAgenteAction(dados: {
     if (regras.length === 0) {
       throw new ErroConfigAgente("O agente precisa de pelo menos uma regra.");
     }
+    if (regras.some((regra) => regra.length > MAX_REGRA)) {
+      throw new ErroConfigAgente(`Cada regra pode ter no máximo ${MAX_REGRA} caracteres.`);
+    }
 
-    await salvarConfigBot(
-      { ativo: dados.ativo, personaNome, personaPapel, regras, faq: dados.faq.trim() },
-      usuario.id
-    );
+    const faq = dados.faq.trim();
+    if (faq.length > MAX_FAQ) {
+      throw new ErroConfigAgente(`FAQ acima do limite de ${MAX_FAQ} caracteres.`);
+    }
+
+    await salvarConfigBot({ ativo: dados.ativo, personaNome, personaPapel, regras, faq }, usuario.id);
   } catch (erro) {
     return paraResultadoErro(erro, "Falha ao salvar a configuração do agente. Tente novamente.");
   }

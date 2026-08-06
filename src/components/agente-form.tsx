@@ -5,7 +5,9 @@ import type { BotConfig } from "@prisma/client";
 
 import { salvarConfigAgenteAction, restaurarConfigPadraoAction } from "@/modules/whatsapp/agente-actions";
 import { montarPromptSistema } from "@/modules/whatsapp/prompt";
+import { MAX_PERSONA_NOME, MAX_PERSONA_PAPEL, MAX_REGRA, MAX_FAQ } from "@/modules/whatsapp/agente-limites";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 
 /**
  * Editor da configuração do agente.
@@ -25,17 +27,40 @@ export function AgenteForm({ config }: { config: BotConfig }) {
   const [salvo, setSalvo] = useState(false);
   const [processando, iniciar] = useTransition();
 
+  // Limpa o aviso de "Salvo" (e qualquer erro anterior) assim que a pessoa
+  // volta a mexer em qualquer campo — rodada de correção 1, achado M2: sem
+  // isto, "Salvo. Vale na próxima resposta." continuava na tela ao lado de
+  // edições ainda não salvas, prometendo algo que não é mais verdade.
+  // `ConversaResponder` já faz o mesmo no campo de resposta.
+  function limparStatus() {
+    setErro(null);
+    setSalvo(false);
+  }
+
   const regras = regrasTexto
     .split("\n")
     .map((regra) => regra.trim())
     .filter((regra) => regra.length > 0);
+  const regraAcimaDoLimite = regras.some((regra) => regra.length > MAX_REGRA);
 
-  // Prévia calculada no cliente com a MESMA função que o servidor usa. Editar
-  // algo cujo efeito é invisível é como programar sem compilar — e como
-  // `montarPromptSistema` é pura e determinística, renderizar o texto final
-  // custa quase nada e transforma "acho que ficou bom" em "é isto que o
-  // modelo vai ler".
-  const previa = montarPromptSistema({ personaNome, personaPapel, regras, faq });
+  // Prévia calculada no cliente com a MESMA função que o servidor usa, sobre
+  // os MESMOS valores aparados (`.trim()`) que a action grava — rodada de
+  // correção 1, achado M3: sem o `.trim()` aqui, digitar " Ana " mostrava
+  // "Você é  Ana ," na prévia mas gravava "Você é Ana," (a action já aparava
+  // antes desta correção), e a promessa "é exatamente este texto que o
+  // modelo recebe" ficava falsa bem abaixo dela. `regras` já vem aparada de
+  // `regrasTexto.split("\n").map(trim)...` acima.
+  //
+  // Editar algo cujo efeito é invisível é como programar sem compilar — e
+  // como `montarPromptSistema` é pura e determinística, renderizar o texto
+  // final custa quase nada e transforma "acho que ficou bom" em "é isto que
+  // o modelo vai ler".
+  const previa = montarPromptSistema({
+    personaNome: personaNome.trim(),
+    personaPapel: personaPapel.trim(),
+    regras,
+    faq: faq.trim(),
+  });
 
   // As actions DEVOLVEM resultado, não lançam — `try/catch` aqui não
   // funcionaria em produção, porque o Next redige erros não tratados de
@@ -85,7 +110,14 @@ export function AgenteForm({ config }: { config: BotConfig }) {
     <div className="grid gap-6 lg:grid-cols-2">
       <div className="space-y-4">
         <label className="flex items-center gap-2 rounded-md border p-3">
-          <input type="checkbox" checked={ativo} onChange={(e) => setAtivo(e.target.checked)} />
+          <input
+            type="checkbox"
+            checked={ativo}
+            onChange={(e) => {
+              setAtivo(e.target.checked);
+              limparStatus();
+            }}
+          />
           <span className="text-sm font-medium">Atendimento automático ligado</span>
           <span className="text-xs text-muted-foreground">
             Desligado, a IA não responde em nenhuma conversa.
@@ -93,52 +125,109 @@ export function AgenteForm({ config }: { config: BotConfig }) {
         </label>
 
         <div className="space-y-1">
-          <label htmlFor="persona-nome" className="text-sm font-medium">
-            Nome da persona
-          </label>
+          <div className="flex items-center justify-between">
+            <label htmlFor="persona-nome" className="text-sm font-medium">
+              Nome da persona
+            </label>
+            {/* Contador visível ANTES de colar, não só um erro depois — rodada
+                de correção 1, achado I1: "um limite que só aparece como erro
+                depois de colar é uma armadilha". */}
+            <span
+              className={cn(
+                "text-xs",
+                personaNome.length > MAX_PERSONA_NOME ? "text-destructive" : "text-muted-foreground"
+              )}
+            >
+              {personaNome.length}/{MAX_PERSONA_NOME}
+            </span>
+          </div>
           <input
             id="persona-nome"
             className="w-full rounded-md border p-2 text-sm"
+            maxLength={MAX_PERSONA_NOME}
             value={personaNome}
-            onChange={(e) => setPersonaNome(e.target.value)}
+            onChange={(e) => {
+              setPersonaNome(e.target.value);
+              limparStatus();
+            }}
           />
         </div>
 
         <div className="space-y-1">
-          <label htmlFor="persona-papel" className="text-sm font-medium">
-            Papel da persona
-          </label>
+          <div className="flex items-center justify-between">
+            <label htmlFor="persona-papel" className="text-sm font-medium">
+              Papel da persona
+            </label>
+            <span
+              className={cn(
+                "text-xs",
+                personaPapel.length > MAX_PERSONA_PAPEL ? "text-destructive" : "text-muted-foreground"
+              )}
+            >
+              {personaPapel.length}/{MAX_PERSONA_PAPEL}
+            </span>
+          </div>
           <input
             id="persona-papel"
             className="w-full rounded-md border p-2 text-sm"
+            maxLength={MAX_PERSONA_PAPEL}
             value={personaPapel}
-            onChange={(e) => setPersonaPapel(e.target.value)}
+            onChange={(e) => {
+              setPersonaPapel(e.target.value);
+              limparStatus();
+            }}
           />
         </div>
 
         <div className="space-y-1">
-          <label htmlFor="regras" className="text-sm font-medium">
-            Regras — uma por linha
-          </label>
+          <div className="flex items-center justify-between">
+            <label htmlFor="regras" className="text-sm font-medium">
+              Regras — uma por linha
+            </label>
+            <span className="text-xs text-muted-foreground">até {MAX_REGRA} caracteres cada</span>
+          </div>
           <textarea
             id="regras"
             className="w-full rounded-md border p-2 font-mono text-xs"
             rows={12}
             value={regrasTexto}
-            onChange={(e) => setRegrasTexto(e.target.value)}
+            onChange={(e) => {
+              setRegrasTexto(e.target.value);
+              limparStatus();
+            }}
           />
+          {/* Sem `maxLength` nativo aqui — o textarea combina todas as regras
+              num único campo, e o limite é POR REGRA (linha), não do campo
+              inteiro. O aviso abaixo cobre o mesmo caso antes do clique em
+              Salvar, que é onde a action de fato recusa (ver `agente-actions.ts`). */}
+          {regraAcimaDoLimite && (
+            <p className="text-xs text-destructive">
+              Uma ou mais regras passam de {MAX_REGRA} caracteres — seriam recusadas ao salvar.
+            </p>
+          )}
         </div>
 
         <div className="space-y-1">
-          <label htmlFor="faq" className="text-sm font-medium">
-            Perguntas frequentes
-          </label>
+          <div className="flex items-center justify-between">
+            <label htmlFor="faq" className="text-sm font-medium">
+              Perguntas frequentes
+            </label>
+            <span
+              className={cn("text-xs", faq.length > MAX_FAQ ? "text-destructive" : "text-muted-foreground")}
+            >
+              {faq.length}/{MAX_FAQ}
+            </span>
+          </div>
           <textarea
             id="faq"
             className="w-full rounded-md border p-2 text-xs"
             rows={8}
+            maxLength={MAX_FAQ}
             value={faq}
-            onChange={(e) => setFaq(e.target.value)}
+            onChange={(e) => {
+              setFaq(e.target.value);
+              limparStatus();
+            }}
           />
           <p className="text-xs text-muted-foreground">
             Deixe em branco para o agente não receber bloco de FAQ nenhum.

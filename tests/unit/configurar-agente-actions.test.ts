@@ -15,6 +15,7 @@
 // não mostra nada, nem sucesso nem erro.
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { User } from "@prisma/client";
+import { MAX_PERSONA_NOME, MAX_PERSONA_PAPEL, MAX_REGRA, MAX_FAQ } from "../../src/modules/whatsapp/agente-limites";
 
 const usuarioAtualMock = vi.fn();
 vi.mock("@/core/auth/session", () => ({ usuarioAtual: () => usuarioAtualMock() }));
@@ -150,6 +151,70 @@ describe("ADMIN autenticado", () => {
     const resultado = await salvarConfigAgenteAction({ ...CONFIG_VALIDA, regras: ["   ", ""] });
     expect(resultado).toEqual({ ok: false, erro: "O agente precisa de pelo menos uma regra." });
     expect(salvarConfigBotMock).not.toHaveBeenCalled();
+  });
+
+  // Rodada de correção 1, achado I1: nenhum campo tinha teto de tamanho —
+  // personaNome/personaPapel/regra/faq entram no prompt de sistema em TODO
+  // turno de TODA conversa, então um campo gigante multiplica o custo de
+  // token de cada resposta, em silêncio. Os quatro testes abaixo provam que
+  // a action recusa antes de tocar `salvarConfigBot`, não só que a tela
+  // desencoraja digitar demais.
+  it("salvarConfigAgenteAction: nome da persona acima do limite é rejeitado sem chamar salvarConfigBot", async () => {
+    const resultado = await salvarConfigAgenteAction({
+      ...CONFIG_VALIDA,
+      personaNome: "a".repeat(MAX_PERSONA_NOME + 1),
+    });
+    expect(resultado).toEqual({
+      ok: false,
+      erro: `Nome da persona acima do limite de ${MAX_PERSONA_NOME} caracteres.`,
+    });
+    expect(salvarConfigBotMock).not.toHaveBeenCalled();
+  });
+
+  it("salvarConfigAgenteAction: papel da persona acima do limite é rejeitado sem chamar salvarConfigBot", async () => {
+    const resultado = await salvarConfigAgenteAction({
+      ...CONFIG_VALIDA,
+      personaPapel: "a".repeat(MAX_PERSONA_PAPEL + 1),
+    });
+    expect(resultado).toEqual({
+      ok: false,
+      erro: `Papel da persona acima do limite de ${MAX_PERSONA_PAPEL} caracteres.`,
+    });
+    expect(salvarConfigBotMock).not.toHaveBeenCalled();
+  });
+
+  it("salvarConfigAgenteAction: uma regra acima do limite é rejeitada sem chamar salvarConfigBot", async () => {
+    const resultado = await salvarConfigAgenteAction({
+      ...CONFIG_VALIDA,
+      regras: ["regra normal", "a".repeat(MAX_REGRA + 1)],
+    });
+    expect(resultado).toEqual({
+      ok: false,
+      erro: `Cada regra pode ter no máximo ${MAX_REGRA} caracteres.`,
+    });
+    expect(salvarConfigBotMock).not.toHaveBeenCalled();
+  });
+
+  it("salvarConfigAgenteAction: FAQ acima do limite é rejeitada sem chamar salvarConfigBot", async () => {
+    const resultado = await salvarConfigAgenteAction({
+      ...CONFIG_VALIDA,
+      faq: "a".repeat(MAX_FAQ + 1),
+    });
+    expect(resultado).toEqual({ ok: false, erro: `FAQ acima do limite de ${MAX_FAQ} caracteres.` });
+    expect(salvarConfigBotMock).not.toHaveBeenCalled();
+  });
+
+  it("salvarConfigAgenteAction: exatamente no limite é aceito (limite não é off-by-one)", async () => {
+    salvarConfigBotMock.mockResolvedValue(undefined);
+    const resultado = await salvarConfigAgenteAction({
+      ativo: true,
+      personaNome: "a".repeat(MAX_PERSONA_NOME),
+      personaPapel: "a".repeat(MAX_PERSONA_PAPEL),
+      regras: ["a".repeat(MAX_REGRA)],
+      faq: "a".repeat(MAX_FAQ),
+    });
+    expect(resultado).toEqual({ ok: true });
+    expect(salvarConfigBotMock).toHaveBeenCalledTimes(1);
   });
 
   it("salvarConfigAgenteAction: erro inesperado (banco) vira mensagem genérica, não vaza detalhe interno", async () => {

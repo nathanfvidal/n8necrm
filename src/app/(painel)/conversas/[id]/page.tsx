@@ -2,6 +2,8 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 
 import { exigirModulo } from "@/lib/module-gate";
+import { usuarioAtual } from "@/core/auth/session";
+import { hasPermission } from "@/core/auth/permissions";
 import { buscarConversaComMensagens } from "@/modules/whatsapp/queries";
 import { EmptyState } from "@/components/empty-state";
 import { Badge } from "@/components/ui/badge";
@@ -25,6 +27,14 @@ export default async function ConversaDetalhePage({
   exigirModulo("whatsapp");
 
   const { id } = await params;
+  // `usuarioAtual()` aqui não repete a checagem de sessão de `(painel)/layout.tsx`
+  // (que já garante sessão válida antes de qualquer página deste route group
+  // renderizar) — só lê o papel para decidir se mostra o link "Configurar
+  // agente" (rodada de correção 1, achado M4: antes, o link aparecia para
+  // todo mundo, e um VENDEDOR/GESTOR que clicasse caía num redirect de volta
+  // pra cá em `/conversas/agente/page.tsx` — beco sem saída, não falha de
+  // segurança, mas sem motivo para expor o link a quem não pode usá-lo).
+  const usuario = await usuarioAtual();
   const conversa = await buscarConversaComMensagens(id);
 
   if (!conversa) {
@@ -43,9 +53,11 @@ export default async function ConversaDetalhePage({
           </h1>
           <p className="text-sm text-muted-foreground">{conversa.telefone ?? conversa.waId}</p>
         </div>
-        <Link href="/conversas/agente" className="text-sm text-muted-foreground hover:underline">
-          Configurar agente
-        </Link>
+        {hasPermission(usuario.papel, "configurar_agente") && (
+          <Link href="/conversas/agente" className="text-sm text-muted-foreground hover:underline">
+            Configurar agente
+          </Link>
+        )}
       </div>
 
       <ConversaEstadoIa
