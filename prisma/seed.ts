@@ -13,6 +13,7 @@ import bcrypt from "bcryptjs";
 
 import { prisma } from "../src/lib/prisma";
 import { client } from "../config/client";
+import { BOT_CONFIG_ID, botConfig } from "../config/bot";
 
 // Id estável e legível (não um cuid gerado) — Fatia 1 do WhatsApp
 // (AuditLog.userId é FK obrigatória para User) precisa referenciar este
@@ -116,6 +117,7 @@ export async function seed(): Promise<void> {
   });
 
   await semearUsuarioSistemaWhatsapp();
+  await semearBotConfig();
 
   const primeiraEtapa = await prisma.pipelineStage.findFirstOrThrow({ orderBy: { ordem: "asc" } });
 
@@ -255,6 +257,33 @@ async function semearUsuarioSistemaWhatsapp(): Promise<void> {
       senhaHash,
       papel: "ADMIN",
       ativo: false,
+    },
+  });
+}
+
+/**
+ * Semeia a linha única de `BotConfig` a partir de `config/bot.ts`.
+ *
+ * Cria se não existe; NUNCA atualiza. O seed roda em todo deploy — um upsert
+ * aqui desfaria, silenciosamente, toda edição feita pelo CRM desde o deploy
+ * anterior. Mesmo raciocínio de `semearUsuarioSistemaWhatsapp` logo acima, e
+ * deliberadamente DIFERENTE do upsert usado para `PipelineStage`: aquelas são
+ * estrutura definida pelo fork, esta é conteúdo editável pelo usuário.
+ *
+ * Para voltar ao conteúdo do arquivo existe um caminho explícito: o botão
+ * "voltar ao padrão do fork" na tela do agente.
+ */
+export async function semearBotConfig(): Promise<void> {
+  const existente = await prisma.botConfig.findUnique({ where: { id: BOT_CONFIG_ID } });
+  if (existente) return;
+
+  await prisma.botConfig.create({
+    data: {
+      id: BOT_CONFIG_ID,
+      personaNome: botConfig.persona.nome,
+      personaPapel: botConfig.persona.papel,
+      regras: botConfig.regras,
+      faq: botConfig.faq,
     },
   });
 }

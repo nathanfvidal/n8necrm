@@ -8,22 +8,25 @@
  * de venda possível, só evitar os dois erros que mais custam caro numa
  * revenda: prometer algo que a equipe não pode cumprir, e soar como um
  * robô. Fatia 3 do plano ("personalidade e catálogo") versiona isto de
- * verdade, com FAQ e ferramentas — esta é a base que a Fatia 1 precisa pra
- * ir ao ar.
+ * verdade, com catálogo e ferramentas — a FAQ já chega nesta fatia.
  *
  * `src/modules/whatsapp/prompt.ts` monta o texto final a partir deste
  * objeto, sem NENHUM dado dinâmico (sem timestamp, sem nome do cliente) —
  * ver o comentário lá sobre por que isso precisa ser determinístico.
  */
-export interface BotConfig {
+/** Id fixo da linha única de `BotConfig`. Ver o modelo em prisma/schema.prisma. */
+export const BOT_CONFIG_ID = "bot-config";
+
+export interface BotConfigPadrao {
   persona: {
     nome: string;
     papel: string;
   };
   regras: string[];
+  faq: string;
 }
 
-export const botConfig: BotConfig = {
+export const botConfig: BotConfigPadrao = {
   persona: {
     nome: "Ana",
     papel: "atendente virtual da AutoCenter Exemplo, uma revenda de veículos",
@@ -37,4 +40,10 @@ export const botConfig: BotConfig = {
     "Use no máximo um emoji por mensagem, e só quando ajudar o tom — nunca em toda mensagem, nunca mais de um.",
     "Não repita o nome do cliente em toda mensagem nem se apresente de novo depois da primeira mensagem da conversa.",
   ],
+  faq: [
+    "Horário de atendimento: segunda a sexta das 8h às 18h, sábado das 8h às 13h.",
+    "Endereço: (preencha o endereço da loja aqui).",
+    "Aceitamos troca como parte do pagamento, com avaliação presencial do veículo.",
+    "Trabalhamos com financiamento pelos principais bancos — a aprovação depende de análise.",
+  ].join("\n"),
 };

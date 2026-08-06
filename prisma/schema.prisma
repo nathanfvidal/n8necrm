@@ -48,18 +48,20 @@ enum WhatsappTipo {
 }
 
 model User {
-  id            String         @id @default(cuid())
-  nome          String
-  email         String         @unique
-  senhaHash     String
-  papel         Role
-  ativo         Boolean        @default(true)
-  criadoEm      DateTime       @default(now())
-  leadsAtribuidos Lead[]       @relation("LeadResponsavel")
-  tasks         Task[]
-  notes         LeadNote[]
-  notifications Notification[]
-  auditLogs     AuditLog[]
+  id                 String         @id @default(cuid())
+  nome               String
+  email              String         @unique
+  senhaHash          String
+  papel              Role
+  ativo              Boolean        @default(true)
+  criadoEm           DateTime       @default(now())
+  leadsAtribuidos    Lead[]         @relation("LeadResponsavel")
+  tasks              Task[]
+  notes              LeadNote[]
+  notifications      Notification[]
+  auditLogs          AuditLog[]
+  conversasPausadas  Conversation[] @relation("ConversasPausadas")
+  botConfigsEditadas BotConfig[]    @relation("BotConfigsEditadas")
 }
 
 model Contact {
@@ -73,48 +75,48 @@ model Contact {
 }
 
 model PipelineStage {
-  id        String   @id @default(cuid())
+  id        String  @id @default(cuid())
   nome      String
   ordem     Int
   cor       String
-  ehGanho   Boolean  @default(false)
-  ehPerdido Boolean  @default(false)
+  ehGanho   Boolean @default(false)
+  ehPerdido Boolean @default(false)
   leads     Lead[]
 
   @@unique([ordem])
 }
 
 model Lead {
-  id                 String        @id @default(cuid())
-  contactId          String?
-  contact            Contact?      @relation(fields: [contactId], references: [id])
-  itemId             String?
-  stageId            String
-  stage              PipelineStage @relation(fields: [stageId], references: [id])
-  responsavelId      String?
-  responsavel        User?         @relation("LeadResponsavel", fields: [responsavelId], references: [id])
-  canal              LeadChannel
-  valorEstimado      Decimal?
-  sessionId          String?
-  utm                Json?
-  criadoEm           DateTime      @default(now())
-  ultimaInteracaoEm  DateTime      @default(now())
-  notes              LeadNote[]
-  tasks              Task[]
-  conversations      Conversation[]
+  id                String         @id @default(cuid())
+  contactId         String?
+  contact           Contact?       @relation(fields: [contactId], references: [id])
+  itemId            String?
+  stageId           String
+  stage             PipelineStage  @relation(fields: [stageId], references: [id])
+  responsavelId     String?
+  responsavel       User?          @relation("LeadResponsavel", fields: [responsavelId], references: [id])
+  canal             LeadChannel
+  valorEstimado     Decimal?
+  sessionId         String?
+  utm               Json?
+  criadoEm          DateTime       @default(now())
+  ultimaInteracaoEm DateTime       @default(now())
+  notes             LeadNote[]
+  tasks             Task[]
+  conversations     Conversation[]
 
   @@index([stageId, responsavelId])
   @@index([criadoEm])
 }
 
 model LeadNote {
-  id        String   @id @default(cuid())
-  leadId    String
-  lead      Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
-  autorId   String
-  autor     User     @relation(fields: [autorId], references: [id])
-  texto     String
-  criadoEm  DateTime @default(now())
+  id       String   @id @default(cuid())
+  leadId   String
+  lead     Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  autorId  String
+  autor    User     @relation(fields: [autorId], references: [id])
+  texto    String
+  criadoEm DateTime @default(now())
 }
 
 model Task {
@@ -131,13 +133,13 @@ model Task {
 }
 
 model Notification {
-  id        String   @id @default(cuid())
-  userId    String
-  user      User     @relation(fields: [userId], references: [id])
-  tipo      String
-  payload   Json
-  lidaEm    DateTime?
-  criadoEm  DateTime @default(now())
+  id       String    @id @default(cuid())
+  userId   String
+  user     User      @relation(fields: [userId], references: [id])
+  tipo     String
+  payload  Json
+  lidaEm   DateTime?
+  criadoEm DateTime  @default(now())
 
   // Task 19: listarNotificacoesNaoLidas (core/notifications/dispatch.ts) e o
   // sino de PainelNav consultam exatamente este par em toda navegação sob
@@ -173,7 +175,6 @@ model RateLimit {
  * brasileiro; `waId` (o identificador bruto que a Evolution manda, sem o
  * sufixo "@s.whatsapp.net") é sempre gravado, mesmo quando `telefone` fica
  * nulo — ver a decisão "Telefone" no plano da Fatia 1.
- *
  * `bufferSeq` e `processandoAte` implementam o buffer de fragmentos + lease
  * de processamento descritos no plano (§ "O problema central e sua
  * solução"): `bufferSeq` é incrementado atomicamente a cada mensagem ENTRADA
@@ -197,11 +198,37 @@ model Conversation {
   criadoEm       DateTime          @default(now())
   atualizadoEm   DateTime          @updatedAt
   mensagens      WhatsappMessage[]
+  iaAtiva        Boolean           @default(true)
+  iaPausadaEm    DateTime?
+  iaPausadaPorId String?
+  iaPausadaPor   User?             @relation("ConversasPausadas", fields: [iaPausadaPorId], references: [id])
 
   // turno.ts faz UPDATE ... WHERE "processandoAte" IS NULL OR "processandoAte" < now()
   // a cada job de fila — sem índice, essa checagem varreria a tabela inteira
   // conforme o número de conversas ativas cresce.
   @@index([processandoAte])
+}
+
+/// Configuração do agente de IA — LINHA ÚNICA, id fixo `bot-config`.
+///
+/// A unicidade é imposta pelo banco, não por convenção: `id` tem valor default
+/// constante, então um segundo `create` sem id explícito colide na chave
+/// primária. Nenhum código precisa perguntar "qual das linhas é a certa".
+///
+/// Semeada por `prisma/seed.ts` a partir de `config/bot.ts`. Em runtime a
+/// verdade é ESTA tabela — `config/bot.ts` só é lido pelo seed e pela ação
+/// explícita de restaurar ao padrão do fork, nunca no caminho de resposta ao
+/// cliente.
+model BotConfig {
+  id              String   @id @default("bot-config")
+  ativo           Boolean  @default(true)
+  personaNome     String
+  personaPapel    String
+  regras          String[]
+  faq             String   @default("")
+  atualizadoEm    DateTime @updatedAt
+  atualizadoPorId String?
+  atualizadoPor   User?    @relation("BotConfigsEditadas", fields: [atualizadoPorId], references: [id])
 }
 
 /**
@@ -213,7 +240,6 @@ model Conversation {
  * exatamente como `encontrarOuCriarContact` trata a corrida em
  * `Contact.telefone` (core/leads/dedupe.ts) — "alguém já gravou isso,
  * devolve sem duplicar" em vez de deixar o erro cru do Postgres subir.
- *
  * `processadoEm` marca quando esta mensagem ENTRADA foi incluída numa
  * resposta gerada por `turno.ts` — mensagens SAIDA já nascem com
  * `processadoEm` preenchido (não esperam processamento). É o que permite
