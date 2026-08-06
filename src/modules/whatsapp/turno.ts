@@ -1,5 +1,7 @@
 import "server-only";
 
+import { DuplicateMessageError } from "@vercel/queue";
+
 import { prisma } from "@/lib/prisma";
 
 import { publicarTurno, type TurnoJob } from "./fila";
@@ -57,8 +59,12 @@ const MAX_CARACTERES_POR_MENSAGEM_CONTEXTO = 2000;
 // Um teto evita reagendar para sempre se algo ficar genuinamente preso (ex.:
 // uma conversa cujo lease nunca é liberado por um bug futuro) — 30 tentativas
 // de 5s é ~2,5min de espera antes de desistir e logar, generoso o bastante
-// para qualquer lease legítimo (no máximo `LEASE_DURACAO_MS` = 60s) liberar
-// no meio do caminho.
+// para qualquer lease legítimo (no máximo `LEASE_DURACAO_MS`, hoje 75s)
+// liberar no meio do caminho. (Este número dizia "60s" até a re-revisão da
+// leva de fixes: era o valor de ANTES do C1 subir o lease, e ficou para trás
+// quando a constante mudou — a margem continua confortável, mas um comentário
+// que discorda da constante ao lado é justamente o que faz alguém recalibrar
+// errado depois.)
 const MAX_TENTATIVAS_REAGENDAMENTO = 30;
 
 // Fix round 1/5, achado do revisor (I2): teto de respostas de IA por
@@ -134,7 +140,26 @@ export async function processarTurno(job: TurnoJob): Promise<void> {
       );
       return;
     }
-    await publicarTurno({ ...job, tentativaReagendamento: tentativa }, { delaySeconds: 5 });
+    try {
+      await publicarTurno({ ...job, tentativaReagendamento: tentativa }, { delaySeconds: 5 });
+    } catch (erro) {
+      // Re-revisão da leva de fixes: entrega "pelo menos uma vez" significa
+      // que a fila pode reentregar o MESMO job (mesmo `seq`, mesma
+      // `tentativaReagendamento`) quando a confirmação de um handler que já
+      // rodou com sucesso se perde. Nesse caso o reagendamento desta
+      // tentativa JÁ foi publicado, sua `idempotencyKey` já está na janela de
+      // dedupe, e `send()` recusa a republicação.
+      //
+      // Sem este catch o erro sobe, o handler responde 500, a fila reentrega
+      // e o ciclo se repete até esgotar as tentativas de entrega — a MESMA
+      // classe do achado C2, só que disparada por um caminho raro em vez de
+      // sempre. E é um alarme falso: o job reagendado correto já está na fila
+      // fazendo o trabalho, então "já existe" é exatamente o resultado
+      // desejado, não uma falha. Mesmo tratamento que a rota do webhook já dá
+      // a este erro (`api/whatsapp/evolution/[token]/route.ts`).
+      if (erro instanceof DuplicateMessageError) return;
+      throw erro;
+    }
     return;
   }
 

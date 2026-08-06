@@ -249,6 +249,40 @@ describe("processarTurno", () => {
     }
   );
 
+  it(
+    "re-revisão da leva de fixes: reentrega da MESMA tentativa não pode virar retry eterno " +
+      "quando o reagendamento dela já existe na fila",
+    async () => {
+      // Cenário: a fila entrega o job (seq 1, tentativa 0), o lease está
+      // ocupado, o reagendamento r1 é publicado com sucesso e o handler
+      // devolve 200 — mas essa confirmação se perde (entrega "pelo menos uma
+      // vez" é justamente isso). A fila reentrega o MESMO job (seq 1,
+      // tentativa 0). O lease continua ocupado, então o código tenta publicar
+      // r1 de novo — e a chave r1 já está registrada na janela de dedupe.
+      //
+      // Sem tratamento, `DuplicateMessageError` sobe, o handler responde 500,
+      // a fila reentrega, e o ciclo se repete até esgotar as tentativas. É a
+      // MESMA classe do achado C2 (que era sempre) por outro gatilho (que é
+      // raro) — e o reagendamento r1 correto já está na fila fazendo o
+      // trabalho, então não há nada a recuperar: a publicação duplicada é uma
+      // não-operação, não uma falha.
+      const conversation = await criarConversation({ bufferSeq: 1 });
+      await prisma.conversation.update({
+        where: { id: conversation.id },
+        data: { processandoAte: new Date(Date.now() + 60_000) },
+      });
+
+      const { DuplicateMessageError } = await import("@vercel/queue");
+      publicarTurnoMock.mockRejectedValueOnce(new DuplicateMessageError("já publicado"));
+
+      await expect(
+        processarTurno({ conversationId: conversation.id, seq: 1, tentativaReagendamento: 0 })
+      ).resolves.toBeUndefined();
+
+      expect(publicarTurnoMock).toHaveBeenCalledTimes(1);
+    }
+  );
+
   describe("fencing token (fix round 1/5, achado CRÍTICO C1) — prova direta do mecanismo", () => {
     it(
       "liberarLease com um token DESATUALIZADO (ex.: de um processador cujo lease expirou de verdade) " +
