@@ -33,33 +33,14 @@ import {
   liberarLease,
   confirmarTitularidadeLease,
 } from "../../src/modules/whatsapp/turno";
+import { BOT_CONFIG_ID, botConfig } from "../../config/bot";
+// criarConversation/criarMensagemEntrada extraídos para tests/unit/helpers/whatsapp.ts
+// (Task 4 da Fatia 2) — mesmo nome, mesma assinatura, mesmo PREFIXO interno
+// ("teste-turno-") que este arquivo já usava, então `limparDadosDeTeste`
+// abaixo continua encontrando exatamente as linhas que estas funções criam.
+import { criarConversation, criarMensagemEntrada } from "./helpers/whatsapp";
 
 const PREFIXO = "teste-turno-";
-
-async function criarConversation(overrides: Partial<{ waId: string; bufferSeq: number }> = {}) {
-  return prisma.conversation.create({
-    data: {
-      waId: overrides.waId ?? `${PREFIXO}${crypto.randomUUID()}`,
-      bufferSeq: overrides.bufferSeq ?? 1,
-    },
-  });
-}
-
-async function criarMensagemEntrada(
-  conversationId: string,
-  overrides: Partial<{ tipo: "TEXTO" | "AUDIO"; texto: string | null; idExterno: string }> = {}
-) {
-  return prisma.whatsappMessage.create({
-    data: {
-      conversationId,
-      idExterno: overrides.idExterno ?? `${PREFIXO}${crypto.randomUUID()}`,
-      direcao: "ENTRADA",
-      autor: "CLIENTE",
-      tipo: overrides.tipo ?? "TEXTO",
-      texto: overrides.texto ?? "Olá, tudo bem?",
-    },
-  });
-}
 
 async function limparDadosDeTeste() {
   const conversas = await prisma.conversation.findMany({
@@ -336,7 +317,8 @@ describe("processarTurno", () => {
       const conversation = await criarConversation({ bufferSeq: 1 });
       const tokenA = await claimLease(conversation.id);
 
-      expect(await confirmarTitularidadeLease(conversation.id, tokenA!.processandoAte)).toBe(true);
+      // Ainda titular e IA ativa: pode seguir (`null`).
+      expect(await confirmarTitularidadeLease(conversation.id, tokenA!.processandoAte)).toBeNull();
 
       await prisma.conversation.update({
         where: { id: conversation.id },
@@ -345,8 +327,27 @@ describe("processarTurno", () => {
       const tokenB = await claimLease(conversation.id);
 
       // O token antigo (A) não é mais o titular; o novo (B) é.
-      expect(await confirmarTitularidadeLease(conversation.id, tokenA!.processandoAte)).toBe(false);
-      expect(await confirmarTitularidadeLease(conversation.id, tokenB!.processandoAte)).toBe(true);
+      expect(await confirmarTitularidadeLease(conversation.id, tokenA!.processandoAte)).toBe(
+        "lease-perdido"
+      );
+      expect(await confirmarTitularidadeLease(conversation.id, tokenB!.processandoAte)).toBeNull();
+    });
+
+    // A outra metade da distinção que motivou o tipo `MotivoAborto`: ainda
+    // titular do lease (token bate), mas a IA foi pausada nesta conversa —
+    // tem que devolver "ia-pausada", não "lease-perdido" nem `null`.
+    it("confirmarTitularidadeLease devolve \"ia-pausada\" quando o titular do lease está com a IA pausada", async () => {
+      const conversation = await criarConversation({ bufferSeq: 1 });
+      const token = await claimLease(conversation.id);
+
+      await prisma.conversation.update({
+        where: { id: conversation.id },
+        data: { iaAtiva: false, iaPausadaEm: new Date() },
+      });
+
+      expect(await confirmarTitularidadeLease(conversation.id, token!.processandoAte)).toBe(
+        "ia-pausada"
+      );
     });
   });
 
@@ -558,6 +559,131 @@ describe("processarTurno", () => {
     const ultimaEntrada = contexto.historico.at(-1);
     expect(ultimaEntrada.texto.length).toBeLessThan(textoEnorme.length);
     expect(ultimaEntrada.texto).toContain("truncada");
+  });
+
+  describe("guarda da IA (Fatia 2)", () => {
+    it("não responde quando a conversa está pausada, mas marca as pendentes", async () => {
+      const conversation = await criarConversation({ iaAtiva: false });
+      const pendente = await criarMensagemEntrada(conversation.id, { texto: "oi, tem o Onix 2020?" });
+
+      await processarTurno({ conversationId: conversation.id, seq: conversation.bufferSeq });
+
+      expect(enviarTextoMock).not.toHaveBeenCalled();
+      // Busca pelo id e confere `processadoEm` não nulo (mesmo padrão do
+      // teste do teto por hora) -- não uma contagem de `processadoEm: null`,
+      // que uma implementação que APAGASSE a pendente em vez de marcá-la
+      // passaria igual, mascarando exatamente a propriedade "persiste mas
+      // para de responder, nunca descarta calado" que este teste existe para
+      // provar.
+      const pendenteAtualizada = await prisma.whatsappMessage.findUniqueOrThrow({
+        where: { id: pendente.id },
+      });
+      expect(pendenteAtualizada.processadoEm).not.toBeNull();
+    });
+
+    it("não responde quando o interruptor global está desligado", async () => {
+      // Captura o valor original em vez de assumir `true`: o interruptor é
+      // uma feature editável pelo CRM nesta fatia -- restaurar um `true`
+      // fixo religaria em silêncio um bot que alguém tivesse desligado de
+      // propósito antes de rodar a suíte contra o banco de dev.
+      const original = await prisma.botConfig.findUniqueOrThrow({ where: { id: BOT_CONFIG_ID } });
+      await prisma.botConfig.update({ where: { id: BOT_CONFIG_ID }, data: { ativo: false } });
+      try {
+        const conversation = await criarConversation();
+        await criarMensagemEntrada(conversation.id, { texto: "bom dia" });
+
+        await processarTurno({ conversationId: conversation.id, seq: conversation.bufferSeq });
+
+        expect(enviarTextoMock).not.toHaveBeenCalled();
+      } finally {
+        await prisma.botConfig.update({ where: { id: BOT_CONFIG_ID }, data: { ativo: original.ativo } });
+      }
+    });
+
+    // O caso que motiva a mudança de tipo de retorno: pausar DEPOIS que o
+    // modelo já respondeu, mas antes do envio. A resposta gerada tem que ser
+    // jogada fora -- é dinheiro já gasto, e mandá-la seria falar por cima do
+    // humano.
+    it("descarta a resposta quando a IA é pausada durante a chamada ao modelo", async () => {
+      const conversation = await criarConversation();
+      const pendente = await criarMensagemEntrada(conversation.id, { texto: "quero saber o preço" });
+
+      gerarRespostaMock.mockImplementationOnce(async () => {
+        await prisma.conversation.update({
+          where: { id: conversation.id },
+          data: { iaAtiva: false, iaPausadaEm: new Date() },
+        });
+        return { mensagens: ["Resposta que não deve ser enviada"] };
+      });
+
+      await processarTurno({ conversationId: conversation.id, seq: conversation.bufferSeq });
+
+      expect(enviarTextoMock).not.toHaveBeenCalled();
+
+      // A outra metade da distinção que motivou trocar o retorno booleano por
+      // `MotivoAborto`: "ia-pausada" MARCA as pendentes (diferente de
+      // "lease-perdido", que não marca — ver o teste logo abaixo). Sem esta
+      // asserção, apagar `marcarPendentesComoProcessadas` deste ramo em
+      // `turno.ts` não quebraria nada aqui.
+      const pendenteAtualizada = await prisma.whatsappMessage.findUniqueOrThrow({
+        where: { id: pendente.id },
+      });
+      expect(pendenteAtualizada.processadoEm).not.toBeNull();
+    });
+
+    // A distinção que um booleano não consegue expressar: quem PERDEU o
+    // lease não pode marcar as pendentes -- quem assumiu o lease vai
+    // respondê-las.
+    it("perder o lease NÃO marca as pendentes como processadas", async () => {
+      const conversation = await criarConversation();
+      await criarMensagemEntrada(conversation.id, { texto: "oi" });
+
+      gerarRespostaMock.mockImplementationOnce(async () => {
+        await prisma.conversation.update({
+          where: { id: conversation.id },
+          data: { processandoAte: new Date(Date.now() + 60_000) }, // outro dono
+        });
+        return { mensagens: ["resposta órfã"] };
+      });
+
+      await processarTurno({ conversationId: conversation.id, seq: conversation.bufferSeq });
+
+      const pendentes = await prisma.whatsappMessage.findMany({
+        where: { conversationId: conversation.id, direcao: "ENTRADA", processadoEm: null },
+      });
+      expect(pendentes).toHaveLength(1);
+    });
+
+    it("monta o prompt a partir do banco, não de config/bot.ts", async () => {
+      const original = await prisma.botConfig.findUniqueOrThrow({ where: { id: BOT_CONFIG_ID } });
+      await prisma.botConfig.update({
+        where: { id: BOT_CONFIG_ID },
+        data: { personaNome: "Beatriz-do-teste" },
+      });
+
+      try {
+        const conversation = await criarConversation();
+        await criarMensagemEntrada(conversation.id, { texto: "oi" });
+        enviarTextoMock.mockResolvedValue({ idExterno: `${PREFIXO}saida-${conversation.id}` });
+
+        await processarTurno({ conversationId: conversation.id, seq: conversation.bufferSeq });
+
+        const [chamada] = gerarRespostaMock.mock.calls.at(-1)!;
+        expect(chamada.systemPrompt).toContain("Beatriz-do-teste");
+        // Asserte sobre a frase montada por `montarPromptSistema`
+        // ("Você é <nome>,"), não sobre a mera ausência do nome padrão
+        // ("Ana") no texto -- "Ana" tem três letras e aparece por acaso em
+        // qualquer regra ou FAQ que mencione um "Ana Paula" de exemplo, o
+        // que faria esta asserção falhar por um motivo que nada tem a ver
+        // com o que o teste prova (prompt vem do banco, não do arquivo).
+        expect(chamada.systemPrompt).not.toContain(`Você é ${botConfig.persona.nome},`);
+      } finally {
+        await prisma.botConfig.update({
+          where: { id: BOT_CONFIG_ID },
+          data: { personaNome: original.personaNome },
+        });
+      }
+    });
   });
 });
 

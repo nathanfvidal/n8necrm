@@ -32,4 +32,10 @@ describe("hasPermission", () => {
   it("VENDEDOR não pode ver dashboard de todos os vendedores", () => {
     expect(hasPermission("VENDEDOR", "ver_dashboard_geral")).toBe(false);
   });
+
+  it("só ADMIN configura o agente — a persona é da agência, não do cliente", () => {
+    expect(hasPermission("ADMIN", "configurar_agente")).toBe(true);
+    expect(hasPermission("GESTOR", "configurar_agente")).toBe(false);
+    expect(hasPermission("VENDEDOR", "configurar_agente")).toBe(false);
+  });
 });

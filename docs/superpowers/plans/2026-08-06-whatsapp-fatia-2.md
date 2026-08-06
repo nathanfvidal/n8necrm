@@ -40,6 +40,15 @@ Valem para **todas** as tarefas — não repetidas em cada uma:
 - **O banco de desenvolvimento é real e compartilhado.** Testes limpam apenas as linhas
   que eles próprios criaram.
 - **Commits em português**, no padrão `feat:` / `fix:` / `test:` / `docs:` já usado.
+- **`src/core` NÃO pode importar de `src/modules`** — regra de lint com erro
+  (`eslint.config.mjs`). Este projeto é clonado por cliente: `core` é
+  compartilhado por todos os forks, `modules` são funcionalidades opcionais. Um
+  import de core para modules quebra a possibilidade de desligar o módulo e de
+  aplicar correções de core entre forks. Tudo do WhatsApp — inclusive Server
+  Actions — mora em `src/modules/whatsapp/`.
+- **Rodar `npx eslint` nos arquivos tocados**, não só `vitest` e `tsc`. A regra
+  de fronteira acima só aparece no eslint; a Task 5 violou-a e passou por duas
+  verificações antes de alguém rodar o lint.
 
 ---
 
@@ -870,7 +879,7 @@ git commit -m "feat: servico de pausa e religamento da IA por conversa"
 
 **Arquivos:**
 - Modificar: `src/modules/whatsapp/agente.ts`
-- Criar: `src/core/whatsapp/actions.ts`
+- Criar: `src/modules/whatsapp/actions.ts`
 - Modificar: `tests/unit/whatsapp-agente.test.ts`
 
 **Interfaces:**
@@ -1007,7 +1016,7 @@ Esperado: PASSA (6 testes).
 - [ ] **Passo 5: Escrever as Server Actions**
 
 ```ts
-// src/core/whatsapp/actions.ts
+// src/modules/whatsapp/actions.ts
 "use server";
 
 import { revalidatePath } from "next/cache";
@@ -1052,7 +1061,7 @@ export async function religarIaAction(conversationId: string): Promise<void> {
 Executar: `npx tsc --noEmit`
 
 ```bash
-git add src/modules/whatsapp/agente.ts src/core/whatsapp/actions.ts tests/unit/whatsapp-agente.test.ts
+git add src/modules/whatsapp/agente.ts src/modules/whatsapp/actions.ts tests/unit/whatsapp-agente.test.ts
 git commit -m "feat: resposta humana pela inbox pausa a IA antes de enviar"
 ```
 
@@ -1083,7 +1092,7 @@ import { render, screen, cleanup } from "@testing-library/react";
 
 // Mesmo padrão de painel-nav.test.tsx: a action importa `agente.ts`, que tem
 // `import "server-only"` — fora do pipeline de build do Next isso lança.
-vi.mock("@/core/whatsapp/actions", () => ({
+vi.mock("@/modules/whatsapp/actions", () => ({
   responderConversaAction: vi.fn(),
 }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
@@ -1119,7 +1128,7 @@ Esperado: FALHA — componente não existe.
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 
-import { responderConversaAction } from "@/core/whatsapp/actions";
+import { responderConversaAction } from "@/modules/whatsapp/actions";
 import { Button } from "@/components/ui/button";
 
 /**
@@ -1138,16 +1147,22 @@ export function ConversaResponder({ conversationId }: { conversationId: string }
   const [enviando, iniciarEnvio] = useTransition();
   const router = useRouter();
 
+  // A action DEVOLVE resultado, não lança — `try/catch` aqui não funcionaria
+  // em produção, porque o Next redige erros não tratados de Server Action
+  // antes que cheguem ao cliente. O humano veria um texto genérico com um
+  // identificador, e "não enviou" ficaria indistinguível de "enviou e não
+  // gravou" — justamente a distinção de que depende a ordem de operações
+  // escolhida em `agente.ts`. Ver a correção I2 da Task 5.
   function enviar() {
     setErro(null);
     iniciarEnvio(async () => {
-      try {
-        await responderConversaAction(conversationId, texto);
-        setTexto("");
-        router.refresh();
-      } catch (e) {
-        setErro(e instanceof Error ? e.message : "Falha ao enviar a mensagem.");
+      const resultado = await responderConversaAction(conversationId, texto);
+      if (!resultado.ok) {
+        setErro(resultado.erro);
+        return;
       }
+      setTexto("");
+      router.refresh();
     });
   }
 
@@ -1187,7 +1202,7 @@ export function ConversaResponder({ conversationId }: { conversationId: string }
 import { useTransition } from "react";
 import { useRouter } from "next/navigation";
 
-import { pausarIaAction, religarIaAction } from "@/core/whatsapp/actions";
+import { pausarIaAction, religarIaAction } from "@/modules/whatsapp/actions";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { formatarDataHoraBR } from "@/lib/date";
@@ -1212,9 +1227,18 @@ export function ConversaEstadoIa({
   const [processando, iniciar] = useTransition();
   const router = useRouter();
 
+  const [erro, setErro] = useState<string | null>(null);
+
   function alternar() {
+    setErro(null);
     iniciar(async () => {
-      await (iaAtiva ? pausarIaAction(conversationId) : religarIaAction(conversationId));
+      const resultado = await (iaAtiva
+        ? pausarIaAction(conversationId)
+        : religarIaAction(conversationId));
+      if (!resultado.ok) {
+        setErro(resultado.erro);
+        return;
+      }
       router.refresh();
     });
   }

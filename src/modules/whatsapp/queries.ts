@@ -39,12 +39,16 @@ export type ConversaComUltimaMensagem = Awaited<ReturnType<typeof listarConversa
  * Busca uma conversa e todas as suas mensagens (mais antiga primeiro, ordem
  * de leitura natural de um thread) para a tela de detalhe. `null` quando o
  * id não existe — a página decide chamar `notFound()`.
+ *
+ * Inclui `iaPausadaPor` (Fatia 2, Task 6) para a tela mostrar QUEM pausou a
+ * IA, não só que ela está pausada — ver `ConversaEstadoIa`.
  */
 export async function buscarConversaComMensagens(id: string) {
   return prisma.conversation.findUnique({
     where: { id },
     include: {
       contact: { select: { id: true, nome: true } },
+      iaPausadaPor: { select: { id: true, nome: true } },
       mensagens: { orderBy: { criadoEm: "asc" } },
     },
   });
