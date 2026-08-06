@@ -28,6 +28,30 @@ export default defineConfig({
   testDir: "tests/e2e",
   fullyParallel: true,
   reporter: "list",
+  /**
+   * Limitado de propósito, e não pelo número de núcleos (o padrão do
+   * Playwright).
+   *
+   * Nasceu de uma restrição de banco: com o `DATABASE_URL` no pooler em
+   * *session mode* (15 conexões para tudo), a suíte em paralelo derrubava o
+   * servidor com `(EMAXCONNSESSION) max clients reached in session mode`, e
+   * os sintomas apareciam em testes sem relação nenhuma com a mudança sendo
+   * feita — um login "inválido" que era só lento demais. Caro de
+   * diagnosticar.
+   *
+   * O `DATABASE_URL` já migrou para *transaction mode*, então essa restrição
+   * específica acabou. O limite continua porque a suíte compartilha o MESMO
+   * Postgres de desenvolvimento com o app e com os testes unitários que tocam
+   * banco: manter a concorrência modesta é o que evita que uma execução de
+   * teste atrapalhe quem está usando o CRM na outra janela. A suíte inteira
+   * roda em ~30s assim.
+   */
+  workers: 3,
+  // Zera o contador de tentativas de login antes da suíte. Sem isto, rodar
+  // a suíte duas vezes dentro de 10 minutos faz a segunda esbarrar no limite
+  // de tentativas e falhar em testes que não têm relação com login — ver o
+  // comentário longo em tests/e2e/global-setup.ts.
+  globalSetup: "./tests/e2e/global-setup.ts",
   webServer: {
     command: "npm run build && npm run start",
     url: "http://localhost:3000",
