@@ -1,11 +1,35 @@
 import NextAuth from "next-auth";
 import Credentials from "next-auth/providers/credentials";
-import bcrypt from "bcryptjs";
 
-import { prisma } from "./prisma";
+import { autorizarCredenciais } from "@/core/auth/credenciais";
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
-  session: { strategy: "jwt" },
+  session: {
+    strategy: "jwt",
+    /**
+     * 8 horas em vez dos 30 dias que o Auth.js usa por padrão.
+     *
+     * A sessão é JWT: não existe registro no servidor para invalidar, então
+     * o único limite real de um cookie roubado é o relógio dentro dele. Com
+     * o padrão, um notebook esquecido aberto, um cookie copiado de um
+     * computador compartilhado da revenda ou um backup de navegador dava
+     * acesso ao CRM por um MÊS. Oito horas cobrem um dia de trabalho
+     * inteiro e transformam o mesmo vazamento em um problema de horas.
+     *
+     * Isto NÃO substitui a revogação por desativação de usuário — essa
+     * continua sendo feita a cada requisição por `usuarioAtual()`, que
+     * consulta `User.ativo` no banco. Os dois resolvem coisas diferentes:
+     * aqui é "faz tempo demais que essa sessão nasceu", lá é "esta pessoa
+     * não trabalha mais aqui".
+     */
+    maxAge: 8 * 60 * 60,
+    /**
+     * Enquanto a pessoa usa o sistema, o token é reemitido no máximo uma vez
+     * por hora — então quem está trabalhando não é deslogado no meio de um
+     * atendimento, e quem parou perde a sessão 8 horas depois do último uso.
+     */
+    updateAge: 60 * 60,
+  },
   pages: { signIn: "/login" },
   providers: [
     Credentials({
@@ -13,33 +37,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         email: { label: "E-mail", type: "email" },
         senha: { label: "Senha", type: "password" },
       },
-      authorize: async (credentials) => {
-        // `credentials` chega como `Record<string, unknown>` — Auth.js não
-        // valida o formato do corpo do POST antes de entregar aqui. Sem
-        // este `typeof`, um corpo como `{ email: ["a"], senha: {} }` (array
-        // ou objeto em vez de string) passava direto pelo `as string`, que
-        // é só uma anotação de tipo em tempo de compilação, sem checagem em
-        // runtime — `prisma.user.findUnique({ where: { email } })` recebe
-        // um valor de tipo errado e o Prisma lança, virando 500 num
-        // endpoint não autenticado (achado da revisão final de branch).
-        // Falha fechada com o mesmo `return null` genérico de credenciais
-        // ausentes/erradas — Auth.js já traduz `null` numa rejeição sem
-        // vazar qual parte do formato estava errada.
-        if (typeof credentials?.email !== "string" || typeof credentials?.senha !== "string") {
-          return null;
-        }
-        const email = credentials.email;
-        const senha = credentials.senha;
-        if (!email || !senha) return null;
-
-        const user = await prisma.user.findUnique({ where: { email } });
-        if (!user || !user.ativo) return null;
-
-        const senhaValida = await bcrypt.compare(senha, user.senhaHash);
-        if (!senhaValida) return null;
-
-        return { id: user.id, name: user.nome, email: user.email, role: user.papel };
-      },
+      authorize: autorizarCredenciais,
     }),
   ],
   callbacks: {

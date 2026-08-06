@@ -28,6 +28,28 @@ test("login com credenciais válidas leva ao painel autenticado", async ({ page 
   await expect(page.getByRole("link", { name: "Leads" })).toBeVisible();
 });
 
+test("o botão Sair encerra a sessão de verdade, não só troca de tela", async ({ page }) => {
+  // Antes desta correção não havia NENHUMA forma de sair pela interface: a
+  // sessão só terminava quando o cookie expirava (e expirava em 30 dias).
+  // Num computador compartilhado da revenda, isso é a próxima pessoa
+  // sentando na conta de quem saiu.
+  await page.goto("/login");
+  await page.getByLabel("E-mail").fill("admin@exemplo.com");
+  await page.getByLabel("Senha").fill("senha123");
+  await page.getByRole("button", { name: "Entrar" }).click();
+  await expect(page.getByRole("link", { name: "Dashboard" })).toBeVisible();
+
+  await page.getByRole("button", { name: "Sair" }).click();
+  await expect(page).toHaveURL(/\/login$/);
+
+  // O teste que importa: voltar para uma rota protegida DEPOIS de sair.
+  // Se o cookie sobrevivesse, o painel abriria de novo — "sair" seria só
+  // uma navegação, não uma revogação.
+  await page.goto("/");
+  await expect(page).toHaveURL(/\/login$/);
+  await expect(page.getByRole("link", { name: "Dashboard" })).toBeHidden();
+});
+
 test("credenciais inválidas permanecem em /login com mensagem de erro", async ({ page }) => {
   await page.goto("/login");
 

@@ -4,6 +4,7 @@ import { NextResponse } from "next/server";
 import { DuplicateMessageError } from "@vercel/queue";
 
 import { checarRateLimit } from "@/core/rate-limit/limiter";
+import { obterIpDaRequisicao } from "@/lib/ip";
 import { whatsappGateway } from "@/modules/whatsapp/gateway";
 import { ingerirMensagem } from "@/modules/whatsapp/ingest";
 import { publicarTurno } from "@/modules/whatsapp/fila";
@@ -76,7 +77,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ tok
     return NextResponse.json({ ok: false }, { status: 404 });
   }
 
-  const ip = obterIp(request);
+  const ip = obterIpDaRequisicao(request);
   // Fix round 1/5 (I2): 60/min era, na prática, um teto GLOBAL (todo
   // tráfego legítimo vem de um único IP — a instância Evolution), e a
   // Evolution manda todo tipo de evento por aqui, não só mensagem — um
@@ -145,28 +146,4 @@ function tokenValido(recebido: string, esperado: string): boolean {
   // de simplesmente ser rejeitado.
   if (bufferRecebido.length !== bufferEsperado.length) return false;
   return crypto.timingSafeEqual(bufferRecebido, bufferEsperado);
-}
-
-function obterIp(request: Request): string {
-  // Fix round 1/5, achado MENOR do revisor: `x-forwarded-for` é um header
-  // fornecido pelo CLIENTE (qualquer requisição pode mandar o seu próprio),
-  // então confiar nele para a CHAVE do rate limit deixa quem manda a
-  // requisição escolher sua própria chave — na prática, um jeito trivial de
-  // contornar o limite (mandar um `x-forwarded-for` diferente a cada
-  // requisição). `x-vercel-forwarded-for` é o header que a PRÓPRIA Vercel
-  // define na borda com o IP real do cliente — não pode ser forjado por
-  // quem faz a requisição (a plataforma sobrescreve, não concatena, o que
-  // vier de fora com esse nome). `x-real-ip` como fallback (outros proxies
-  // reversos usam esse nome) e `x-forwarded-for` só como último recurso —
-  // nesse último caso a chave ainda pode ser manipulada, mas isso já era
-  // verdade antes deste fix, e é estritamente melhor que assumir sempre o
-  // header não confiável primeiro.
-  const vercelIp = request.headers.get("x-vercel-forwarded-for");
-  if (vercelIp) return vercelIp.split(",")[0]!.trim();
-
-  const realIp = request.headers.get("x-real-ip");
-  if (realIp) return realIp.trim();
-
-  const encaminhado = request.headers.get("x-forwarded-for");
-  return encaminhado?.split(",")[0]?.trim() ?? "desconhecido";
 }
