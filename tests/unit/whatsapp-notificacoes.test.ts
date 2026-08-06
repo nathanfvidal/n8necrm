@@ -48,10 +48,10 @@ describe("aviso de conversa aguardando humano", () => {
     // é só um `conversationId` solto em JSON, mesmo formato de `NOVO_LEAD` —
     // ver `limparDemo` em prisma/seed-demo-limpar.ts para o mesmo problema
     // resolvido do mesmo jeito), então filtrar por `tipo` sozinho apagaria
-    // todo aviso desse tipo no banco compartilhado. Hoje isso é inofensivo
-    // porque nenhum código de produção chama `marcarAguardandoHumano` ainda —
-    // mas assim que a integração ligar essa função ao fluxo real de
-    // mensagens, rodar esta suíte contra o banco de dev apagaria avisos
+    // todo aviso desse tipo no banco compartilhado. Isto NÃO é hipotético:
+    // `turno.ts` e `agente.ts` já chamam `marcarAguardandoHumano` no fluxo
+    // real de mensagens (Fatia 2, Task 2) — rodar esta suíte contra o banco
+    // de dev com um `deleteMany` por `tipo` apagaria, agora, avisos
     // pendentes de conversas de clientes reais, e nada ligaria a causa
     // (rodar este teste) ao efeito (aviso sumido em outra tela).
     if (idsConversasDoTeste.length > 0) {
