@@ -1,9 +1,31 @@
 node_modules/
 .next/
-.env
-.env.local
 *.log
 .superpowers/
+
+# Variáveis de ambiente.
+#
+# Ignora TODO .env* e abre exceção só para o exemplo. Listar variantes uma a
+# uma (`.env`, `.env.local`) deixava de fora justamente os nomes que as
+# ferramentas criam sozinhas: `vercel env pull` escreve `.env.production`
+# com os segredos REAIS de produção, e o Next também lê
+# `.env.development`, `.env.test`, `.env.*.local`. Bastava um `git add -A`
+# depois de um `vercel env pull` para publicar tudo.
+.env*
+!.env.example
+
+# Os fluxos n8n em Bots/*.json SÃO versionados de propósito: eles são a fonte
+# do comportamento que `src/modules/whatsapp/` reimplementa em TypeScript
+# (ver o comentário de procedência em gateway/evolution.ts, que cita o
+# arquivo 01 pelo nome). Sem eles no repositório, esse comentário apontaria
+# para um arquivo que não existe em um clone novo, e ninguém conseguiria
+# conferir de onde veio a regra. São ~288 KB de JSON, varridos e livres de
+# credencial.
+#
+# O que fica de fora é só o checkout de OUTRO projeto que veio junto dentro
+# da pasta (26 MB, 259 arquivos de skills e worktrees) — não tem relação com
+# o CRM.
+/Bots/.claude/
 
 # next.js
 /out/

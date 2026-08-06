@@ -13,6 +13,43 @@ export default defineConfig({
     seed: "tsx prisma/seed.ts",
   },
   datasource: {
-    url: process.env.DATABASE_URL,
+    // Este arquivo é lido SÓ pelo CLI do Prisma (migrate, db push, studio,
+    // generate). A aplicação em runtime não passa por aqui: ela monta o
+    // próprio client em src/lib/prisma.ts a partir de `DATABASE_URL`.
+    //
+    // Por isso os dois usam conexões diferentes de propósito: a aplicação vai
+    // pelo pooler em transaction mode (porta 6543), e a migração precisa de
+    // uma conexão com SESSÃO (porta 5432), porque o motor de migração toma
+    // advisory lock e guarda estado entre comandos — coisas que o transaction
+    // mode não sustenta. Ver .env.example para o detalhe de cada URL.
+    url: urlDeMigracao(),
   },
 });
+
+/**
+ * Resolve a URL das migrações e avisa alto quando ela está errada.
+ *
+ * O aviso existe porque a falha silenciosa aqui é cruel: apontando as
+ * migrações para a porta 6543, `prisma migrate` não dá erro — ele PENDURA,
+ * sem imprimir nada. Quem estiver rodando conclui que o banco está lento, ou
+ * que a rede caiu, e perde bastante tempo antes de suspeitar da porta.
+ *
+ * O fallback para `DATABASE_URL` é mantido para não quebrar o `prisma
+ * generate` do `postinstall` em ambiente que não define `DIRECT_URL` (CI,
+ * build da Vercel) — generate não abre conexão nenhuma, então ali o valor é
+ * irrelevante.
+ */
+function urlDeMigracao(): string | undefined {
+  const url = process.env.DIRECT_URL ?? process.env.DATABASE_URL;
+
+  if (process.env.DIRECT_URL === undefined && url?.includes(":6543")) {
+    console.warn(
+      "\n[prisma] DIRECT_URL não definida e DATABASE_URL aponta para a porta 6543 " +
+        "(pooler em transaction mode).\n" +
+        "[prisma] Comandos de migração vão TRAVAR sem mensagem de erro.\n" +
+        "[prisma] Defina DIRECT_URL com a conexão de porta 5432 (session pooler) — ver .env.example.\n"
+    );
+  }
+
+  return url;
+}

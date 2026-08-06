@@ -20,7 +20,17 @@ export function LoginForm() {
     });
 
     if (!resultado || resultado.error) {
-      setErro("E-mail ou senha inválidos.");
+      // A mensagem padrão é genérica de propósito (não confirma se a conta
+      // existe). O caso do limite de tentativas é a exceção: dizer "senha
+      // inválida" a quem já foi bloqueado faz a pessoa tentar de novo sem
+      // parar, e não esconde nada de um atacante — ele já sabe que está
+      // sendo barrado, e o bloqueio é idêntico para e-mail que existe e
+      // e-mail inventado.
+      setErro(
+        resultado?.code === "muitas_tentativas"
+          ? "Muitas tentativas de login. Aguarde alguns minutos e tente de novo."
+          : "E-mail ou senha inválidos."
+      );
       return;
     }
 

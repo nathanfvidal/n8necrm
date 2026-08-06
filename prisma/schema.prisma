@@ -18,6 +18,35 @@ enum LeadChannel {
   MANUAL
 }
 
+// Fatia 1 do atendente de WhatsApp (ver plano em .superpowers/sdd/whatsapp-fatia-1).
+enum WhatsappDirecao {
+  ENTRADA
+  SAIDA
+}
+
+// CLIENTE só aparece em mensagens ENTRADA. IA e HUMANO só aparecem em SAIDA —
+// HUMANO não tem nenhum caminho de código que o grave ainda (Fatia 2, "o
+// humano assume"), mas o valor já existe no enum agora para não exigir uma
+// migração de enum quando essa fatia chegar.
+enum WhatsappAutor {
+  CLIENTE
+  IA
+  HUMANO
+}
+
+// Tipo de conteúdo da mensagem, como a Evolution reporta em `messageType`.
+// Só TEXTO é de fato respondido nesta fatia — os demais são registrados
+// (para o inbox mostrar que a mensagem chegou) e recebem uma resposta de
+// fallback única em vez de processamento real (ver turno.ts).
+enum WhatsappTipo {
+  TEXTO
+  AUDIO
+  IMAGEM
+  DOCUMENTO
+  STICKER
+  OUTRO
+}
+
 model User {
   id            String         @id @default(cuid())
   nome          String
@@ -34,12 +63,13 @@ model User {
 }
 
 model Contact {
-  id        String   @id @default(cuid())
-  nome      String
-  telefone  String   @unique
-  email     String?
-  criadoEm  DateTime @default(now())
-  leads     Lead[]
+  id            String         @id @default(cuid())
+  nome          String
+  telefone      String         @unique
+  email         String?
+  criadoEm      DateTime       @default(now())
+  leads         Lead[]
+  conversations Conversation[]
 }
 
 model PipelineStage {
@@ -71,6 +101,7 @@ model Lead {
   ultimaInteracaoEm  DateTime      @default(now())
   notes              LeadNote[]
   tasks              Task[]
+  conversations      Conversation[]
 
   @@index([stageId, responsavelId])
   @@index([criadoEm])
@@ -131,4 +162,77 @@ model RateLimit {
   chave        String   @id
   janelaInicio DateTime
   contagem     Int      @default(0)
+}
+
+/**
+ * Uma conversa de WhatsApp com um número (waId). `contactId`/`leadId` ficam
+ * nulos até alguém (Fatia 2) criar/associar um lead a partir dela — o
+ * atendimento por IA desta fatia não depende de nenhum dos dois existirem.
+ * `telefone` só é gravado quando `src/modules/whatsapp/telefone.ts` (a
+ * versão que NÃO lança de `normalizarTelefone`) reconhece o número como
+ * brasileiro; `waId` (o identificador bruto que a Evolution manda, sem o
+ * sufixo "@s.whatsapp.net") é sempre gravado, mesmo quando `telefone` fica
+ * nulo — ver a decisão "Telefone" no plano da Fatia 1.
+ *
+ * `bufferSeq` e `processandoAte` implementam o buffer de fragmentos + lease
+ * de processamento descritos no plano (§ "O problema central e sua
+ * solução"): `bufferSeq` é incrementado atomicamente a cada mensagem ENTRADA
+ * ingerida (ver ingest.ts) e comparado contra o `seq` do job de fila em
+ * turno.ts para saber se chegou mensagem mais nova desde que o job foi
+ * enfileirado; `processandoAte` é o lease em si (NULL = livre, timestamp no
+ * futuro = ocupado até lá), tomado com o mesmo idioma de UPDATE condicional
+ * atômico que `checarRateLimit` (core/rate-limit/limiter.ts) já usa.
+ */
+model Conversation {
+  id             String            @id @default(cuid())
+  waId           String            @unique
+  telefone       String?
+  contactId      String?
+  contact        Contact?          @relation(fields: [contactId], references: [id])
+  leadId         String?
+  lead           Lead?             @relation(fields: [leadId], references: [id])
+  nomeExibicao   String?
+  bufferSeq      Int               @default(0)
+  processandoAte DateTime?
+  criadoEm       DateTime          @default(now())
+  atualizadoEm   DateTime          @updatedAt
+  mensagens      WhatsappMessage[]
+
+  // turno.ts faz UPDATE ... WHERE "processandoAte" IS NULL OR "processandoAte" < now()
+  // a cada job de fila — sem índice, essa checagem varreria a tabela inteira
+  // conforme o número de conversas ativas cresce.
+  @@index([processandoAte])
+}
+
+/**
+ * Uma mensagem individual (recebida ou enviada) dentro de uma `Conversation`.
+ * `idExterno` é o id que a Evolution atribui à mensagem (`data.key.id` no
+ * payload do webhook) — é a chave de idempotência que faz uma redelivery do
+ * mesmo webhook (retry da própria Evolution, ou reenvio manual) não duplicar
+ * a mensagem no banco: `ingest.ts` trata a violação dessa constraint UNIQUE
+ * exatamente como `encontrarOuCriarContact` trata a corrida em
+ * `Contact.telefone` (core/leads/dedupe.ts) — "alguém já gravou isso,
+ * devolve sem duplicar" em vez de deixar o erro cru do Postgres subir.
+ *
+ * `processadoEm` marca quando esta mensagem ENTRADA foi incluída numa
+ * resposta gerada por `turno.ts` — mensagens SAIDA já nascem com
+ * `processadoEm` preenchido (não esperam processamento). É o que permite
+ * `turno.ts` buscar exatamente as mensagens ainda não respondidas a cada
+ * turno, mesmo quando várias chegaram fragmentadas antes do lease abrir.
+ */
+model WhatsappMessage {
+  id             String          @id @default(cuid())
+  conversationId String
+  conversation   Conversation    @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  idExterno      String          @unique
+  direcao        WhatsappDirecao
+  autor          WhatsappAutor
+  tipo           WhatsappTipo
+  texto          String?
+  processadoEm   DateTime?
+  criadoEm       DateTime        @default(now())
+
+  // turno.ts filtra por (conversationId, direcao=ENTRADA, processadoEm=null)
+  // a cada job — mesmo raciocínio do índice em Conversation.processandoAte.
+  @@index([conversationId, direcao, processadoEm])
 }

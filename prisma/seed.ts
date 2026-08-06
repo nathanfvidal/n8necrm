@@ -7,10 +7,18 @@
 // top-level.
 import "dotenv/config";
 
+import crypto from "node:crypto";
+
 import bcrypt from "bcryptjs";
 
 import { prisma } from "../src/lib/prisma";
 import { client } from "../config/client";
+
+// Id estável e legível (não um cuid gerado) — Fatia 1 do WhatsApp
+// (AuditLog.userId é FK obrigatória para User) precisa referenciar este
+// usuário por id fixo de dentro de src/modules/whatsapp/, sem depender de
+// buscar por e-mail a cada gravação de auditoria.
+export const WHATSAPP_SYSTEM_USER_ID = "system-whatsapp-bot";
 
 // Prisma 7 exige um driver adapter (ver node_modules/.prisma/client/index.d.ts:
 // "A driver adapter is **required**"). `new PrismaClient()` sem adapter não
@@ -107,6 +115,8 @@ export async function seed(): Promise<void> {
     create: { nome: "Vendedor Exemplo", email: "vendedor@exemplo.com", senhaHash, papel: "VENDEDOR" },
   });
 
+  await semearUsuarioSistemaWhatsapp();
+
   const primeiraEtapa = await prisma.pipelineStage.findFirstOrThrow({ orderBy: { ordem: "asc" } });
 
   const nomes = ["Carlos Silva", "Fernanda Lima", "João Pereira", "Marina Costa"];
@@ -196,6 +206,57 @@ async function confirmarInvarianteEhGanho(): Promise<void> {
         `Task 20 calcula a taxa de conversão a partir dessa flag — não é seguro continuar o seed assim.`
     );
   }
+}
+
+/**
+ * Semeia o "usuário sistema" que o atendente de WhatsApp (Fatia 1) usa como
+ * `userId` de `AuditLog` para ações que ele mesmo executa — a FK de
+ * `AuditLog.userId` é obrigatória (não aceita NULL), e não faz sentido
+ * atribuir uma resposta gerada por IA a um vendedor humano específico.
+ *
+ * `ativo: false` é a defesa real: `usuarioAtual()` (core/auth/session.ts)
+ * rejeita qualquer usuário com `ativo: false` a cada chamada, e o
+ * `Credentials.authorize()` do Auth.js (src/lib/auth.ts) também checa
+ * `ativo` no momento do login — então este usuário nunca consegue autenticar
+ * nem manter uma sessão, mesmo que alguém descubra o e-mail e tente a senha
+ * (que nem sequer é conhecida por ninguém: ver `senhaHash` abaixo). E-mail
+ * num TLD que não resolve (`.invalid`, reservado pela RFC 2606
+ * especificamente para isso) evita que "esqueci minha senha" ou qualquer
+ * fluxo futuro de e-mail transacional tente entregar algo a um endereço que
+ * poderia, por acidente, existir de verdade.
+ *
+ * A senha gravada é um hash de bytes aleatórios descartados na hora — nunca
+ * armazenados, nunca logados, nunca reutilizáveis por ninguém (nem por quem
+ * rodou o seed): só o hash bcrypt sobrevive, e um hash bcrypt não permite
+ * recuperar a senha original. Isso é deliberadamente diferente do padrão
+ * `SEED_PASSWORD`/"senha123" usado para `admin`/`vendedor` acima — aqueles
+ * dois são contas de demonstração, feitas para login real; esta não é.
+ *
+ * Upsert por `id` fixo (`WHATSAPP_SYSTEM_USER_ID`), não por `email` como o
+ * resto deste arquivo: o e-mail não muda entre execuções, mas não há
+ * necessidade de reler/comparar nada nele — o id fixo já garante
+ * idempotência, e mantém o `senhaHash` (que muda a cada execução, já que os
+ * bytes são novos toda vez) fora do caminho de update, evitando invalidar
+ * silenciosamente algo que dependesse dele permanecer estável entre
+ * execuções (nada depende hoje, mas não há motivo para reescrever à toa).
+ */
+async function semearUsuarioSistemaWhatsapp(): Promise<void> {
+  const existente = await prisma.user.findUnique({ where: { id: WHATSAPP_SYSTEM_USER_ID } });
+  if (existente) return;
+
+  const senhaAleatoriaDescartada = crypto.randomBytes(32).toString("hex");
+  const senhaHash = await bcrypt.hash(senhaAleatoriaDescartada, 10);
+
+  await prisma.user.create({
+    data: {
+      id: WHATSAPP_SYSTEM_USER_ID,
+      nome: "Atendente WhatsApp (sistema)",
+      email: "whatsapp-bot@sistema.invalid",
+      senhaHash,
+      papel: "ADMIN",
+      ativo: false,
+    },
+  });
 }
 
 // O Vitest define process.env.VITEST em todo processo de teste. Sem essa

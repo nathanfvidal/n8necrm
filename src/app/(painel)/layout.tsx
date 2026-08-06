@@ -81,7 +81,7 @@ export default async function PainelLayout({ children }: { children: React.React
 
   return (
     <div className="min-h-screen">
-      <PainelNav notificacoesNaoLidas={notificacoesNaoLidas} />
+      <PainelNav notificacoesNaoLidas={notificacoesNaoLidas} nomeUsuario={usuario.nome} />
       <main>{children}</main>
     </div>
   );

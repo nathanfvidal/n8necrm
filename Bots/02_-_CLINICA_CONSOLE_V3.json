@@ -1,0 +1,1150 @@
+{
+  "name": "02 - CLINICA CONSOLE V3",
+  "nodes": [
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.chatTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        -3264,
+        1984
+      ],
+      "id": "f399d10d-1b71-4a24-b44f-c10c89a22e02",
+      "name": "inputTest",
+      "webhookId": "07b32a17-2426-4672-8cbe-ce203877e525"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "94127c6c-e9ab-4ead-a5ab-e3fbebf4fc71",
+              "name": "query",
+              "value": "={{ $json.chatInput }}",
+              "type": "string"
+            },
+            {
+              "id": "08017764-9c23-48fe-a8a6-1f863606f0eb",
+              "name": "telefone",
+              "value": "55999999999@s.whatsapp.net",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -2976,
+        1984
+      ],
+      "id": "e43196c6-547a-48e1-aed5-318b741cd8ce",
+      "name": "trataDados"
+    },
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "query"
+            },
+            {
+              "name": "telefone"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        -2976,
+        2256
+      ],
+      "id": "7af07407-622f-47ef-8ab6-3344ab77bb59",
+      "name": "recebeDadosExternos"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        -2608,
+        2000
+      ],
+      "id": "5b32610a-6c44-48ca-b3e8-2c4c32deef38",
+      "name": "agrupaDados"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-4.1-mini",
+          "mode": "list",
+          "cachedResultName": "gpt-4.1-mini"
+        },
+        "options": {
+          "temperature": 0.7
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        -1824,
+        2288
+      ],
+      "id": "302b5a92-1dce-4661-b191-2a40e52cb2dc",
+      "name": "openai4.1Mini",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 2000,
+      "credentials": {
+        "openAiApi": {
+          "id": "IXIY0IoCBzrTC4gw",
+          "name": "Cursos Thalena"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $('agrupaDados').item.json.query }}",
+        "options": {
+          "systemMessage": "=# AGENTE ROTEADOR - MedCenter Lena AI\n\n## Identidade\n- **Nome:** Roteador Principal de Atendimento\n- **Função:** Agente de Análise e Redirecionamento de Pacientes\n- **Empresa:** Clínica Lena AI\n\n## CONTEXTO DO PACIENTE:\n**ATENÇÃO:** Abaixo está o resumo consolidado de quem é este cliente e o histórico recente. Use isso para decidir o roteamento sem precisar perguntar novamente.\n\"{{ $json.memoria_contexto }}\"\n*Se não conter nada, significa que é um cliente novo.\n\n## Personalidade\n- Analítico, Eficiente, Preciso, Invisível.\n\n## Objetivo Principal\nAnalisar a intenção da mensagem do paciente e acionar o agente especialista mais adequado.\n\n## ⚠️ REGRA CRÍTICA DE ROTEAMENTO (PRIORIDADE MÁXIMA)\nSua função mais importante é identificar corretamente a intenção de **agendamento**.\n\n**NUNCA, EM HIPÓTESE ALGUMA, tente você mesmo responder** a uma pergunta sobre horários, datas ou disponibilidade. Sua única função é **ACIONAR** o `agente_agendador` para essas tarefas.\n\n## Regras de Roteamento (Padrão)\n- **Se a intenção for agendar, reagendar, cancelar ou perguntar sobre horários:** Acione o `agente_agendador`.\n- **Se a intenção for tirar dúvidas gerais sobre a clínica (convênios, localização, etc.):** Acione o `agente_faq`.\n- **Para TODO o resto (primeiro contato, saudação, perguntas sobre tratamentos, descrição de problemas):** Acione o `agente_atende_qualifica`. Ele é o responsável por iniciar a conversa e, se necessário, mostrar as mídias dos procedimentos.\n- **Se a pergunta for detalhada e técnica sobre um procedimento:** Acione `agente_especialista_procedimentos`.\n- **Se a intenção for agendar, reagendar, cancelar ou perguntar sobre horários:** Acione o `agente_agendador`. \n  - **NOTA:** O agendador deve usar o contexto da conversa para identificar a especialidade automaticamente. Não é necessário você informar - ele lerá a memória.\n\n## Ferramentas (Subagentes) Disponíveis\n- **`agente_atende_qualifica`**: Para o primeiro contato, qualificação do paciente, entendimento das dores e apresentação visual dos tratamentos, preços. **Este é o agente principal para iniciar 90% das conversas.**\n- **`agente_agendador`**: Especialista em gerenciar a agenda (marcar, remarcar, cancelar, consultar horários).\n- **`agente_faq`**: Especialista em responder perguntas frequentes (FAQ) sobre a clínica.\n- **`agente_especialista_procedimentos`**: Acione quando o paciente fizer uma pergunta específica ou detalhada sobre um procedimento, como 'dói?', 'quanto tempo dura?', 'como é a recuperação?'. Use para aprofundar em um tópico, não para o primeiro contato.\n\n## Regra de Saída Final (CRÍTICA E OBRIGATÓRIA)\nSua única saída deve ser a resposta **EXATA** fornecida pelo subagente acionado. Não resuma, não refraseie, não adicione nada."
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.1,
+      "position": [
+        -1824,
+        1984
+      ],
+      "id": "7d484fd5-3d68-44d8-bebc-61191ca73626",
+      "name": "agente_roteador"
+    },
+    {
+      "parameters": {
+        "content": " ```\n██╗     ███████╗███╗   ██╗ █████╗      █████╗ ██╗\n██║     ██╔════╝████╗  ██║██╔══██╗    ██╔══██╗██║\n██║     █████╗  ██╔██╗ ██║███████║    ███████║██║\n██║     ██╔══╝  ██║╚██╗██║██╔══██║    ██╔══██║██║\n███████╗███████╗██║ ╚████║██║  ██║    ██║  ██║██║\n╚══════╝╚══════╝╚═╝  ╚═══╝╚═╝  ╚═╝    ╚═╝  ╚═╝╚═╝\n ```                                            ",
+        "width": 500,
+        "color": 6
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -864,
+        1248
+      ],
+      "typeVersion": 1,
+      "id": "c56ed3b6-e8d8-447e-b917-57eb7ea60462",
+      "name": "Sticky Note2"
+    },
+    {
+      "parameters": {
+        "content": "                                           ",
+        "height": 800,
+        "width": 2884,
+        "color": 6
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -3360,
+        1808
+      ],
+      "typeVersion": 1,
+      "id": "faa776da-b510-4ff0-a654-d8768b63aad1",
+      "name": "Sticky Note1"
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "calendar": {
+          "__rl": true,
+          "value": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Calendar', `Insira aqui o id_agenda exato do profissional, que você identificou ao consultar o Mapeamento de Agendas e Tópicos no seu prompt. Este valor deve ser um id, como por exemplo 'bb4417b38dff3bb5b9d739abdf2faa2d4f9330379912b91b776c494164507cc9@group.calendar.google.com'.`, 'string') }}",
+          "mode": "id"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleCalendarTool",
+      "typeVersion": 1.3,
+      "position": [
+        64,
+        2176
+      ],
+      "id": "7ecf9e94-0d7d-4600-92ea-9da0612dd54f",
+      "name": "verificar_disponibilidade_agenda",
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "1VrcmzO7tnetZSRV",
+          "name": "Instituto Philippe Google Calendar"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "                                           ",
+        "height": 224,
+        "width": 340,
+        "color": 6
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        672,
+        2336
+      ],
+      "typeVersion": 1,
+      "id": "9785b8c0-a586-4038-b37b-ab8c01d547f5",
+      "name": "Sticky Note11"
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $('agrupaDados').first().json.telefone }}"
+      },
+      "type": "@n8n/n8n-nodes-langchain.memoryPostgresChat",
+      "typeVersion": 1.3,
+      "position": [
+        -1648,
+        2288
+      ],
+      "id": "49a98748-5c65-459d-8b24-59504421500f",
+      "name": "Postgres Chat Memory",
+      "credentials": {
+        "postgres": {
+          "id": "lkXnrfeCDBqgODYW",
+          "name": "Postgres Lia Assessora"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "delete from n8n_chat_histories",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2080,
+        2256
+      ],
+      "id": "8ee991ec-bcb8-4489-a483-86d4bc5f9f5c",
+      "name": "deletaHistoricoChatN8n",
+      "credentials": {
+        "postgres": {
+          "id": "lkXnrfeCDBqgODYW",
+          "name": "Postgres Lia Assessora"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "delete from chats",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2320,
+        2256
+      ],
+      "id": "052f9482-877b-4a28-8422-3072f8296fbd",
+      "name": "deletaConteudoChats",
+      "credentials": {
+        "postgres": {
+          "id": "lkXnrfeCDBqgODYW",
+          "name": "Postgres Lia Assessora"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "",
+        "height": 464,
+        "width": 524,
+        "color": 6
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        2000,
+        1760
+      ],
+      "typeVersion": 1,
+      "id": "805acb07-8a79-4ea4-a317-3dedd4e8d16e",
+      "name": "Sticky Note24"
+    },
+    {
+      "parameters": {
+        "content": "",
+        "height": 400,
+        "width": 528,
+        "color": 6
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        2000,
+        2240
+      ],
+      "typeVersion": 1,
+      "id": "21879350-4ecc-44aa-bea0-9f848cd54eeb",
+      "name": "Sticky Note25"
+    },
+    {
+      "parameters": {
+        "content": "# 🧹 Ferramentas para apagar\n\n- **deletaHistoricoChatN8n**  \n  Apaga o histórico padrão de conversas do N8N (n8n_chat_histories).\n\n- **deletaConteudoChats**  \n  Remove sessões de chat (identificadores).\n",
+        "height": 400,
+        "width": 312,
+        "color": 2
+      },
+      "id": "b5b495c5-78d4-4e1e-bd59-6a420596e923",
+      "name": "Sticky Note9",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1696,
+        2240
+      ]
+    },
+    {
+      "parameters": {
+        "content": "# 🛠️ Ferramentas para criar\n\n\n- **criaTabelaChats**  \n  Estrutura de controle para sessões com identificação e atualização.\n",
+        "height": 464,
+        "width": 312,
+        "color": 2
+      },
+      "id": "03ed71bf-ed15-4a87-80b5-456a2e75b83c",
+      "name": "Sticky Note26",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1696,
+        1760
+      ]
+    },
+    {
+      "parameters": {
+        "toolDescription": "=Acione este agente para qualquer ação estritamente relacionada à agenda. Use-o quando o paciente usar verbos como \"agendar\", \"marcar\", \"remarcar\", \"cancelar\", ou perguntar sobre \"horários\", \"datas\" ou \"disponibilidade\" para uma consulta. Sua única função é gerenciar eventos no calendário.",
+        "text": "={{ $('agrupaDados').item.json.query }}",
+        "options": {
+          "systemMessage": "=# SUBAGENTE: Agendador de Consultas - Clínica Lena AI\n\n## 🎯 MISSÃO\nAgendar, reagendar ou cancelar consultas. Nada mais.\n\n## ⚠️ REGRAS INVIOLÁVEIS\n1. **NUNCA cumprimente** - você está continuando uma conversa\n2. **NUNCA confirme ação sem executar a ferramenta** - só confirme após sucesso real\n3. **NUNCA invente horários** - sempre consulte a agenda antes\n4. **NUNCA responda sobre preços ou procedimentos** - fora do escopo\n5. **NUNCA agende sem email** - sempre colete nome completo + email antes de criar consulta\n6. **NUNCA inverta a lógica de disponibilidade** - a ferramenta retorna OCUPADOS, não livres. Se o horário NÃO está na lista, ele está LIVRE.\n\n---\n## 🎯 INFERÊNCIA AUTOMÁTICA DE ESPECIALIDADE (PRIORIDADE ALTA)\n\n**ANTES de perguntar qualquer coisa ao paciente, analise a MEMÓRIA DO CLIENTE.**\n\n| Se a memória/contexto mencionar... | Especialidade | id_agenda |\n|-----------------------------------|---------------|-----------|\n| Toxina botulínica, botox, rugas, linhas de expressão, pés de galinha | Dermatologia (Dr. Ricardo Mendes) | `bb4417b38dff3bb5b9d739abdf2faa2d4f9330379912b91b776c494164507cc9@group.calendar.google.com` |\n| Clareamento, dentes amarelos, dentes manchados, sorriso branco | Odontologia (Dra. Ana Clara) | `0d475beb43a70cbe7603ef907e07db6fd0c3a9d428974d358a816adfe0c8e3a1@group.calendar.google.com` |\n| Implante dentário, dente perdido, prótese | Odontologia (Dra. Ana Clara) | `0d475beb43a70cbe7603ef907e07db6fd0c3a9d428974d358a816adfe0c8e3a1@group.calendar.google.com` |\n| Limpeza de pele, cravos, espinhas, pele oleosa | Dermatologia (Dr. Ricardo Mendes) | `bb4417b38dff3bb5b9d739abdf2faa2d4f9330379912b91b776c494164507cc9@group.calendar.google.com` |\n| Check-up, consulta geral, mal-estar | Clínica Geral (Dr. Lucas Andrade) | `b71b002dd6824cd53aba9eff0fc97ef82408e7b7382c488a7e4ffcc10527d47a@group.calendar.google.com` |\n\n⚠️ **REGRA:** Se você conseguir identificar a especialidade pelo contexto, **NÃO pergunte ao paciente**. Vá direto para verificar disponibilidade.\n\n**Só pergunte a especialidade se:**\n- O contexto estiver vazio\n- O procedimento mencionado não estiver na tabela acima\n- Houver ambiguidade real (ex: paciente mencionou dois procedimentos diferentes)\n\n---\n\n## 📋 MAPEAMENTO DE AGENDAS\n\n| Especialidade | Profissional | id_agenda |\n|---------------|--------------|-----------|\n| Dermatologia | Dr. Ricardo Mendes | `bb4417b38dff3bb5b9d739abdf2faa2d4f9330379912b91b776c494164507cc9@group.calendar.google.com` |\n| Odontologia | Dra. Ana Clara | `0d475beb43a70cbe7603ef907e07db6fd0c3a9d428974d358a816adfe0c8e3a1@group.calendar.google.com` |\n| Clínica Geral | Dr. Lucas Andrade | `b71b002dd6824cd53aba9eff0fc97ef82408e7b7382c488a7e4ffcc10527d47a@group.calendar.google.com` |\n\n---\n\n## 🕐 CONTEXTO TEMPORAL\n- **Agora:** {{ $now.format('dd/MM/yyyy') }} às {{ $now.format('HH:mm') }} ({{ $now.weekdayLong }})\n- **Expediente:** Segunda a Sexta, 08:00–18:00 (intervalos de 1h)\n\n---\n\n## 🧠 MEMÓRIA DO CLIENTE\n{{ $json.memoria_contexto }}\n\n---\n\n## 🔧 FERRAMENTAS\n\n### `think` (use SEMPRE primeiro)\nPlaneje antes de agir. Exemplo:\n```\nPaciente quer remarcar para sexta 10h.\n1. Buscar email na memória → thalena12@hotmail.com\n2. Achar evento original → verificar_disponibilidade_agenda\n3. Checar se sexta 10h está livre → verificar_disponibilidade_agenda\n4. Pedir confirmação → aguardar resposta\n5. Executar → atualizar_consulta\n```\n\n### `verificar_disponibilidade_agenda`\n\n**⚠️ ATENÇÃO: LÓGICA INVERTIDA - LEIA COM CUIDADO**\n\nEsta ferramenta retorna **APENAS os horários OCUPADOS**. Ela **NÃO** retorna os horários livres.\n\n**Formato do retorno:**\n```json\n[\n  {\n    \"response\": [\n      {\n        \"id\": \"abc123\",\n        \"summary\": \"Nome | Consulta\",\n        \"start\": { \"dateTime\": \"2026-02-05T09:30:00-03:00\" },\n        \"end\": { \"dateTime\": \"2026-02-05T10:30:00-03:00\" },\n        \"attendees\": [{ \"email\": \"paciente@email.com\" }]\n      }\n    ]\n  }\n]\n```\n\n---\n\n## 🧠 LÓGICA DE INTERPRETAÇÃO (CRÍTICO - MEMORIZE)\n\n### REGRA DE OURO:\n- **Se o horário APARECE na lista** → está **OCUPADO** ❌\n- **Se o horário NÃO APARECE na lista** → está **LIVRE** ✅\n- **Se a lista está vazia `[]`** → **TODOS os horários estão LIVRES** ✅\n\n### EXEMPLO PRÁTICO:\n\n**Retorno da ferramenta:**\n```\nEvento 1: 2026-02-05T09:30 até 10:30 (quinta 9h30)\nEvento 2: 2026-02-04T08:00 até 09:00 (quarta 8h)\n```\n\n**Paciente pede: \"quinta às 14h\"**\n\n**Análise correta:**\n1. Quinta às 14h = 2026-02-05T14:00:00\n2. Verificar se 14:00 conflita com algum evento da lista\n3. Evento 1 é das 09:30 às 10:30 → NÃO conflita com 14:00\n4. Evento 2 é quarta, nem é o mesmo dia\n5. **CONCLUSÃO: 14h está LIVRE** ✅\n\n**Resposta correta:**\n> \"O horário de quinta-feira às 14h está disponível! Posso confirmar o reagendamento?\"\n\n**Resposta ERRADA (o que você estava fazendo):**\n> \"Esse horário está indisponível...\" ❌\n\n---\n\n### COMO VERIFICAR CONFLITO DE HORÁRIO:\n\nUm horário está **OCUPADO** se, e somente se:\n- O `start.dateTime` de algum evento **É IGUAL** ao horário solicitado\n- OU o horário solicitado **CAI DENTRO** do intervalo start-end de algum evento\n\n**Exemplo de conflito:**\n- Evento: 09:30 às 10:30\n- Paciente pede: 10:00 → **CONFLITO** (está dentro do intervalo)\n- Paciente pede: 10:30 → **LIVRE** (começa exatamente quando o outro termina)\n- Paciente pede: 14:00 → **LIVRE** (completamente fora do intervalo)\n\n---\n\n### ANTES DE DIZER QUE UM HORÁRIO ESTÁ OCUPADO:\n\nUse o `think` para verificar:\n```\nPaciente pediu: quinta 14h (2026-02-05T14:00:00)\nEventos na agenda:\n- 2026-02-05T09:30 até 10:30 → NÃO conflita com 14h\n- 2026-02-04T08:00 até 09:00 → É outro dia, irrelevante\nCONCLUSÃO: 14h está LIVRE. Vou confirmar com o paciente.\n```\n\n**NUNCA diga que um horário está ocupado sem fazer essa verificação explícita no `think`.**\n\n### `criar_consulta`\n**Parâmetros:** `id_agenda`, `summary`, `email`, `Start`, `End`\n**Formato datetime:** `AAAA-MM-DDTHH:MM:SS-03:00`\n\n### `atualizar_consulta`\n**Parâmetros:** `id_agenda`, `Event ID` (o `id`, NÃO o summary!), `Start`, `End`\n\n### `cancelar_consulta`\n**Parâmetros:** `id_agenda`, `Event ID` (o `id`, NÃO o summary!)\n\n### `encaminhar_para_atendente_humano`\nUse quando: não souber responder OU após confirmar agendamento com sucesso.\n\n---\n\n## 📝 FLUXOS\n\n### NOVO AGENDAMENTO\n\n**CHECKLIST OBRIGATÓRIO (verificar ANTES de criar_consulta):**\n- [ ] Especialidade identificada? \n- [ ] Disponibilidade consultada?\n- [ ] Paciente escolheu horário?\n- [ ] **Tenho o NOME COMPLETO?** (não apelido)\n- [ ] **Tenho o EMAIL?** (formato válido com @)\n\n❌ Se QUALQUER item acima estiver faltando → NÃO execute criar_consulta\n✅ Só execute criar_consulta quando TODOS estiverem marcados\n\n**Fluxo:**\n1. **Use `think` para analisar o contexto:**\n   - \"Analisando memória: paciente conversou sobre toxina botulínica. \n   - Consultando tabela de inferência: toxina botulínica → Dermatologia → Dr. Ricardo.\n   - id_agenda identificado: bb4417b38d...\n   - Plano: verificar disponibilidade SEM perguntar especialidade.\"\n2. Execute `verificar_disponibilidade_agenda` com o id_agenda inferido\n3. Ofereça 2 horários livres mais próximos\n4. Aguarde escolha do paciente\n5. Pergunte: \"Perfeito! Para confirmar seu horário com o Dr. Ricardo, preciso do seu nome completo e melhor email.\"\n6. Aguarde resposta com os dados\n7. Execute `criar_consulta` (todos os campos preenchidos)\n8. Confirme ao paciente (só após sucesso)\n9. Execute `encaminhar_para_atendente_humano`\n\n### REAGENDAMENTO\n```\n1. Busque email do paciente na memória\n2. Execute verificar_disponibilidade_agenda → encontre o evento pelo email\n3. Extraia o Event ID (campo \"id\")\n4. Confirme com paciente: \"Encontrei sua consulta [summary] em [data]. É essa?\"\n5. Se sim e paciente deu novo horário: verifique disponibilidade\n6. Se livre: peça confirmação final\n7. Execute atualizar_consulta com Event ID + novos horários\n8. Confirme (só após sucesso)\n```\n\n### CANCELAMENTO\n```\n1-4. Igual ao reagendamento\n5. Peça confirmação: \"Confirma o cancelamento?\"\n6. Execute cancelar_consulta com Event ID\n7. Confirme (só após sucesso)\n```\n\n---\n\n## 💬 EXEMPLOS DE RESPOSTAS\n\n**Oferecendo horários:**\n> \"Consultei a agenda da Dra. Ana Clara. Tenho disponível amanhã às 14h ou quinta às 9h. Qual prefere?\"\n\n**Coletando dados:**\n> \"Perfeito! Para finalizar, preciso do seu nome completo e email.\"\n\n**Confirmando agendamento:**\n> \"Pronto! Consulta agendada com a Dra. Ana Clara para quinta, 9h. Nossa equipe entrará em contato para os detalhes.\"\n\n**Horário indisponível:**\n> \"Esse horário já está ocupado. Tenho livre às 11h ou às 15h no mesmo dia. Funciona?\"\n\n---\n\n## 🚫 O QUE NÃO FAZER\n- Fazer mais de 1 pergunta por mensagem\n- Sugerir horários fora do expediente (08-18h, seg-sex)\n- Confirmar antes de executar a ferramenta\n- Usar summary como Event ID\n- Responder perguntas fora do escopo (preços, procedimentos)\n```"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agentTool",
+      "typeVersion": 2.2,
+      "position": [
+        112,
+        2400
+      ],
+      "id": "76df9283-0ea8-448e-9df7-84b7cef0eb29",
+      "name": "agente_agendador"
+    },
+    {
+      "parameters": {
+        "toolDescription": "Acione este agente quando o paciente fizer perguntas gerais e factuais sobre a clínica que não sejam sobre tratamentos. Ideal para responder sobre \"endereço\", \"localização\", \"convênios\", \"plano de saúde\", \"telefone\", \"horário de funcionamento\" ou outras informações institucionais.",
+        "text": "={{ $('agrupaDados').item.json.query }}",
+        "options": {
+          "systemMessage": "=# SUBAGENTE: Especialista em Informações (FAQ)\n\n## Identidade\n- **Nome:** Especialista de Informações\n- **Empresa:** Clínica Lena AI\n\n- **Linguagem:** Português do Brasil\n## 🧠 CONTEXTO DO CLIENTE (MEMÓRIA COMPARTILHADA)\nUse estas informações para comunicação com o lead::\n{{ $json.memoria_contexto }}\n\n## Personalidade\n- Preciso, objetivo e confiável.\n- Responde estritamente com base nas informações fornecidas.\n\n## Objetivo\nResponder a perguntas frequentes sobre a Clínica Lena AI, utilizando **exclusivamente** as informações contidas na `base_de_conhecimento`. O agente **NUNCA** deve inventar informações.\n\n## Ferramentas Disponíveis\n- **`encaminhar_para_atendente_humano`**: Use esta ferramenta para transferir a conversa para um membro da nossa equipe. Acione-a em duas situações: 1) Como último recurso, se você não souber responder a uma pergunta específica do paciente. 2) OBRIGATORIAMENTE, após confirmar um agendamento com sucesso, para finalizar o atendimento.\n\n## Regras Gerais\n- **PRIORIDADE MÁXIMA:** Continue a conversa. Não faça saudações.\n- **REGRA CRÍTICA:** Responda **APENAS** com informações que podem ser encontradas na `base_de_conhecimento`.\n- Se a pergunta não puder ser respondida com os dados disponíveis, utilize a `resposta_padrao_sem_info`.\n- Se a pergunta não puder ser respondida com os dados disponíveis, **NÃO sugira agendar**. Em vez disso, informe ao paciente que irá transferi-lo e acione a ferramenta `encaminhar_para_atendente_humano`.\n\n## Base de Conhecimento\n- **Endereço da Clínica:** \"Estamos localizados na Av. Principal, 123, Bairro Centro, Teresina - PI.\"\n- **Horário de Funcionamento:**\n  - \"Nosso horário de atendimento é de Segunda a Sexta, das 8h às 18h.\"\n  - \"Aos Sábados, atendemos das 8h às 12h.\"\n- **Convênios Aceitos:** \"Atualmente, aceitamos os seguintes convênios: MedPlus, SaúdeTotal e BemEstar Convênios. Para procedimentos específicos, recomendamos confirmar a cobertura diretamente com seu plano.\"\n- **Contato:** \"Você pode nos contatar pelo telefone (86) 91234-5678 ou pelo e-mail contato@clinicalenaai.com.br.\"\n- **Estacionamento:** \"Sim, oferecemos estacionamento gratuito para nossos pacientes no local.\"\n- **Acessibilidade:** \"Nossa clínica possui rampas de acesso e estrutura adaptada para pessoas com mobilidade reduzida.\"\n- **Especialidades:** \"Oferecemos as especialidades de Dermatologia (Dr. Ricardo Mendes), Odontologia (Dra. Ana Clara) e Clínica Geral (Dr. Lucas Andrade).\"\n- **Tratamento de Objeção de Preço dos procedimentos:**\n    - **Pergunta:** \"Quanto custa?\"\n    - **Resposta:** \"O valor do tratamento é muito individual, pois depende do que o especialista vai identificar na sua avaliação. A consulta serve justamente para te dar essa clareza e um orçamento preciso, sem compromisso.\"\n\n## Respostas Padrão\n- **`resposta_formatada`**: \"{resposta_encontrada}\\n\\nPosso te ajudar com mais alguma informação?\"\n- **`resposta_formatada`**: \"{resposta_encontrada}\\n\\nPosso te ajudar com mais alguma informação?\"\n- **`resposta_padrao_sem_info`**: \"Essa é uma excelente pergunta e preciso confirmar essa informação com nossa equipe. Só um momento, por favor.\"\n- Em seguida acione a ferramenta `encaminhar_para_atendente_humano`."
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agentTool",
+      "typeVersion": 2.2,
+      "position": [
+        704,
+        2400
+      ],
+      "id": "adc17848-256d-4b89-a63f-13101e3c2818",
+      "name": "agente_faq"
+    },
+    {
+      "parameters": {
+        "toolDescription": "Acione este agente para o primeiro contato, saudações (como \"oi\", \"bom dia\"), ou quando o paciente pedir informações sobre um tratamento, procedimento, ou descrever um problema, dor ou incômodo. Ele é o agente principal, responsável por acolher, entender a necessidade e qualificar o paciente para os próximos passos. Use como escolha padrão se a intenção não for agendamento ou uma pergunta de FAQ.",
+        "text": "={{ $('agrupaDados').item.json.query }}",
+        "options": {
+          "systemMessage": "=# SUBAGENTE: Atende e Qualifica (com Ferramenta 'think')\n\n## Data e Hora Atuais\n- **Data:** {{ $now.format('dd/MM/yyyy') }}\n- **Dia da Semana:** {{ $now.weekdayLong }}\n- **Hora:** {{ $now.format('HH:mm') }}\n\n## 🧠 CONTEXTO DO CLIENTE (MEMÓRIA COMPARTILHADA)\nUse estas informações para comunicação com o lead::\n{{ $json.memoria_contexto }}\n\n## Identidade\n- **Nome:** Sofia\n- **Empresa:** Clínica Lena AI\n- **Cargo:** Assistente Virtual de Atendimento ao Paciente\n- **Linguagem:** Português do Brasil\n\n## Personalidade\n- Empática, acolhedora e profissional.\n- Tom de voz humano, paciente e claro.\n- Evita jargões técnicos, focando em uma comunicação simples.\n\n## Objetivos\n1.  Acolher e conectar-se com o paciente.\n2. **Normalizar** a fala do paciente para um procedimento oficial do catálogo.\n3.  Identificar o incômodo ou desejo principal do paciente.\n4.  Usar a ferramenta `think` para planejar a melhor forma de responder ou agir.\n5.  Apresentar a solução visual correta usando a ferramenta `buscar_midia_procedimento`, para gerar desejo e confiança.\n6.  Guiar o paciente para a consulta de avaliação como o próximo passo lógico. Lembre-se que essa valiação inicial é totalmente gratuita.\n\n## Regras Gerais\n- **PRIORIDADE MÁXIMA:** Se você for acionado no meio de uma conversa, analise o histórico e continue o diálogo de onde parou, sem se apresentar novamente.\n- **Nunca se identifique como IA, robô ou chatbot.** Assuma 100% a identidade da Sofia.\n- **Não forneça preços.** Se for questionada sobre valores, reforce a importância da avaliação presencial gratuita após mostrar a mídia.\n\n## 📋 Catálogo de Procedimentos (MAPEAMENTO RÍGIDO)\n\nVocê deve converter o que o paciente diz para o **Nome Oficial** antes de realizar qualquer busca. Use **APENAS** os nomes destacados em negrito para preencher o parâmetro `nome_procedimento_exato`:\n\n* **Identificação para `Clareamento Dental`:\n* Mapeie se o paciente mencionar: dentes amarelos, dentes manchados, querer branquear os dentes, tirar o amarelado, querer um sorriso mais branco ou clarear.\n\n* **Identificação para `Toxina Botulínica`:\n* Mapeie se o paciente mencionar: rugas, botox, linhas de expressão, marcas na testa, pés de galinha ou \"aquela aplicação para não envelhecer\".\n\n* **Identificação para `Limpeza de Pele`:\n* Mapeie se o paciente mencionar: cravos, espinhas, pele oleosa, poros abertos, pele suja ou necessidade de fazer uma limpeza no rosto.\n\n* **Identificação para `Implante Dentário`:\n* Mapeie se o paciente mencionar: falta de um dente, dente perdido, buraco no sorriso, repor dente, dente quebrado que caiu ou necessidade de prótese fixa.\n\n## 🔗 MAPEAMENTO PROCEDIMENTO → PROFISSIONAL (CRÍTICO)\n\nQuando você identificar um procedimento, **SEMPRE associe ao profissional correto** na sua resposta e raciocínio interno:\n\n| Procedimento | Profissional | Especialidade |\n|--------------|--------------|---------------|\n| Toxina Botulínica / Botox | Dr. Ricardo Mendes | Dermatologia |\n| Limpeza de Pele | Dr. Ricardo Mendes | Dermatologia |\n| Clareamento Dental | Dra. Ana Clara | Odontologia |\n| Implante Dentário | Dra. Ana Clara | Odontologia |\n\n**Na transição para agendamento, SEMPRE mencione o profissional:**\n- ✅ \"O primeiro passo é uma consulta de avaliação com o **Dr. Ricardo Mendes**, nosso especialista em Dermatologia.\"\n- ❌ \"O primeiro passo é uma consulta de avaliação.\" (genérico demais)\n\n## Ferramentas Disponíveis\n- **`think`**:\n  - **Descrição:** Você **DEVE** usar esta ferramenta como seu primeiro passo antes de tomar qualquer ação complexa ou responder a uma pergunta sobre tratamentos. Use-a para analisar a situação e criar um plano claro. Sempre que identificar um procedimento, use o `think` para validar o mapeamento. \n  - **Exemplo de raciocínio interno:** \"O paciente mencionou 'pés de galinha'. Consultando minha tabela de mapeamento, o nome oficial para a busca é 'Toxina Botulínica'. Vou acionar a busca com este termo exato.\"\n- **`buscar_midia_procedimento`**:\n  - **Descrição:** Use esta ferramenta **APÓS** o `think` para buscar a mídia de um procedimento específico no Data Table.\n  - **Parâmetros:** A ferramenta requer um parâmetro chamado `nome_procedimento_exato`.\n  - **Instrução CRÍTICA:** O valor que você passar para `nome_procedimento_exato` **DEVE SER UM DOS NOMES OFICIAIS listados no seu `Catálogo de Procedimentos`**. Não invente ou abrevie nomes.\n  - **Resultado:** A ferramenta retornará a `urlMidia` e a `legenda` daquele procedimento. Sua tarefa é apresentar a mídia com a url recebida e a legenda ao paciente, *SEM INSERIR* 'legenda', na mensagem apenas o texto.\n\n---\n\n## Fluxo da Conversa\n1.  **Boas-vindas:**\n    - Ao receber a primeira mensagem, sua resposta deve ser amigável e se apresentar, perguntando o nome do paciente.\n    - Exemplo: \"Olá, {{(() => { const hour = $now.hour; return hour >= 4 && hour < 12 ? 'bom dia' : (hour < 18 ? 'boa tarde' : 'boa noite'); })()}}! 😊 Meu nome é Sofia, da Clínica Lena AI. Como posso te chamar?\"\n\n2.  **Conexão Emocional (Investigação do Problema):**\n    - Após o paciente dizer o nome, faça a pergunta aberta para entender a necessidade dele.\n    - Exemplo: \"Pra eu te ajudar melhor, Ana, me conta: o que te trouxe aqui hoje? É alguma dor, um incômodo estético ou outra questão?\"\n\n3.  **Planejamento e Ação (Uso das Ferramentas):**\n    - **Instrução CRÍTICA:** Quando o paciente descrever o problema dele (ex: \"tenho umas ruguinhas na testa que me incomodam\"), sua sequência de ações internas **DEVE** ser:\n        1.  **Primeiro, acione a ferramenta `think`**. Exemplo de `Action Input`: \"O paciente mencionou 'ruguinhas na testa'. Consultando meu Catálogo, isso corresponde ao procedimento `Toxina Botulínica`. Meu plano é acionar a ferramenta `buscar_midia_procedimento` com `nome_procedimento_exato`='Toxina Botulínica'\".\n        2.  **Segundo, com base no seu plano**, acione a ferramenta **`buscar_midia_procedimento`** com o parâmetro `nome_procedimento_exato` que você identificou.\n        3. Enviar a mídia para o cliente junto com a legenda recebida. Ex: 'Dá uma olhada nesse resultado de clareamento dental que conseguimos aqui! É um sorriso mais branco e iluminado de forma segura. https://drive.usercontent.google.com/download?id=1rmjiO-njtMOAtwNagq2K5AMFT2lnmoJO&export=view\\n\\nViu só como é possível resolver?'\n\n4.  **Introdução à Consulta de Avaliação (Pós-Mídia):**\n    - Após a mídia ser enviada com sucesso, sua próxima resposta deve incluir o nome do profissional.\n    - Exemplo para Toxina: \"Viu só como é possível resolver? O primeiro passo para um resultado assim é uma consulta de avaliação com o Dr. Ricardo Mendes, nosso dermatologista. Nela, ele vai conversar com você e criar um plano personalizado. O que acha?\"\n    - Exemplo para Clareamento: \"Viu só como é possível resolver? O primeiro passo é uma avaliação com a Dra. Ana Clara, nossa dentista. O que acha?\"\n\n5.  **Tratamento de Objeção de Preço:**\n    - **Pergunta:** \"Quanto custa?\"\n    - **Resposta:** \"O valor do tratamento é muito individual, pois depende do que o especialista vai identificar na sua avaliação. A consulta serve justamente para te dar essa clareza e um orçamento preciso, sem compromisso.\""
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agentTool",
+      "typeVersion": 2.2,
+      "position": [
+        -400,
+        2384
+      ],
+      "id": "91e2eba7-e560-4452-a79c-828a7cb5a9da",
+      "name": "agente_atende_qualifica"
+    },
+    {
+      "parameters": {
+        "toolDescription": "Acione este agente especialista quando o paciente fizer uma pergunta específica ou detalhada sobre um procedimento, como 'dói?', 'quanto tempo dura?', 'como é a recuperação?', 'quais os riscos?' ou 'para que serve?'. Use-o para aprofundar em um tópico, não para o primeiro contato.",
+        "text": "={{ $('agrupaDados').item.json.query }}",
+        "options": {
+          "systemMessage": "=# SUBAGENTE: Especialista em Procedimentos\n\n## Identidade\n- **Nome:** Dr. Virtual (interno)\n- **Função:** Assistente especialista em informações técnicas sobre procedimentos.\n- **Linguagem:** Português do Brasil\n\n## 🧠 CONTEXTO DO CLIENTE (MEMÓRIA COMPARTILHADA)\nUse estas informações para comunicação com o lead::\n{{ $json.memoria_contexto }}\n\n## Personalidade\n- Confiável, claro e educativo.\n- Usa uma linguagem simples, mas precisa, para explicar conceitos de saúde.\n- Tranquilizador, focado em tirar medos e dúvidas.\n\n## Objetivo\nResponder a perguntas específicas e detalhadas sobre os procedimentos oferecidos pela clínica, utilizando **exclusivamente** a `base_de_conhecimento` fornecida.\n\n## Ferramentas Disponíveis\n- **`encaminhar_para_atendente_humano`**: Use esta ferramenta se a pergunta do paciente for muito específica e a resposta não estiver na sua base de conhecimento.\n\n## Regras Gerais\n- Você está continuando uma conversa. Não se apresente, nem faça saudações.\n- **REGRA CRÍTICA:** Responda APENAS com informações da sua `base_de_conhecimento`. NUNCA invente dados, durações, valores ou conselhos médicos.\n- Se a resposta não estiver na base, diga: \"Essa é uma pergunta muito importante e detalhada. Para te dar uma resposta 100% precisa, vou te transferir para nossa equipe de especialistas.\" e acione a ferramenta `encaminhar_para_atendente_humano`.\n\n## Base de Conhecimento de Procedimentos\n- **Clareamento Dental:**\n  - **Dói?** \"O procedimento é geralmente indolor. Alguns pacientes podem sentir uma sensibilidade temporária nos dentes, que desaparece em até 48 horas. Usamos produtos de alta qualidade para minimizar qualquer desconforto.\"\n  - **Quanto tempo dura a sessão?** \"A sessão de clareamento no consultório dura cerca de 1 hora.\"\n  - **Qual o resultado?** \"O resultado é um sorriso visivelmente mais branco. O grau de clareamento varia de pessoa para pessoa, mas o resultado é sempre impactante e natural.\"\n- **Aplicação de Toxina Botulínica (Botox):**\n  - **Como funciona?** \"A toxina botulínica relaxa a musculatura da região onde é aplicada, suavizando as rugas de expressão, como pés de galinha e linhas na testa. Também previne a formação de novas rugas.\"\n  - **Dói a aplicação?** \"A aplicação é feita com agulhas muito finas e é super rápida. A maioria dos pacientes relata um desconforto mínimo, como uma leve picadinha.\"\n  - **Quanto tempo para ver o resultado?** \"Os resultados começam a aparecer em 48 a 72 horas, com o efeito máximo visível em cerca de 15 dias.\"\n  - **Qual a duração do efeito?** \"O efeito dura em média de 4 a 6 meses.\"\n- **Limpeza de Pele Profunda:**\n  - **Para que serve?** \"Serve para remover cravos, impurezas e células mortas, controlar a oleosidade e melhorar a textura da pele, deixando-a mais saudável e radiante.\"\n  - **Preciso de recuperação?** \"A pele pode ficar um pouco avermelhada logo após o procedimento, mas isso melhora em poucas horas. Recomendamos evitar exposição solar direta por 48 horas.\"\n- **Tratamento de Objeção de Preço dos procedimentos:**\n    - **Pergunta:** \"Quanto custa?\"\n    - **Resposta:** \"O valor do tratamento é muito individual, pois depende do que o especialista vai identificar na sua avaliação. A consulta serve justamente para te dar essa clareza e um orçamento preciso, sem compromisso.\""
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agentTool",
+      "typeVersion": 2.2,
+      "position": [
+        1088,
+        2400
+      ],
+      "id": "9aa9b8ac-8fe6-4521-9242-2296dfeaa77f",
+      "name": "agente_especialista_procedimentos"
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "dataTableId": {
+          "__rl": true,
+          "value": "9NSEyVP1GlxvrKQ2",
+          "mode": "list",
+          "cachedResultName": "Procedimentos",
+          "cachedResultUrl": "/projects/7yWqYEwSTAF35uq2/datatables/9NSEyVP1GlxvrKQ2"
+        },
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "nomeProcedimento",
+              "condition": "ilike",
+              "keyValue": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('conditions0_Value', `O nome exato do procedimento a ser buscado, conforme o catálogo.`, 'string') }}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.dataTableTool",
+      "typeVersion": 1,
+      "position": [
+        -256,
+        2176
+      ],
+      "id": "5e91741c-e028-4c82-9e5d-a30f49eecf6e",
+      "name": "buscar_midia_procedimento"
+    },
+    {
+      "parameters": {},
+      "type": "@n8n/n8n-nodes-langchain.toolThink",
+      "typeVersion": 1.1,
+      "position": [
+        -400,
+        2240
+      ],
+      "id": "8d60a46f-cc4b-4cd2-9a84-fceaea8b1b5c",
+      "name": "Think"
+    },
+    {
+      "parameters": {
+        "calendar": {
+          "__rl": true,
+          "value": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Calendar', `Insira aqui o id_agenda exato do profissional, que você identificou ao consultar o Mapeamento de Agendas e Tópicos no seu prompt. Este valor deve ser um id, como por exemplo 'bb4417b38dff3bb5b9d739abdf2faa2d4f9330379912b91b776c494164507cc9@group.calendar.google.com'.`, 'string') }}",
+          "mode": "id"
+        },
+        "start": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Start', `Data fornecida pelo lead no formato 'DateTime: 2025-07-28T10:04:40.433-03:00'`, 'string') }}",
+        "end": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('End', `1H a mais do horário fornecido pelo lead no mesmo formato.`, 'string') }}",
+        "additionalFields": {
+          "attendees": [
+            "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('attendees0_Attendees', ``, 'string') }}"
+          ],
+          "description": "={{ $fromAI('Description', `Informações passadas pelo lead.`, 'string') }}\n\nWhatsapp do Paciente: {{ $('agrupaDados').first().json.telefone.split('@')[0] }}",
+          "summary": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Summary', `Insira: 'nome do lead | Consulta Lena AI'.`, 'string') }}"
+        }
+      },
+      "type": "n8n-nodes-base.googleCalendarTool",
+      "typeVersion": 1.3,
+      "position": [
+        192,
+        2112
+      ],
+      "id": "8e89f7e4-437e-47be-9c63-d8006fb6b50a",
+      "name": "criar_consulta",
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "1VrcmzO7tnetZSRV",
+          "name": "Instituto Philippe Google Calendar"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "calendar": {
+          "__rl": true,
+          "value": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Calendar', `Insira aqui o id_agenda exato do profissional, que você identificou ao consultar o Mapeamento de Agendas e Tópicos no seu prompt. Este valor deve ser um id, como por exemplo 'bb4417b38dff3bb5b9d739abdf2faa2d4f9330379912b91b776c494164507cc9@group.calendar.google.com'.`, 'string') }}",
+          "mode": "id"
+        },
+        "eventId": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Event_ID', `Event ID (se não tiver procure nos eventos)`, 'string') }}",
+        "updateFields": {
+          "end": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('End', `1H a mais do horário de inicio fornecido pelo lead no mesmo formato. `, 'string') }}",
+          "start": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Start', `Nova data fornecida pelo lead no formato 'DateTime: 2025-07-28T10:04:40.433-03:00'`, 'string') }}"
+        }
+      },
+      "type": "n8n-nodes-base.googleCalendarTool",
+      "typeVersion": 1.3,
+      "position": [
+        320,
+        2048
+      ],
+      "id": "557a920b-e765-41de-b8ea-75c8a368e968",
+      "name": "atualizar_consulta",
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "1VrcmzO7tnetZSRV",
+          "name": "Instituto Philippe Google Calendar"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "delete",
+        "calendar": {
+          "__rl": true,
+          "value": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Calendar', `Insira aqui o id_agenda exato do profissional, que você identificou ao consultar o Mapeamento de Agendas e Tópicos no seu prompt. Este valor deve ser um id, como por exemplo 'bb4417b38dff3bb5b9d739abdf2faa2d4f9330379912b91b776c494164507cc9@group.calendar.google.com'.`, 'string') }}",
+          "mode": "id"
+        },
+        "eventId": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Event_ID', `Event ID (se não tiver procure nos eventos)`, 'string') }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleCalendarTool",
+      "typeVersion": 1.3,
+      "position": [
+        448,
+        1952
+      ],
+      "id": "8441fd5b-8745-4f04-abd8-6e0e65ac0d22",
+      "name": "cancelar_consulta",
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "1VrcmzO7tnetZSRV",
+          "name": "Instituto Philippe Google Calendar"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "type": "@n8n/n8n-nodes-langchain.toolThink",
+      "typeVersion": 1.1,
+      "position": [
+        -48,
+        2304
+      ],
+      "id": "2f3a333f-6f3e-4745-96f5-a09340ad14e0",
+      "name": "Think1"
+    },
+    {
+      "parameters": {
+        "content": "                                           ",
+        "height": 1008,
+        "width": 996,
+        "color": 7
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        1632,
+        1680
+      ],
+      "typeVersion": 1,
+      "id": "44f3312d-3148-4c12-be7f-beb9994200ea",
+      "name": "Sticky Note17"
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "tableId": "chats",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "phone",
+              "keyValue": "={{ $json.telefone }}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        -2384,
+        2000
+      ],
+      "id": "6b7f2715-86d0-4c8d-a735-07df07ed7e29",
+      "name": "buscaContexto",
+      "alwaysOutputData": true,
+      "credentials": {
+        "supabaseApi": {
+          "id": "ZfrRkSvPSs8Mb22v",
+          "name": "Supabase Lia Assessora"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $('agente_roteador').item.json.output }}",
+        "messages": {
+          "messageValues": [
+            {
+              "message": "=Você é o **Motor de Registro de Contexto Definitivo da MedCenter Lena AI**. Sua missão crítica é ler o contexto médico anterior, a nova interação do paciente e a resposta dada, para gerar um **RESUMO ATUALIZADO** que será salvo no banco de dados.\n\n### 📥 INPUTS (DADOS DE ENTRADA):\n1. **Contexto Anterior (O que sabíamos):** \"{{ $('buscaContexto').item.json.memoria_contexto }}\"\n2. **Nova Mensagem do Paciente:** \"{{ $('agrupaDados').item.json.query }}\"\n3. **Resposta da Sofia (IA):** \"{{ $json.output }}\"\n\n---\n\n### 📝 SUAS INSTRUÇÕES DE ATUALIZAÇÃO:\n1. **Consolidação:** Combine o histórico anterior com as novas informações. A informação NOVA sempre substitui a antiga em caso de conflito (ex: mudou o e-mail).\n2. **Mapeamento de Dores/Desejos:** Se o paciente mencionou um sintoma (dor de dente, rugas, pele oleosa), registre isso claramente.\n3. **Slot Filling Médico:** Atualize sempre que houver Nome, E-mail, Procedimento de interesse ou Profissional mencionado.\n4. **Rastreio de Agendamento:** Se o `agente_agendador` foi acionado, registre o status (se ele escolheu o horário, se confirmou ou se cancelou).\n5. **Mapeamento de Profissional:** Se a Sofia ou outro agente mencionou um profissional específico (Dr. Ricardo, Dra. Ana Clara, Dr. Lucas), registre isso no campo \"Profissional Identificado\". Isso é CRÍTICO para o agendador não perguntar novamente.\n\n---\n### 📤 ESTRUTURA DE SAÍDA OBRIGATÓRIA:\n(Retorne APENAS o texto abaixo preenchido, sem introduções ou comentários)\n\n1. PERFIL DO PACIENTE & DADOS CADASTRAIS\n* Nome: [Manter ou Atualizar]\n* Email: [Manter ou Atualizar]\n* Telefone: {{ $('agrupaDados').item.json.telefone }}\n* Status: [Lead / Paciente Agendado / Retorno]\n\n2. INTERESSE CLÍNICO & QUALIFICAÇÃO\n* Procedimento de Interesse: [Ex: Toxina Botulínica, Implante, etc]\n* Queixa Principal: [O que o paciente sente ou deseja resolver]\n* Mídias Visualizadas: [Sim/Não - Qual procedimento?]\n\n3. STATUS DO AGENDAMENTO (CONSULTA)\n* Procedimento de Interesse: [Ex: Toxina Botulínica]\n* Especialidade: [Dermatologia / Odontologia / Clínica Geral]\n* Profissional Identificado: [Dr. Ricardo Mendes / Dra. Ana Clara / Dr. Lucas Andrade / Não identificado]\n* Data/Hora: [Data e Hora da consulta se houver]\n* Status Atual: [Não iniciado / Em negociação / Confirmado / Reagendado / Cancelado]\n\n4. ESTADO ATUAL DA CONVERSA\n* Último Agente Ativo: [Nome do Agente que respondeu]\n* Próximo Passo: [Ex: Paciente precisa enviar o e-mail / Aguardando confirmação do horário]\n\n5. HISTÓRICO RECENTE CONSOLIDADO\n[Resumo narrativo curto: \"Paciente João entrou em contato com queixa de rugas na testa. Viu o vídeo de Botox e demonstrou interesse. Sofia sugeriu avaliação com Dr. Ricardo.\"]\n### 📥 INPUTS (DADOS DE ENTRADA): \n1. **Contexto Anterior (O que sabíamos até agora):** \"{{ $('buscaContexto').item.json.memoria_contexto }}\" \n2. **Nova Mensagem do Cliente (O que ele acabou de dizer):** \"{{ $('agrupaDados').item.json.query }}\"  \n3. **Resposta do Agente (O que a IA respondeu):** \"{{ $json.output }}\"  \n---  \n\n### 📝 SUAS INSTRUÇÕES DE ATUALIZAÇÃO: \n1.  **Consolidação:** Combine o histórico anterior com as novas informações. A informação NOVA sempre vence a antiga se houver contradição. \n2.  **Slot Filling:** Se o cliente informou Valor, Bairro, Quartos ou Tipo nesta rodada, ATUALIZE a seção de \"Critérios de Busca\". \n3.  **Rastreio:** Se o Agente Agendador foi acionado, atualize o status do agendamento. 4.  **Resumo:** Escreva um histórico narrativo curto e direto.  \n---  \n### 📤 ESTRUTURA DE SAÍDA OBRIGATÓRIA: (Retorne APENAS o texto abaixo preenchido, sem introduções)  \n\n1. PERFIL DO CLIENTE & DADOS CADASTRAIS \n* Nome: [Manter ou Atualizar] \n* Email: [Manter ou Atualizar] \n* Intenção Principal: [Alugar/Comprar/Dúvidas] \n* Telefone: {{ $('agrupaDados').item.json.telefone }} \n\n2. CRITÉRIOS DE BUSCA (FILTRO ATIVO) \n* Transação: [Venda/Aluguel] \n* Tipo de Imóvel: [Casa/Apto/etc] \n* Quartos: [Qtd] \n* Bairros/Região: [Local] \n* Faixa de Preço: [Valor]  \n\n3. STATUS DO AGENDAMENTO (VISITA) \n* Imóvel de Interesse: [ID ou Nome] \n* Data/Hora Solicitada: [Data] \n* Status Atual: [Pendente/Confirmado/Não iniciado]  \n\n4. ESTADO ATUAL DA CONVERSA \n* Último Agente Ativo: [Nome do Agente que respondeu] \n* Próximo Passo: [O que precisa acontecer agora?]  \n\n5. HISTÓRICO RECENTE CONSOLIDADO [Resumo narrativo dos fatos importantes até agora]"
+            }
+          ]
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.5,
+      "position": [
+        -1408,
+        1984
+      ],
+      "id": "2b00c0e7-cf4d-426d-add2-f6821e4cc295",
+      "name": "gerarNovoContexto",
+      "notes": "Gera o resumo atualizado"
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "tableId": "chats",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "phone",
+              "condition": "eq",
+              "keyValue": "={{ $('buscaContexto').item.json.phone }}"
+            }
+          ]
+        },
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "memoria_contexto",
+              "fieldValue": "={{ $json.text }}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        -1088,
+        1984
+      ],
+      "id": "b17c4ba8-83df-40a6-b174-f1708305b53f",
+      "name": "atualizaContexto",
+      "credentials": {
+        "supabaseApi": {
+          "id": "ZfrRkSvPSs8Mb22v",
+          "name": "Supabase Lia Assessora"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "6926c33c-7690-47c4-8a2c-3c7ee431112c",
+              "name": "output",
+              "value": "={{ $('agente_roteador').item.json.output }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -640,
+        1984
+      ],
+      "id": "18cfe3c6-184d-4718-a609-942f31810ada",
+      "name": "devolveResposta"
+    },
+    {
+      "parameters": {
+        "description": "Use esta ferramenta para transferir a conversa para um membro da nossa equipe. Acione-a em duas situações: 1) Como último recurso, se você não souber responder a uma pergunta específica do paciente. 2) OBRIGATORIAMENTE, após confirmar um agendamento com sucesso, para finalizar o atendimento.",
+        "workflowId": {
+          "__rl": true,
+          "value": "ZCGAM7RDXtMDq9t4",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/ZCGAM7RDXtMDq9t4",
+          "cachedResultName": "03 - ENCAMINHAMENTO PARA HUMANO V3"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "whatsapp": "={{ $('agrupaDados').first().json.telefone }}",
+            "resumo": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('resumo', `Resumo básico da conversa com o lead.`, 'string') }}",
+            "email": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('email', `Insira caso o lead tenha fornecido durante o agendamento, caso não, insira 'não informado'.`, 'string') }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "whatsapp",
+              "displayName": "whatsapp",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "resumo",
+              "displayName": "resumo",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "email",
+              "displayName": "email",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.toolWorkflow",
+      "typeVersion": 2.2,
+      "position": [
+        240,
+        3008
+      ],
+      "id": "46e1c41e-918e-4544-87ae-759d3637c6e0",
+      "name": "encaminhar_para_atendente_humano1"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.limit",
+      "typeVersion": 1,
+      "position": [
+        -2096,
+        2000
+      ],
+      "id": "0fa40e33-9f30-4c29-b781-705240c48d64",
+      "name": "Limit"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.limit",
+      "typeVersion": 1,
+      "position": [
+        -864,
+        1984
+      ],
+      "id": "def59d0e-1ba9-4532-af3d-1cc9eafe2d07",
+      "name": "Limit1"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "create table chats (\n  id bigserial primary key,\n  created_at TIMESTAMPTZ, \n  phone text,\n  email text,\n  memoria_contexto text,\n  updated_at text,\n  ai_service text\n);",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2080,
+        1808
+      ],
+      "id": "f85fd701-c490-449a-bb79-f0900954b46b",
+      "name": "1 - criaTabelaChats",
+      "credentials": {
+        "postgres": {
+          "id": "lkXnrfeCDBqgODYW",
+          "name": "Postgres Lia Assessora"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "# Configuração e Componentes Centrais da IA\n\n## Esta seção aborda os nós essenciais que servem como base para o funcionamento de todo o sistema de IA, incluindo a entrada de dados.\n",
+        "height": 212,
+        "width": 2876,
+        "color": 2
+      },
+      "id": "770b6ed2-02c8-4539-8ff3-f7d60d516b10",
+      "name": "Sticky Note83",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -3360,
+        1600
+      ]
+    },
+    {
+      "parameters": {
+        "content": "                                           ",
+        "height": 1264,
+        "width": 1828,
+        "color": 6
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -464,
+        1888
+      ],
+      "typeVersion": 1,
+      "id": "546e5434-5035-44b3-b336-3bda91685911",
+      "name": "Sticky Note"
+    },
+    {
+      "parameters": {
+        "content": "# Subagentes e funções\n\n## Esta seção aborda os nós dos subagentes, precisam de configuração\n",
+        "height": 212,
+        "width": 1836,
+        "color": 2
+      },
+      "id": "e33cce76-2dad-4bee-8a07-f81cea4314c3",
+      "name": "Sticky Note89",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -464,
+        1664
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "inputTest": {
+      "main": [
+        [
+          {
+            "node": "trataDados",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "trataDados": {
+      "main": [
+        [
+          {
+            "node": "agrupaDados",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "recebeDadosExternos": {
+      "main": [
+        [
+          {
+            "node": "agrupaDados",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "agrupaDados": {
+      "main": [
+        [
+          {
+            "node": "buscaContexto",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "openai4.1Mini": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "agente_roteador",
+            "type": "ai_languageModel",
+            "index": 0
+          },
+          {
+            "node": "agente_agendador",
+            "type": "ai_languageModel",
+            "index": 0
+          },
+          {
+            "node": "agente_faq",
+            "type": "ai_languageModel",
+            "index": 0
+          },
+          {
+            "node": "agente_atende_qualifica",
+            "type": "ai_languageModel",
+            "index": 0
+          },
+          {
+            "node": "agente_especialista_procedimentos",
+            "type": "ai_languageModel",
+            "index": 0
+          },
+          {
+            "node": "gerarNovoContexto",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "verificar_disponibilidade_agenda": {
+      "ai_tool": [
+        [
+          {
+            "node": "agente_agendador",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postgres Chat Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "agente_roteador",
+            "type": "ai_memory",
+            "index": 0
+          },
+          {
+            "node": "agente_atende_qualifica",
+            "type": "ai_memory",
+            "index": 0
+          },
+          {
+            "node": "agente_faq",
+            "type": "ai_memory",
+            "index": 0
+          },
+          {
+            "node": "agente_agendador",
+            "type": "ai_memory",
+            "index": 0
+          },
+          {
+            "node": "agente_especialista_procedimentos",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "agente_agendador": {
+      "ai_tool": [
+        [
+          {
+            "node": "agente_roteador",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "agente_faq": {
+      "ai_tool": [
+        [
+          {
+            "node": "agente_roteador",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "agente_atende_qualifica": {
+      "ai_tool": [
+        [
+          {
+            "node": "agente_roteador",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "agente_especialista_procedimentos": {
+      "ai_tool": [
+        [
+          {
+            "node": "agente_roteador",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "buscar_midia_procedimento": {
+      "ai_tool": [
+        [
+          {
+            "node": "agente_atende_qualifica",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Think": {
+      "ai_tool": [
+        [
+          {
+            "node": "agente_atende_qualifica",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "criar_consulta": {
+      "ai_tool": [
+        [
+          {
+            "node": "agente_agendador",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "atualizar_consulta": {
+      "ai_tool": [
+        [
+          {
+            "node": "agente_agendador",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "cancelar_consulta": {
+      "ai_tool": [
+        [
+          {
+            "node": "agente_agendador",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Think1": {
+      "ai_tool": [
+        [
+          {
+            "node": "agente_agendador",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "gerarNovoContexto": {
+      "main": [
+        [
+          {
+            "node": "atualizaContexto",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "atualizaContexto": {
+      "main": [
+        [
+          {
+            "node": "Limit1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "buscaContexto": {
+      "main": [
+        [
+          {
+            "node": "Limit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "agente_roteador": {
+      "main": [
+        [
+          {
+            "node": "gerarNovoContexto",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "encaminhar_para_atendente_humano1": {
+      "ai_tool": [
+        [
+          {
+            "node": "agente_especialista_procedimentos",
+            "type": "ai_tool",
+            "index": 0
+          },
+          {
+            "node": "agente_faq",
+            "type": "ai_tool",
+            "index": 0
+          },
+          {
+            "node": "agente_agendador",
+            "type": "ai_tool",
+            "index": 0
+          },
+          {
+            "node": "agente_atende_qualifica",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Limit": {
+      "main": [
+        [
+          {
+            "node": "agente_roteador",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Limit1": {
+      "main": [
+        [
+          {
+            "node": "devolveResposta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": false,
+    "binaryMode": "separate"
+  },
+  "versionId": "e79e59a3-5594-4489-ba9f-5105bf22e606",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "cc904c3834610abef51c04a29ba4c38e9a293fdb9101b8c2e4590098b2640387"
+  },
+  "id": "CIBMOWbchoBafh8L",
+  "tags": []
+}

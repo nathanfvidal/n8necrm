@@ -1,0 +1,1936 @@
+{
+  "name": "04 - LEMBRETES DE CONSULTAS MULTI AGENDAS V3",
+  "nodes": [
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gpt-4.1-mini"
+        },
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        -288,
+        64
+      ],
+      "id": "b09d0f75-69f2-44dd-b511-b18c02e232d3",
+      "name": "OpenAI Chat Model1",
+      "credentials": {
+        "openAiApi": {
+          "id": "IXIY0IoCBzrTC4gw",
+          "name": "Cursos Thalena"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $json.telefonePaciente }}"
+      },
+      "type": "@n8n/n8n-nodes-langchain.memoryPostgresChat",
+      "typeVersion": 1.3,
+      "position": [
+        -64,
+        64
+      ],
+      "id": "36a65ad4-ce03-4202-81d5-fa30f1f5e7e8",
+      "name": "Postgres Chat Memory",
+      "credentials": {
+        "postgres": {
+          "id": "lkXnrfeCDBqgODYW",
+          "name": "Postgres Lia Assessora"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 12
+            }
+          ]
+        }
+      },
+      "id": "b566ae9f-8ef6-4e8a-8f47-5b6ebe5066ab",
+      "name": "disparaLembretes24hAntes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -2368,
+        -432
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "f072fa56-57fe-4759-8ecd-933d40e05e0f",
+              "name": "=agendas",
+              "value": "=[\n  {\n    \"medico\": \"Dr. Ricardo Mendes\",\n    \"especialidade\": \"Dermatologia\",\n    \"id_agenda\": \"bb4417b38dff3bb5b9d739abdf2faa2d4f9330379912b91b776c494164507cc9@group.calendar.google.com\"\n  },\n  {\n    \"medico\": \"Dra. Ana Clara\",\n    \"especialidade\": \"Odontologia\",\n    \"id_agenda\": \"0d475beb43a70cbe7603ef907e07db6fd0c3a9d428974d358a816adfe0c8e3a1@group.calendar.google.com\"\n  },\n  {\n    \"medico\": \"Dr. Lucas Andrade\",\n    \"especialidade\": \"Clínica Geral\",\n    \"id_agenda\": \"b71b002dd6824cd53aba9eff0fc97ef82408e7b7382c488a7e4ffcc10527d47a@group.calendar.google.com\"\n  }\n]",
+              "type": "array"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -2144,
+        -432
+      ],
+      "id": "301d8b91-3ed6-4dc5-bb8b-0a2abae2f59d",
+      "name": "defineAgendas"
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "agendas",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        -1936,
+        -432
+      ],
+      "id": "5a67f8b8-1517-4512-b358-b3ce76a017a5",
+      "name": "paraCadaAgenda"
+    },
+    {
+      "parameters": {
+        "options": {
+          "reset": false
+        }
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        -1728,
+        -432
+      ],
+      "id": "77bd45c6-dec8-4562-8280-387a5092bef7",
+      "name": "loopAgendas"
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "calendar": {
+          "__rl": true,
+          "value": "={{ $json.id_agenda }}",
+          "mode": "id"
+        },
+        "returnAll": true,
+        "options": {
+          "timeMin": "={{ $now.plus({ days: 1 }).startOf('day') }}",
+          "timeMax": "={{ $now.plus({ days: 1 }).endOf('day') }}"
+        }
+      },
+      "id": "7eb14276-db6c-40eb-9840-2321c3d1b896",
+      "name": "buscaConsultasAmanha",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.2,
+      "position": [
+        -1504,
+        -256
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "1VrcmzO7tnetZSRV",
+          "name": "Instituto Philippe Google Calendar"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "6e99276a-9922-45cc-80bd-19c4d7101fa6",
+              "leftValue": "={{ $json.summary }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "empty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -1280,
+        -256
+      ],
+      "id": "8a26ae0e-87de-4a92-af4d-8123b536852c",
+      "name": "nãoEncontrouConsulta"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        -1040,
+        -240
+      ],
+      "id": "7fa903cd-e516-4617-a2c3-259af9a5d786",
+      "name": "loopConsultas"
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "tableId": "chats",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "email",
+              "keyValue": "={{ $json.attendees[0].email }}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        -832,
+        -224
+      ],
+      "id": "7e4bc5d6-e862-4ee8-9129-a63a779b9e70",
+      "name": "buscaDadosPaciente",
+      "alwaysOutputData": true,
+      "credentials": {
+        "supabaseApi": {
+          "id": "ZfrRkSvPSs8Mb22v",
+          "name": "Supabase Lia Assessora"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "6e99276a-9922-45cc-80bd-19c4d7101fa6",
+              "leftValue": "={{ $json.phone }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "empty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -624,
+        -224
+      ],
+      "id": "123cc31b-d9bd-49d9-a736-c2248a6849e3",
+      "name": "semPacienteCadastrado"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "409783cc-9fd4-417b-8c7d-7a70e4ece9a7",
+              "name": "telefonePaciente",
+              "value": "={{ $json.phone }}",
+              "type": "string"
+            },
+            {
+              "id": "a26b270a-f2f9-479e-8675-94013266bcc5",
+              "name": "nomeMedico",
+              "value": "={{ $('paraCadaAgenda').item.json.medico }}",
+              "type": "string"
+            },
+            {
+              "id": "5e45f2c9-9e04-4a77-b476-2c1c8f00943b",
+              "name": "dataConsulta",
+              "value": "={{ DateTime.fromISO($('buscaConsultasAmanha').item.json.start.dateTime).setZone('America/Sao_Paulo').toFormat('dd/MM/yyyy') }}",
+              "type": "string"
+            },
+            {
+              "id": "c215b8e3-7d69-4e18-b0d5-4f62f5bcdfe2",
+              "name": "horaConsulta",
+              "value": "={{ DateTime.fromISO($('buscaConsultasAmanha').item.json.start.dateTime).setZone('America/Sao_Paulo').toFormat('HH:mm') }}",
+              "type": "string"
+            },
+            {
+              "id": "be584308-89a2-4f43-8abb-3c5f10a7aa7a",
+              "name": "endereçoClinica",
+              "value": "Av. Principal, 123, Bairro Centro",
+              "type": "string"
+            },
+            {
+              "id": "822226df-f5f6-44f0-bff5-a2c48e948766",
+              "name": "tituloNome",
+              "value": "={{ $('buscaConsultasAmanha').item.json.summary }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -416,
+        -208
+      ],
+      "id": "ededf600-c806-4da3-b904-3c2c46429a54",
+      "name": "preparaDadosParaIA"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=# PERSONA E OBJETIVO\nVocê é Sofia, a assistente virtual da Clínica Lena AI. Sua tarefa é criar uma mensagem de lembrete de consulta para amanhã, de forma amigável, profissional e humana.\n\n# CONTEXTO E DADOS DISPONÍVEIS\nVocê receberá os dados da consulta para usar na sua mensagem. As informações disponíveis são:\n- `tituloNome`: Titulo com o nome da pessoa a ser contatada: {{ $json.tituloNome }}\n- `nomeMedico`: O nome do profissional que fará o atendimento: {{ $json.nomeMedico }}\n- `dataConsulta`: A data da consulta: {{ $json.dataConsulta }}\n- `horaConsulta`: A hora da consulta: {{ $json.horaConsulta }}\n- `endereçoClinica`: Endereço da Clínica: {{ $json['endereçoClinica'] }}\n\n# REGRAS E DIRETRIZES\n1.  Comece com uma saudação personalizada usando o nome do paciente.\n2.  Confirme que a consulta é **amanhã**.\n3.  Mencione claramente o `nomeMedico`, a `dataConsulta` e a `horaConsulta`.\n4.  Termine com uma frase gentil, informando que a equipe está à disposição para qualquer imprevisto.\n5.  **NÃO** use emojis exagerados. Um ou dois no máximo, para manter um tom leve.\n6.  **NÃO** use links ou formatação complexa.\n7.  Sua resposta deve ser **APENAS** o texto da mensagem a ser enviada, nada mais.\n\n# EXEMPLO DE MENSAGEM ESPERADA\n\"Olá, [nomePaciente]! Tudo bem? 😊 Estou passando para lembrar da sua consulta agendada para **amanhã**, dia [dataConsulta], às [horaConsulta], com o(a) Dr(a). [nomeMedico]. Estamos te esperando aqui no endereço [endereçoClinica]! Se tiver qualquer imprevisto, é só nos avisar por aqui.\"",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [
+        -224,
+        -208
+      ],
+      "id": "a05e695e-203e-41e7-90fe-872cd753e121",
+      "name": "criaMensagemHumanizada"
+    },
+    {
+      "parameters": {
+        "content": "",
+        "height": 964,
+        "width": 3916,
+        "color": 7
+      },
+      "id": "018296d9-a1a6-41c6-95df-a0b31180b4ce",
+      "name": "Sticky Note73",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -2464,
+        -704
+      ]
+    },
+    {
+      "parameters": {
+        "amount": 15
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1136,
+        64
+      ],
+      "id": "ee76a578-d95c-4569-908f-f1aa12ad3f6e",
+      "name": "delayEntreEnvios",
+      "webhookId": "40b57f4e-34e5-4333-9803-43bc97af91f2"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gpt-4.1-mini"
+        },
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        -288,
+        1200
+      ],
+      "id": "6ba51216-fa08-459e-9262-a49866e82084",
+      "name": "OpenAI Chat Model",
+      "credentials": {
+        "openAiApi": {
+          "id": "IXIY0IoCBzrTC4gw",
+          "name": "Cursos Thalena"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $json.telefonePaciente }}"
+      },
+      "type": "@n8n/n8n-nodes-langchain.memoryPostgresChat",
+      "typeVersion": 1.3,
+      "position": [
+        -64,
+        1200
+      ],
+      "id": "da06c643-f248-4ffb-a1f3-8c214433cebe",
+      "name": "Postgres Chat Memory1",
+      "credentials": {
+        "postgres": {
+          "id": "lkXnrfeCDBqgODYW",
+          "name": "Postgres Lia Assessora"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "f072fa56-57fe-4759-8ecd-933d40e05e0f",
+              "name": "=agendas",
+              "value": "=[\n  {\n    \"medico\": \"Dr. Ricardo Mendes\",\n    \"especialidade\": \"Dermatologia\",\n    \"id_agenda\": \"bb4417b38dff3bb5b9d739abdf2faa2d4f9330379912b91b776c494164507cc9@group.calendar.google.com\"\n  },\n  {\n    \"medico\": \"Dra. Ana Clara\",\n    \"especialidade\": \"Odontologia\",\n    \"id_agenda\": \"0d475beb43a70cbe7603ef907e07db6fd0c3a9d428974d358a816adfe0c8e3a1@group.calendar.google.com\"\n  },\n  {\n    \"medico\": \"Dr. Lucas Andrade\",\n    \"especialidade\": \"Clínica Geral\",\n    \"id_agenda\": \"b71b002dd6824cd53aba9eff0fc97ef82408e7b7382c488a7e4ffcc10527d47a@group.calendar.google.com\"\n  }\n]",
+              "type": "array"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -2144,
+        720
+      ],
+      "id": "375b972e-7d5b-4831-99e0-a355fb80b9b3",
+      "name": "defineAgendas1"
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "agendas",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        -1936,
+        720
+      ],
+      "id": "89c1375a-6c29-4c73-b18a-4106dfe1ef3b",
+      "name": "paraCadaAgenda1"
+    },
+    {
+      "parameters": {
+        "options": {
+          "reset": false
+        }
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        -1728,
+        720
+      ],
+      "id": "db2e6551-dc84-4f66-b4fd-93624485d7bd",
+      "name": "loopAgendas1"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "6e99276a-9922-45cc-80bd-19c4d7101fa6",
+              "leftValue": "={{ $json.summary }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "empty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -1280,
+        896
+      ],
+      "id": "f468d85e-8d5a-4297-a6e3-01caf390048f",
+      "name": "nãoEncontrouConsulta1"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        -1040,
+        912
+      ],
+      "id": "e59003f8-49fb-42c2-8f08-178adda57ec1",
+      "name": "loopConsultas1"
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "tableId": "chats",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "email",
+              "keyValue": "={{ $json.attendees[0].email }}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        -832,
+        928
+      ],
+      "id": "2819e089-db06-4d88-a9f1-49688535db67",
+      "name": "buscaDadosPaciente1",
+      "alwaysOutputData": true,
+      "credentials": {
+        "supabaseApi": {
+          "id": "ZfrRkSvPSs8Mb22v",
+          "name": "Supabase Lia Assessora"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "6e99276a-9922-45cc-80bd-19c4d7101fa6",
+              "leftValue": "={{ $json.phone }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "empty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -624,
+        928
+      ],
+      "id": "845b6194-0f44-4f77-9ab5-87052bcffa36",
+      "name": "semPacienteCadastrado1"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "409783cc-9fd4-417b-8c7d-7a70e4ece9a7",
+              "name": "telefonePaciente",
+              "value": "={{ $json.phone }}",
+              "type": "string"
+            },
+            {
+              "id": "a26b270a-f2f9-479e-8675-94013266bcc5",
+              "name": "nomeMedico",
+              "value": "={{ $('paraCadaAgenda1').item.json.medico }}",
+              "type": "string"
+            },
+            {
+              "id": "5e45f2c9-9e04-4a77-b476-2c1c8f00943b",
+              "name": "dataConsulta",
+              "value": "={{ DateTime.fromISO($('buscaConsultasDeHoje').item.json.start.dateTime).setZone('America/Sao_Paulo').toFormat('dd/MM/yyyy') }}",
+              "type": "string"
+            },
+            {
+              "id": "c215b8e3-7d69-4e18-b0d5-4f62f5bcdfe2",
+              "name": "horaConsulta",
+              "value": "={{ DateTime.fromISO($('buscaConsultasDeHoje').item.json.start.dateTime).setZone('America/Sao_Paulo').toFormat('HH:mm') }}",
+              "type": "string"
+            },
+            {
+              "id": "be584308-89a2-4f43-8abb-3c5f10a7aa7a",
+              "name": "endereçoClinica",
+              "value": "Av. Principal, 123, Bairro Centro",
+              "type": "string"
+            },
+            {
+              "id": "822226df-f5f6-44f0-bff5-a2c48e948766",
+              "name": "tituloNome",
+              "value": "={{ $('buscaConsultasDeHoje').item.json.summary }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -416,
+        944
+      ],
+      "id": "29acccbc-123b-41c2-9c22-170de0a27f14",
+      "name": "preparaDadosParaIA1"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=# PERSONA E OBJETIVO\nVocê é Sofia, a assistente virtual da Clínica Lena AI. Sua tarefa é criar uma mensagem de confirmação de consulta para **HOJE**, de forma acolhedora, profissional e humana.\n\n# CONTEXTO E DADOS DISPONÍVEIS\nVocê receberá os dados da consulta para usar na sua mensagem. As informações disponíveis são:\n- `tituloNome`: Titulo com o nome da pessoa a ser contatada: {{ $json.tituloNome }}\n- `nomeMedico`: O nome do profissional que fará o atendimento: {{ $json.nomeMedico }}\n- `dataConsulta`: A data da consulta: {{ $json.dataConsulta }}\n- `horaConsulta`: A hora da consulta: {{ $json.horaConsulta }}\n- `endereçoClinica`: Endereço da Clínica: {{ $json['endereçoClinica'] }}\n\n# REGRAS E DIRETRIZES\n1.  Comece com uma saudação calorosa (ex: \"Bom dia!\") e use o `nomePaciente`.\n2.  Confirme que a consulta é **HOJE**.\n3.  Mencione claramente o `nomeMedico` e a `horaConsulta`.\n4.  Inclua o `enderecoClinica` para facilitar a chegada do paciente.\n5.  Termine com uma frase gentil, como \"Até mais tarde!\" ou \"Estamos te esperando!\".\n6.  Use um emoji 😊 para dar um toque amigável.\n7.  Sua resposta deve ser **APENAS** o texto da mensagem a ser enviada, nada mais.\n\n# EXEMPLO DE MENSAGEM ESPERADA\n\"Bom dia, [nomePaciente]! Tudo bem? Passando para confirmar sua consulta **hoje** às [horaConsulta] com o(a) Dr(a). [nomeMedico]. Já estamos preparando tudo para te receber em nosso endereço: [enderecoClinica]. Até mais tarde! 😊\"",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [
+        -224,
+        944
+      ],
+      "id": "16bf79ce-db33-4e53-babb-ec55b90055a1",
+      "name": "criaMensagemHumanizada1"
+    },
+    {
+      "parameters": {
+        "content": "",
+        "height": 1044,
+        "width": 3900,
+        "color": 6
+      },
+      "id": "df75f5f3-cfff-4e89-9719-0d091ef82a5f",
+      "name": "Sticky Note74",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -2464,
+        448
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 7
+            }
+          ]
+        }
+      },
+      "id": "f784f0bd-5725-4aae-8b8c-a12cbe5435f3",
+      "name": "disparaLembretesMesmoDia",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -2368,
+        720
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "calendar": {
+          "__rl": true,
+          "value": "={{ $json.id_agenda }}",
+          "mode": "id"
+        },
+        "returnAll": true,
+        "options": {
+          "timeMin": "={{ $now.startOf('day') }}",
+          "timeMax": "={{ $now.endOf('day') }}"
+        }
+      },
+      "id": "2b268881-8932-44e1-8030-443cb5a9d007",
+      "name": "buscaConsultasDeHoje",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.2,
+      "position": [
+        -1504,
+        896
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "1VrcmzO7tnetZSRV",
+          "name": "Instituto Philippe Google Calendar"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": " ```\n██╗     ███████╗███╗   ██╗ █████╗      █████╗ ██╗\n██║     ██╔════╝████╗  ██║██╔══██╗    ██╔══██╗██║\n██║     █████╗  ██╔██╗ ██║███████║    ███████║██║\n██║     ██╔══╝  ██║╚██╗██║██╔══██║    ██╔══██║██║\n███████╗███████╗██║ ╚████║██║  ██║    ██║  ██║██║\n╚══════╝╚══════╝╚═╝  ╚═══╝╚═╝  ╚═╝    ╚═╝  ╚═╝╚═╝\n ```                                            ",
+        "width": 500,
+        "color": 6
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -1184,
+        -1008
+      ],
+      "typeVersion": 1,
+      "id": "16f57d0a-d963-49cf-a47d-915c812268a8",
+      "name": "Sticky Note3"
+    },
+    {
+      "parameters": {
+        "content": "## PRECISA DE CONFIGURAÇÃO ",
+        "height": 272,
+        "color": 3
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -480,
+        -320
+      ],
+      "typeVersion": 1,
+      "id": "0ac40ce9-5e9f-4b36-9e9a-f00392294266",
+      "name": "Sticky Note4"
+    },
+    {
+      "parameters": {
+        "content": "## PRECISA DE CONFIGURAÇÃO ",
+        "height": 272,
+        "color": 3
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -480,
+        832
+      ],
+      "typeVersion": 1,
+      "id": "64965db1-57c4-4fc2-a806-324294e30149",
+      "name": "Sticky Note5"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "id": "sw-001",
+                    "leftValue": "={{ $('trataDados2').item.json.api_type }}",
+                    "rightValue": "evolution",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Evolution"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "id": "sw-002",
+                    "leftValue": "={{ $('trataDados2').item.json.api_type }}",
+                    "rightValue": "uazapi",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "UAZAPI"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "id": "sw-003",
+                    "leftValue": "={{ $('trataDados2').item.json.api_type }}",
+                    "rightValue": "zapi",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "ZAPI"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        464,
+        -144
+      ],
+      "id": "0c133bca-9527-488b-a1a7-7cdfa574792c",
+      "name": "rotaApiEnvio"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('trataDados2').item.json.evoDomain }}/message/sendText/{{ $('trataDados2').item.json.evoInstance }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $('trataDados2').item.json.evoAPIKey }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "number",
+              "value": "={{ $('trataDados2').item.json.telefone}}"
+            },
+            {
+              "name": "delay",
+              "value": "={{ 1000 }}"
+            },
+            {
+              "name": "presence",
+              "value": "composing"
+            },
+            {
+              "name": "text",
+              "value": "={{ $('trataDados2').item.json.mensagem}}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        704,
+        -320
+      ],
+      "id": "88bbc1ea-9cbe-4023-8ab1-8c36f099e519",
+      "name": "enviaMensagemEquipeEvo"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('trataDados2').item.json.uazapiDomain }}/send/text",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "token",
+              "value": "={{ $('trataDados2').item.json.uazapiToken }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"number\": \"{{ $('trataDados2').item.json.telefone }}\",\n  \"text\": \"{{ $json.mensagem.replace(/\\n/g, '\\\\n') }}\",\n  \"readchat\": true,\n  \"delay\": 1000\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        704,
+        -144
+      ],
+      "id": "652e253e-0b99-4c2e-a325-02463beaf9a2",
+      "name": "enviaMensagemEquipeUAZAPI"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.z-api.io/instances/{{ $('trataDados2').item.json.zapiInstanceId }}/token/{{ $('trataDados2').item.json.zapiToken }}/send-text",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Client-Token",
+              "value": "={{ $('trataDados2').item.json.zapiClientToken }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "phone",
+              "value": "={{ $('trataDados2').item.json.telefone }}"
+            },
+            {
+              "name": "message",
+              "value": "={{ $('trataDados2').item.json.mensagem }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        704,
+        32
+      ],
+      "id": "418b0f3c-0ab2-44c9-9e25-c2f89ac6f0ab",
+      "name": "enviaMensagemEquipeZAPI"
+    },
+    {
+      "parameters": {
+        "content": "#### 🔀 ROTEAMENTO MULTI-API\n\nDetecta o `api_type` configurado\nem trataDados1 e envia pela\nAPI correspondente:\n\n→ **Evolution** `/message/sendText`\n→ **UAZAPI** `/send/text`\n→ **ZAPI** `api.z-api.io/send-text`",
+        "height": 580,
+        "width": 220,
+        "color": 6
+      },
+      "id": "52e28c82-d058-40f1-b87a-344b67d6937f",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        416,
+        -528
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "td-002",
+              "name": "api_type",
+              "value": "uazapi",
+              "type": "string"
+            },
+            {
+              "id": "td-003",
+              "name": "evoDomain",
+              "value": "=URL DA SUA EVOLUTION AQUI",
+              "type": "string"
+            },
+            {
+              "id": "td-004",
+              "name": "evoInstance",
+              "value": "=NOME DA SUA INSTANCIA EVO AQUI",
+              "type": "string"
+            },
+            {
+              "id": "td-005",
+              "name": "evoAPIKey",
+              "value": "=API KEY EVO AQUI",
+              "type": "string"
+            },
+            {
+              "id": "td-006",
+              "name": "uazapiDomain",
+              "value": "=URL AQUI",
+              "type": "string"
+            },
+            {
+              "id": "td-007",
+              "name": "uazapiToken",
+              "value": "=TOKEN AQUI",
+              "type": "string"
+            },
+            {
+              "id": "td-008",
+              "name": "zapiInstanceId",
+              "value": "=ID DA SUA INSTANCIA ZAPI AQUI",
+              "type": "string"
+            },
+            {
+              "id": "td-009",
+              "name": "zapiToken",
+              "value": "=TOKEN ZAPI AQUI",
+              "type": "string"
+            },
+            {
+              "id": "td-010",
+              "name": "zapiClientToken",
+              "value": "=CLIENT TOKEN ZAPI AQUI",
+              "type": "string"
+            },
+            {
+              "id": "td-011",
+              "name": "telefone",
+              "value": "={{ $('buscaDadosPaciente').item.json.phone }}",
+              "type": "string"
+            },
+            {
+              "id": "5c030f6f-d878-4c9b-b36b-dbedfaa3fdb7",
+              "name": "mensagem",
+              "value": "={{ $json.output }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "31eaa27a-589f-47ea-83fc-4b38f17a316f",
+      "name": "trataDados2",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        128,
+        -192
+      ]
+    },
+    {
+      "parameters": {
+        "content": "#### ⚙️ CONFIGURAÇÃO OBRIGATÓRIA\n\nNo node **trataDados1**, preencha:\n\n**Geral:**\n- `numeroEquipe` → número que vai enviar o lembrete.\n\n- `api_type` → qual API usar: `evolution`, `uazapi` ou `zapi`\n\n**Evolution:**\n- `evoDomain`, `evoInstance`, `evoAPIKey`\n\n**UAZAPI:**\n- `uazapiDomain`, `uazapiToken`\n\n**ZAPI:**\n- `zapiInstanceId`, `zapiToken`, `zapiClientToken`",
+        "height": 692,
+        "width": 260,
+        "color": 3
+      },
+      "id": "fc7a8b87-4757-4965-9175-99ad89397d55",
+      "name": "Sticky Note6",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        48,
+        -672
+      ]
+    },
+    {
+      "parameters": {
+        "amount": 15
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1248,
+        1248
+      ],
+      "id": "bb084685-e84e-47e2-8169-1c57197e8a6c",
+      "name": "delayEntreEnvios1",
+      "webhookId": "40b57f4e-34e5-4333-9803-43bc97af91f2"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "id": "sw-001",
+                    "leftValue": "={{ $('trataDados').item.json.api_type }}",
+                    "rightValue": "evolution",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Evolution"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "id": "sw-002",
+                    "leftValue": "={{ $('trataDados').item.json.api_type }}",
+                    "rightValue": "uazapi",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "UAZAPI"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "id": "sw-003",
+                    "leftValue": "={{ $('trataDados').item.json.api_type }}",
+                    "rightValue": "zapi",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "ZAPI"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        576,
+        1056
+      ],
+      "id": "ee11d03d-394b-447c-9174-1bd767d0e4ca",
+      "name": "rotaApiEnvio1"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('trataDados').item.json.evoDomain }}/message/sendText/{{ $('trataDados').item.json.evoInstance }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $('trataDados').item.json.evoAPIKey }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "number",
+              "value": "={{ $('trataDados').item.json.telefone}}"
+            },
+            {
+              "name": "delay",
+              "value": "={{ 1000 }}"
+            },
+            {
+              "name": "presence",
+              "value": "composing"
+            },
+            {
+              "name": "text",
+              "value": "={{ $('trataDados').item.json.mensagem}}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        816,
+        880
+      ],
+      "id": "d576170d-871d-4fd1-9442-fae752b110ec",
+      "name": "enviaMensagemEquipeEvo1"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('trataDados').item.json.uazapiDomain }}/send/text",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "token",
+              "value": "={{ $('trataDados').item.json.uazapiToken }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"number\": \"{{ $('trataDados').item.json.telefone }}\",\n  \"text\": \"{{ $json.mensagem.replace(/\\n/g, '\\\\n') }}\",\n  \"readchat\": true,\n  \"delay\": 1000\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        816,
+        1056
+      ],
+      "id": "b64e07a6-0a2f-4d9f-bde8-929e9e96f4d5",
+      "name": "enviaMensagemEquipeUAZAPI1"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.z-api.io/instances/{{ $('trataDados').item.json.zapiInstanceId }}/token/{{ $('trataDados').item.json.zapiToken }}/send-text",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Client-Token",
+              "value": "={{ $('trataDados').item.json.zapiClientToken }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "phone",
+              "value": "={{ $('trataDados').item.json.telefone }}"
+            },
+            {
+              "name": "message",
+              "value": "={{ $('trataDados').item.json.mensagem }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        816,
+        1216
+      ],
+      "id": "81a0a642-83d5-4151-af38-2b3c14124268",
+      "name": "enviaMensagemEquipeZAPI1"
+    },
+    {
+      "parameters": {
+        "content": "#### 🔀 ROTEAMENTO MULTI-API\n\nDetecta o `api_type` configurado\nem trataDados1 e envia pela\nAPI correspondente:\n\n→ **Evolution** `/message/sendText`\n→ **UAZAPI** `/send/text`\n→ **ZAPI** `api.z-api.io/send-text`",
+        "height": 580,
+        "width": 220,
+        "color": 6
+      },
+      "id": "2195ce10-0d51-4106-a631-16eec1e286c8",
+      "name": "Sticky Note1",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        528,
+        672
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "td-001",
+              "name": "numeroEquipe",
+              "value": "=NUMERO DA EQUIPE AQUI",
+              "type": "string"
+            },
+            {
+              "id": "td-002",
+              "name": "api_type",
+              "value": "=uazapi",
+              "type": "string"
+            },
+            {
+              "id": "td-003",
+              "name": "evoDomain",
+              "value": "=URL DA SUA EVOLUTION AQUI",
+              "type": "string"
+            },
+            {
+              "id": "td-004",
+              "name": "evoInstance",
+              "value": "=NOME DA SUA INSTANCIA EVO AQUI",
+              "type": "string"
+            },
+            {
+              "id": "td-005",
+              "name": "evoAPIKey",
+              "value": "=API KEY EVO AQUI",
+              "type": "string"
+            },
+            {
+              "id": "td-006",
+              "name": "uazapiDomain",
+              "value": "=URL AQUI",
+              "type": "string"
+            },
+            {
+              "id": "td-007",
+              "name": "uazapiToken",
+              "value": "=TOKEN AQUI",
+              "type": "string"
+            },
+            {
+              "id": "td-008",
+              "name": "zapiInstanceId",
+              "value": "=ID DA SUA INSTANCIA ZAPI AQUI",
+              "type": "string"
+            },
+            {
+              "id": "td-009",
+              "name": "zapiToken",
+              "value": "=TOKEN ZAPI AQUI",
+              "type": "string"
+            },
+            {
+              "id": "td-010",
+              "name": "zapiClientToken",
+              "value": "=CLIENT TOKEN ZAPI AQUI",
+              "type": "string"
+            },
+            {
+              "id": "td-011",
+              "name": "telefone",
+              "value": "={{ $('buscaDadosPaciente1').item.json.phone }}",
+              "type": "string"
+            },
+            {
+              "id": "5c030f6f-d878-4c9b-b36b-dbedfaa3fdb7",
+              "name": "mensagem",
+              "value": "={{ $json.output }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "6807cd8e-ada5-44b4-8445-e4d9cd1ebda7",
+      "name": "trataDados",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        240,
+        1024
+      ]
+    },
+    {
+      "parameters": {
+        "content": "#### ⚙️ CONFIGURAÇÃO OBRIGATÓRIA\n\nNo node **trataDados1**, preencha:\n\n**Geral:**\n- `numeroEquipe` → número que vai enviar o lembrete.\n\n- `api_type` → qual API usar: `evolution`, `uazapi` ou `zapi`\n\n**Evolution:**\n- `evoDomain`, `evoInstance`, `evoAPIKey`\n\n**UAZAPI:**\n- `uazapiDomain`, `uazapiToken`\n\n**ZAPI:**\n- `zapiInstanceId`, `zapiToken`, `zapiClientToken`",
+        "height": 692,
+        "width": 260,
+        "color": 3
+      },
+      "id": "b0f9688f-609e-4d71-9331-eb8e8048a8db",
+      "name": "Sticky Note7",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        160,
+        528
+      ]
+    },
+    {
+      "parameters": {
+        "content": "# LEMBRETE NO DIA DA CONSULTA\n",
+        "height": 116,
+        "width": 652,
+        "color": 6
+      },
+      "id": "e4eadab3-a477-4b53-a8b8-ca5c76e212f6",
+      "name": "Sticky Note83",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -2464,
+        448
+      ]
+    },
+    {
+      "parameters": {
+        "content": "# LEMBRETE NO DIA ANTERIOR DA CONSULTA\n",
+        "height": 116,
+        "width": 780,
+        "color": 7
+      },
+      "id": "4bc881c1-ee4c-49d4-885f-d221bb55e13a",
+      "name": "Sticky Note84",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -2464,
+        -688
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "OpenAI Chat Model1": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "criaMensagemHumanizada",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postgres Chat Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "criaMensagemHumanizada",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "disparaLembretes24hAntes": {
+      "main": [
+        [
+          {
+            "node": "defineAgendas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "defineAgendas": {
+      "main": [
+        [
+          {
+            "node": "paraCadaAgenda",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "paraCadaAgenda": {
+      "main": [
+        [
+          {
+            "node": "loopAgendas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "loopAgendas": {
+      "main": [
+        [
+          {
+            "node": "paraCadaAgenda",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "buscaConsultasAmanha",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "buscaConsultasAmanha": {
+      "main": [
+        [
+          {
+            "node": "nãoEncontrouConsulta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "nãoEncontrouConsulta": {
+      "main": [
+        [
+          {
+            "node": "loopAgendas",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "loopConsultas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "loopConsultas": {
+      "main": [
+        [
+          {
+            "node": "loopAgendas",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "buscaDadosPaciente",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "buscaDadosPaciente": {
+      "main": [
+        [
+          {
+            "node": "semPacienteCadastrado",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "semPacienteCadastrado": {
+      "main": [
+        [
+          {
+            "node": "loopConsultas",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "preparaDadosParaIA",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "preparaDadosParaIA": {
+      "main": [
+        [
+          {
+            "node": "criaMensagemHumanizada",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "criaMensagemHumanizada": {
+      "main": [
+        [
+          {
+            "node": "trataDados2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "delayEntreEnvios": {
+      "main": [
+        [
+          {
+            "node": "loopConsultas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "criaMensagemHumanizada1",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postgres Chat Memory1": {
+      "ai_memory": [
+        [
+          {
+            "node": "criaMensagemHumanizada1",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "defineAgendas1": {
+      "main": [
+        [
+          {
+            "node": "paraCadaAgenda1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "paraCadaAgenda1": {
+      "main": [
+        [
+          {
+            "node": "loopAgendas1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "loopAgendas1": {
+      "main": [
+        [
+          {
+            "node": "paraCadaAgenda1",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "buscaConsultasDeHoje",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "nãoEncontrouConsulta1": {
+      "main": [
+        [
+          {
+            "node": "loopAgendas1",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "loopConsultas1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "loopConsultas1": {
+      "main": [
+        [
+          {
+            "node": "loopAgendas1",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "buscaDadosPaciente1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "buscaDadosPaciente1": {
+      "main": [
+        [
+          {
+            "node": "semPacienteCadastrado1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "semPacienteCadastrado1": {
+      "main": [
+        [
+          {
+            "node": "loopConsultas1",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "preparaDadosParaIA1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "preparaDadosParaIA1": {
+      "main": [
+        [
+          {
+            "node": "criaMensagemHumanizada1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "criaMensagemHumanizada1": {
+      "main": [
+        [
+          {
+            "node": "trataDados",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "disparaLembretesMesmoDia": {
+      "main": [
+        [
+          {
+            "node": "defineAgendas1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "buscaConsultasDeHoje": {
+      "main": [
+        [
+          {
+            "node": "nãoEncontrouConsulta1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "rotaApiEnvio": {
+      "main": [
+        [
+          {
+            "node": "enviaMensagemEquipeEvo",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "enviaMensagemEquipeUAZAPI",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "enviaMensagemEquipeZAPI",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "enviaMensagemEquipeZAPI": {
+      "main": [
+        [
+          {
+            "node": "delayEntreEnvios",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "enviaMensagemEquipeUAZAPI": {
+      "main": [
+        [
+          {
+            "node": "delayEntreEnvios",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "enviaMensagemEquipeEvo": {
+      "main": [
+        [
+          {
+            "node": "delayEntreEnvios",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "trataDados2": {
+      "main": [
+        [
+          {
+            "node": "rotaApiEnvio",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "rotaApiEnvio1": {
+      "main": [
+        [
+          {
+            "node": "enviaMensagemEquipeEvo1",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "enviaMensagemEquipeUAZAPI1",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "enviaMensagemEquipeZAPI1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "enviaMensagemEquipeEvo1": {
+      "main": [
+        [
+          {
+            "node": "delayEntreEnvios1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "enviaMensagemEquipeUAZAPI1": {
+      "main": [
+        [
+          {
+            "node": "delayEntreEnvios1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "enviaMensagemEquipeZAPI1": {
+      "main": [
+        [
+          {
+            "node": "delayEntreEnvios1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "trataDados": {
+      "main": [
+        [
+          {
+            "node": "rotaApiEnvio1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "delayEntreEnvios1": {
+      "main": [
+        [
+          {
+            "node": "loopConsultas1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "99650eb5-f1b3-48fc-8fc7-a3a91e74b364",
+  "meta": {
+    "instanceId": "cc904c3834610abef51c04a29ba4c38e9a293fdb9101b8c2e4590098b2640387"
+  },
+  "id": "lSq4FILLE9JQX0YE",
+  "tags": []
+}

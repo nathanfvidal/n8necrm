@@ -2,6 +2,7 @@ import Link from "next/link";
 
 import { moduloAtivo } from "@/lib/module-gate";
 import { NotificationBell, type NotificacaoNaoLida } from "@/components/notifications/notification-bell";
+import { sairAction } from "@/core/auth/actions";
 
 const linksFixos = [
   { href: "/", label: "Dashboard" },
@@ -12,10 +13,14 @@ const linksFixos = [
 
 // Rotas /catalogo e /analytics ainda não existem (Fases 2 e 3) — até lá o
 // link aparece (se o módulo estiver ativo) e a navegação dá 404, o que é o
-// comportamento esperado nesta fase.
+// comportamento esperado nesta fase. /conversas (Fatia 1 do WhatsApp) já
+// existe de verdade — `exigirModulo("whatsapp")` no topo daquela página
+// devolve 404 se o módulo for desligado num fork, mesmo padrão dos outros
+// dois.
 const linksDeModulo = [
   { href: "/catalogo", label: "Catálogo", modulo: "catalog" as const },
   { href: "/analytics", label: "Analytics", modulo: "analytics" as const },
+  { href: "/conversas", label: "Conversas", modulo: "whatsapp" as const },
 ];
 
 /**
@@ -31,7 +36,13 @@ const linksDeModulo = [
  * `usuarioAtual()`/buscar o `User` de novo. Ver o comentário em
  * `notification-bell.tsx` sobre o custo desta consulta extra por navegação.
  */
-export function PainelNav({ notificacoesNaoLidas = [] }: { notificacoesNaoLidas?: NotificacaoNaoLida[] } = {}) {
+export function PainelNav({
+  notificacoesNaoLidas = [],
+  nomeUsuario,
+}: {
+  notificacoesNaoLidas?: NotificacaoNaoLida[];
+  nomeUsuario?: string;
+} = {}) {
   const links = [
     ...linksFixos,
     ...linksDeModulo.filter((link) => moduloAtivo(link.modulo)),
@@ -44,8 +55,26 @@ export function PainelNav({ notificacoesNaoLidas = [] }: { notificacoesNaoLidas?
           {link.label}
         </Link>
       ))}
-      <div className="ml-auto">
+      <div className="ml-auto flex items-center gap-4">
         <NotificationBell notificacoes={notificacoesNaoLidas} />
+        {/* Quem está logado, visível em toda tela: num computador
+            compartilhado da revenda, é o que faz alguém perceber que ficou
+            na conta do colega antes de mexer no funil no nome dele. */}
+        {nomeUsuario && (
+          <span className="text-sm text-muted-foreground" data-testid="usuario-logado">
+            {nomeUsuario}
+          </span>
+        )}
+        {/* Form + Server Action em vez de link: um GET que desloga pode ser
+            disparado por qualquer site com um <img src>. Ver sairAction. */}
+        <form action={sairAction}>
+          <button
+            type="submit"
+            className="text-sm font-medium text-muted-foreground hover:text-foreground hover:underline"
+          >
+            Sair
+          </button>
+        </form>
       </div>
     </nav>
   );

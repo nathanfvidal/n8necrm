@@ -8,7 +8,11 @@ export const client: ClientConfig = {
     corPrimaria: "#0F62FE",
     fonte: "Inter",
   },
-  modulos: [],
+  // "whatsapp" liga o atendente de IA (Fatia 1) e o link "Conversas" no
+  // menu — ver src/modules/whatsapp/. Diferente de catalog/analytics
+  // (ainda sem rota, Fases 2-3), este módulo tem código funcionando de
+  // verdade nesta fatia, então já entra ligado.
+  modulos: ["whatsapp"],
   entidade: {
     singular: "Veículo",
     plural: "Veículos",
