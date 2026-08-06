@@ -3,14 +3,22 @@
 import { revalidatePath } from "next/cache";
 
 import { usuarioAtual } from "@/core/auth/session";
-import {
-  pausarIa,
-  religarIa,
-  responderComoHumano,
-  RespostaHumanaInvalidaError,
-} from "@/modules/whatsapp/agente";
+import { pausarIa, religarIa, responderComoHumano, RespostaHumanaInvalidaError } from "./agente";
 
 /**
+ * Mora em `src/modules/whatsapp/`, não em `src/core/whatsapp/` (onde a Task 5
+ * original tinha colocado este arquivo — corrigido na rodada de correção 2).
+ * WhatsApp é um MÓDULO opcional, não `core`: este é um projeto clonado por
+ * cliente, `core` é compartilhado por todos os forks e `modules` contém
+ * funcionalidades que um fork pode desligar. `eslint.config.mjs` faz a
+ * fronteira valer via `no-restricted-imports`: qualquer arquivo em
+ * `src/core/**` que importe de `@/modules` é erro de lint — um Server Action
+ * que orquestra `agente.ts` PRECISA morar aqui dentro do módulo. O import
+ * abaixo de `@/core/auth/session` é a direção permitida (`modules` → `core`,
+ * nunca o contrário); não mova este arquivo de volta para `src/core/whatsapp/`
+ * por simetria com `src/core/leads/actions.ts` — leads é feature core deste
+ * projeto, WhatsApp não é.
+ *
  * Responder, pausar e religar exigem apenas sessão válida — não uma ação
  * própria na matriz de permissões. São operações de atendimento, e o projeto
  * já decidiu que todos os papéis veem e atendem todos os leads. A Task 7

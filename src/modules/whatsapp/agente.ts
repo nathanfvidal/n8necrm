@@ -53,7 +53,7 @@ const MAX_CARACTERES_RESPOSTA_HUMANA = 4000;
  * limite. Distinto de qualquer outra falha da função (gateway fora do ar,
  * banco indisponível) porque o TEXTO desta mensagem é seguro para chegar até
  * a tela de quem está atendendo: descreve uma entrada inválida do próprio
- * usuário, nunca detalhe interno de infraestrutura. `src/core/whatsapp/actions.ts`
+ * usuário, nunca detalhe interno de infraestrutura. `src/modules/whatsapp/actions.ts`
  * usa `instanceof` para decidir se repassa `error.message` para o cliente ou
  * troca por uma mensagem genérica — ver o comentário de `paraResultadoErro`
  * lá, que é a outra metade desta decisão.
