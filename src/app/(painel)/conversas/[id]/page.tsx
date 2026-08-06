@@ -5,15 +5,17 @@ import { exigirModulo } from "@/lib/module-gate";
 import { buscarConversaComMensagens } from "@/modules/whatsapp/queries";
 import { EmptyState } from "@/components/empty-state";
 import { Badge } from "@/components/ui/badge";
+import { ConversaEstadoIa } from "@/components/conversa-estado-ia";
+import { ConversaResponder } from "@/components/conversa-responder";
 import { formatarDataHoraBR } from "@/lib/date";
 import { cn } from "@/lib/utils";
 
 /**
- * Thread de uma conversa — Fatia 1, SÓ LEITURA (sem campo de resposta: essa
- * é a Fatia 2, "o humano assume"). Layout de bolhas simples (ENTRADA à
- * esquerda, SAIDA à direita), o suficiente para conferir o que o cliente
- * perguntou e o que o atendente de IA respondeu, sem construir um chat
- * completo para uma fatia que ainda não escreve mensagem nenhuma por aqui.
+ * Thread de uma conversa — Fatia 2: o humano assume. Layout de bolhas
+ * simples (ENTRADA à esquerda, SAIDA à direita), o suficiente para conferir
+ * o que o cliente perguntou e o que o atendente de IA (ou o humano) respondeu,
+ * com `ConversaEstadoIa` para pausar/religar a IA e `ConversaResponder` para
+ * responder de verdade.
  */
 export default async function ConversaDetalhePage({
   params,
@@ -31,15 +33,27 @@ export default async function ConversaDetalhePage({
 
   return (
     <div className="space-y-6 p-6">
-      <div>
-        <Link href="/conversas" className="text-sm text-muted-foreground hover:underline">
-          ← Conversas
+      <div className="flex items-start justify-between">
+        <div>
+          <Link href="/conversas" className="text-sm text-muted-foreground hover:underline">
+            ← Conversas
+          </Link>
+          <h1 className="text-xl font-semibold">
+            {conversa.contact?.nome ?? conversa.nomeExibicao ?? "Sem contato identificado"}
+          </h1>
+          <p className="text-sm text-muted-foreground">{conversa.telefone ?? conversa.waId}</p>
+        </div>
+        <Link href="/conversas/agente" className="text-sm text-muted-foreground hover:underline">
+          Configurar agente
         </Link>
-        <h1 className="text-xl font-semibold">
-          {conversa.contact?.nome ?? conversa.nomeExibicao ?? "Sem contato identificado"}
-        </h1>
-        <p className="text-sm text-muted-foreground">{conversa.telefone ?? conversa.waId}</p>
       </div>
+
+      <ConversaEstadoIa
+        conversationId={conversa.id}
+        iaAtiva={conversa.iaAtiva}
+        pausadaEm={conversa.iaPausadaEm}
+        pausadaPor={conversa.iaPausadaPor?.nome ?? null}
+      />
 
       {conversa.mensagens.length === 0 ? (
         <EmptyState
@@ -76,6 +90,8 @@ export default async function ConversaDetalhePage({
           })}
         </div>
       )}
+
+      <ConversaResponder conversationId={conversa.id} />
     </div>
   );
 }

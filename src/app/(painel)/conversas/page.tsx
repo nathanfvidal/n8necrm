@@ -8,12 +8,16 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { formatarDataHoraBR } from "@/lib/date";
 
 /**
- * Inbox de conversas do WhatsApp — Fatia 1, SÓ LEITURA (nenhuma ação de
- * mutação aqui: pausar/retomar bot, responder como humano e "criar lead a
- * partir da conversa" são Fatia 2). Segue os mesmos padrões visuais de
- * `(painel)/leads/page.tsx` (Task 16): tabela shadcn, `EmptyState` para
- * lista vazia, a mesma redação "Sem contato identificado" para relação
- * nula.
+ * Inbox de conversas do WhatsApp — esta tela continua SÓ LEITURA (pausar/
+ * retomar bot e responder como humano ficam na tela de detalhe, Fatia 2,
+ * Task 6). Segue os mesmos padrões visuais de `(painel)/leads/page.tsx`
+ * (Task 16): tabela shadcn, `EmptyState` para lista vazia, a mesma redação
+ * "Sem contato identificado" para relação nula.
+ *
+ * O selo "IA pausada" ao lado do nome do contato (Task 6) é o que evita uma
+ * conversa pausada e esquecida: sem ele, o estado só aparecia depois de abrir
+ * a conversa, e ninguém percebe que algo está esperando sem entrar em cada
+ * linha para checar.
  *
  * `exigirModulo("whatsapp")` faz esta rota devolver 404 se algum fork
  * desligar o módulo em `config/client.ts` — mesma defesa em profundidade de
@@ -59,10 +63,14 @@ export default async function ConversasPage() {
               return (
                 <TableRow key={conversa.id} className="cursor-pointer">
                   <TableCell>
-                    <Link href={`/conversas/${conversa.id}`} className="block hover:underline">
+                    <Link
+                      href={`/conversas/${conversa.id}`}
+                      className="flex items-center gap-2 hover:underline"
+                    >
                       <span className="font-medium">
                         {conversa.contact?.nome ?? conversa.nomeExibicao ?? "Sem contato identificado"}
                       </span>
+                      {!conversa.iaAtiva && <Badge variant="secondary">IA pausada</Badge>}
                     </Link>
                   </TableCell>
                   <TableCell className="max-w-xs truncate text-muted-foreground">
