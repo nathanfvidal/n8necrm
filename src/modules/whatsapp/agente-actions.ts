@@ -5,7 +5,7 @@ import { revalidatePath } from "next/cache";
 import { usuarioAtual } from "@/core/auth/session";
 import { hasPermission } from "@/core/auth/permissions";
 import { restaurarConfigPadrao, salvarConfigBot } from "./agente";
-import { MAX_PERSONA_NOME, MAX_PERSONA_PAPEL, MAX_REGRA, MAX_FAQ } from "./agente-limites";
+import { MAX_PERSONA_NOME, MAX_PERSONA_PAPEL, MAX_REGRA, MAX_REGRAS, MAX_FAQ } from "./agente-limites";
 import type { ResultadoAcao } from "./actions";
 
 /**
@@ -113,6 +113,12 @@ export async function salvarConfigAgenteAction(dados: {
     const regras = dados.regras.map((r) => r.trim()).filter((r) => r.length > 0);
     if (regras.length === 0) {
       throw new ErroConfigAgente("O agente precisa de pelo menos uma regra.");
+    }
+    // Revisão final, achado I3: teto na QUANTIDADE de regras, além do teto
+    // de tamanho de cada uma logo abaixo — ver o raciocínio completo em
+    // `agente-limites.ts`.
+    if (regras.length > MAX_REGRAS) {
+      throw new ErroConfigAgente(`No máximo ${MAX_REGRAS} regras — hoje há ${regras.length}.`);
     }
     if (regras.some((regra) => regra.length > MAX_REGRA)) {
       throw new ErroConfigAgente(`Cada regra pode ter no máximo ${MAX_REGRA} caracteres.`);

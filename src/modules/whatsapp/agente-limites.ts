@@ -28,8 +28,22 @@
  * arquivo é texto puro, sem banco nem segredo, importável tanto pela action
  * (validação, fonte da verdade) quanto pelo Client Component do formulário
  * (mostrar o limite na tela) — mesma ideia de `prompt.ts`.
+ *
+ * Revisão final da fatia, achado I3: `MAX_REGRA` limita o TAMANHO de cada
+ * regra, mas nada limitava a QUANTIDADE de regras — colar um documento
+ * inteiro no textarea de regras (`agente-form.tsx`) produz uma linha curta
+ * por parágrafo, todas dentro do limite individual, e o prompt de sistema de
+ * TODO turno de TODA conversa incha do mesmo jeito que `MAX_CARACTERES_POR_MENSAGEM_CONTEXTO`
+ * existe para evitar do lado do histórico (`turno.ts`). `MAX_REGRAS` tapa
+ * essa mesma classe de problema do lado da configuração. Calibrado do mesmo
+ * jeito que os limites acima: o fork de fábrica (`config/bot.ts`) tem 7
+ * regras; uma persona real, bem detalhada, dificilmente passa de umas 15-20
+ * antes das regras começarem a se repetir ou se contradizer — 30 dá folga
+ * generosa para qualquer fork legítimo sem deixar de barrar um documento
+ * colado por engano, que produziria dezenas a centenas de linhas de uma vez.
  */
 export const MAX_PERSONA_NOME = 80;
 export const MAX_PERSONA_PAPEL = 300;
 export const MAX_REGRA = 500;
+export const MAX_REGRAS = 30;
 export const MAX_FAQ = 4000;

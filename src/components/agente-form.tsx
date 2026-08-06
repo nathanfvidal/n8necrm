@@ -5,7 +5,13 @@ import type { BotConfig } from "@prisma/client";
 
 import { salvarConfigAgenteAction, restaurarConfigPadraoAction } from "@/modules/whatsapp/agente-actions";
 import { montarPromptSistema } from "@/modules/whatsapp/prompt";
-import { MAX_PERSONA_NOME, MAX_PERSONA_PAPEL, MAX_REGRA, MAX_FAQ } from "@/modules/whatsapp/agente-limites";
+import {
+  MAX_PERSONA_NOME,
+  MAX_PERSONA_PAPEL,
+  MAX_REGRA,
+  MAX_REGRAS,
+  MAX_FAQ,
+} from "@/modules/whatsapp/agente-limites";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -42,6 +48,11 @@ export function AgenteForm({ config }: { config: BotConfig }) {
     .map((regra) => regra.trim())
     .filter((regra) => regra.length > 0);
   const regraAcimaDoLimite = regras.some((regra) => regra.length > MAX_REGRA);
+  // Revisão final, achado I3: contador de QUANTIDADE de regras ao lado do
+  // limite de tamanho já existente — mesma ideia do achado I1 da rodada 1
+  // ("um limite que só aparece como erro depois de colar é uma armadilha"),
+  // agora aplicada à contagem, não só ao tamanho de cada linha.
+  const numeroDeRegrasAcimaDoLimite = regras.length > MAX_REGRAS;
 
   // Prévia calculada no cliente com a MESMA função que o servidor usa, sobre
   // os MESMOS valores aparados (`.trim()`) que a action grava — rodada de
@@ -184,7 +195,14 @@ export function AgenteForm({ config }: { config: BotConfig }) {
             <label htmlFor="regras" className="text-sm font-medium">
               Regras — uma por linha
             </label>
-            <span className="text-xs text-muted-foreground">até {MAX_REGRA} caracteres cada</span>
+            <span
+              className={cn(
+                "text-xs",
+                numeroDeRegrasAcimaDoLimite ? "text-destructive" : "text-muted-foreground"
+              )}
+            >
+              {regras.length}/{MAX_REGRAS} regras · até {MAX_REGRA} caracteres cada
+            </span>
           </div>
           <textarea
             id="regras"
@@ -203,6 +221,11 @@ export function AgenteForm({ config }: { config: BotConfig }) {
           {regraAcimaDoLimite && (
             <p className="text-xs text-destructive">
               Uma ou mais regras passam de {MAX_REGRA} caracteres — seriam recusadas ao salvar.
+            </p>
+          )}
+          {numeroDeRegrasAcimaDoLimite && (
+            <p className="text-xs text-destructive">
+              {regras.length} regras — no máximo {MAX_REGRAS} são aceitas ao salvar.
             </p>
           )}
         </div>
@@ -244,7 +267,11 @@ export function AgenteForm({ config }: { config: BotConfig }) {
         </div>
 
         {salvo && <p className="text-sm text-muted-foreground">Salvo. Vale na próxima resposta.</p>}
-        {erro && <p className="text-sm text-destructive">{erro}</p>}
+        {erro && (
+          <p role="alert" className="text-sm text-destructive">
+            {erro}
+          </p>
+        )}
       </div>
 
       <div className="space-y-1">

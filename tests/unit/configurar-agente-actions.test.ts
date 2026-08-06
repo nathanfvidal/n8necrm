@@ -15,7 +15,13 @@
 // não mostra nada, nem sucesso nem erro.
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { User } from "@prisma/client";
-import { MAX_PERSONA_NOME, MAX_PERSONA_PAPEL, MAX_REGRA, MAX_FAQ } from "../../src/modules/whatsapp/agente-limites";
+import {
+  MAX_PERSONA_NOME,
+  MAX_PERSONA_PAPEL,
+  MAX_REGRA,
+  MAX_REGRAS,
+  MAX_FAQ,
+} from "../../src/modules/whatsapp/agente-limites";
 
 const usuarioAtualMock = vi.fn();
 vi.mock("@/core/auth/session", () => ({ usuarioAtual: () => usuarioAtualMock() }));
@@ -193,6 +199,31 @@ describe("ADMIN autenticado", () => {
       erro: `Cada regra pode ter no máximo ${MAX_REGRA} caracteres.`,
     });
     expect(salvarConfigBotMock).not.toHaveBeenCalled();
+  });
+
+  // Revisão final da fatia, achado I3: teto na QUANTIDADE de regras, não só
+  // no tamanho de cada uma — colar um documento no textarea produz N linhas
+  // curtas, todas dentro do limite individual, sem este teto.
+  it("salvarConfigAgenteAction: mais de MAX_REGRAS regras é rejeitada sem chamar salvarConfigBot", async () => {
+    const resultado = await salvarConfigAgenteAction({
+      ...CONFIG_VALIDA,
+      regras: Array.from({ length: MAX_REGRAS + 1 }, (_, i) => `regra ${i}`),
+    });
+    expect(resultado).toEqual({
+      ok: false,
+      erro: `No máximo ${MAX_REGRAS} regras — hoje há ${MAX_REGRAS + 1}.`,
+    });
+    expect(salvarConfigBotMock).not.toHaveBeenCalled();
+  });
+
+  it("salvarConfigAgenteAction: exatamente MAX_REGRAS regras é aceito (limite não é off-by-one)", async () => {
+    salvarConfigBotMock.mockResolvedValue(undefined);
+    const resultado = await salvarConfigAgenteAction({
+      ...CONFIG_VALIDA,
+      regras: Array.from({ length: MAX_REGRAS }, (_, i) => `regra ${i}`),
+    });
+    expect(resultado).toEqual({ ok: true });
+    expect(salvarConfigBotMock).toHaveBeenCalledTimes(1);
   });
 
   it("salvarConfigAgenteAction: FAQ acima do limite é rejeitada sem chamar salvarConfigBot", async () => {
