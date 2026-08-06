@@ -5,10 +5,18 @@ export type Acao =
   | "criar_lead"
   | "mover_lead"
   | "ver_dashboard_geral"
-  | "exportar_leads";
+  | "exportar_leads"
+  | "configurar_agente";
 
 const matriz: Record<Role, Acao[]> = {
-  ADMIN: ["gerenciar_usuarios", "criar_lead", "mover_lead", "ver_dashboard_geral", "exportar_leads"],
+  ADMIN: [
+    "gerenciar_usuarios",
+    "criar_lead",
+    "mover_lead",
+    "ver_dashboard_geral",
+    "exportar_leads",
+    "configurar_agente",
+  ],
   GESTOR: ["criar_lead", "mover_lead", "ver_dashboard_geral", "exportar_leads"],
   VENDEDOR: ["criar_lead", "mover_lead"],
 };

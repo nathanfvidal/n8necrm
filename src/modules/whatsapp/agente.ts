@@ -2,7 +2,7 @@ import "server-only";
 
 import { prisma } from "@/lib/prisma";
 
-import { BOT_CONFIG_ID } from "../../../config/bot";
+import { BOT_CONFIG_ID, botConfig } from "../../../config/bot";
 import { whatsappGateway } from "./gateway";
 
 /**
@@ -40,6 +40,33 @@ export async function salvarConfigBot(
   return prisma.botConfig.update({
     where: { id: BOT_CONFIG_ID },
     data: { ...dados, atualizadoPorId: usuarioId },
+  });
+}
+
+/**
+ * Restaura persona, regras e FAQ a partir de `config/bot.ts`.
+ *
+ * Este é um dos DOIS únicos momentos em que o arquivo é lido — o outro é o
+ * seed (`prisma/seed.ts#semearBotConfig`). Nunca no caminho de resposta ao
+ * cliente: nenhum turno consulta o arquivo, e por isso não existe janela em
+ * que o bot responda com uma persona diferente da que a tela mostra.
+ *
+ * `ativo` fica de fora do que é restaurado de propósito: se o interruptor
+ * global foi desligado porque o bot estava fazendo besteira, o botão de
+ * consertar o texto do prompt não pode religá-lo sozinho — seria o próprio
+ * botão de conserto reabrindo o problema. Ver os dois testes em
+ * `tests/unit/agente-actions.test.ts`.
+ */
+export async function restaurarConfigPadrao(usuarioId: string) {
+  return prisma.botConfig.update({
+    where: { id: BOT_CONFIG_ID },
+    data: {
+      personaNome: botConfig.persona.nome,
+      personaPapel: botConfig.persona.papel,
+      regras: botConfig.regras,
+      faq: botConfig.faq,
+      atualizadoPorId: usuarioId,
+    },
   });
 }
 
