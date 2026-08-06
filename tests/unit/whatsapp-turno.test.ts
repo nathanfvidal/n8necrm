@@ -34,36 +34,13 @@ import {
   confirmarTitularidadeLease,
 } from "../../src/modules/whatsapp/turno";
 import { BOT_CONFIG_ID, botConfig } from "../../config/bot";
+// criarConversation/criarMensagemEntrada extraídos para tests/unit/helpers/whatsapp.ts
+// (Task 4 da Fatia 2) — mesmo nome, mesma assinatura, mesmo PREFIXO interno
+// ("teste-turno-") que este arquivo já usava, então `limparDadosDeTeste`
+// abaixo continua encontrando exatamente as linhas que estas funções criam.
+import { criarConversation, criarMensagemEntrada } from "./helpers/whatsapp";
 
 const PREFIXO = "teste-turno-";
-
-async function criarConversation(
-  overrides: Partial<{ waId: string; bufferSeq: number; iaAtiva: boolean }> = {}
-) {
-  return prisma.conversation.create({
-    data: {
-      waId: overrides.waId ?? `${PREFIXO}${crypto.randomUUID()}`,
-      bufferSeq: overrides.bufferSeq ?? 1,
-      iaAtiva: overrides.iaAtiva ?? true,
-    },
-  });
-}
-
-async function criarMensagemEntrada(
-  conversationId: string,
-  overrides: Partial<{ tipo: "TEXTO" | "AUDIO"; texto: string | null; idExterno: string }> = {}
-) {
-  return prisma.whatsappMessage.create({
-    data: {
-      conversationId,
-      idExterno: overrides.idExterno ?? `${PREFIXO}${crypto.randomUUID()}`,
-      direcao: "ENTRADA",
-      autor: "CLIENTE",
-      tipo: overrides.tipo ?? "TEXTO",
-      texto: overrides.texto ?? "Olá, tudo bem?",
-    },
-  });
-}
 
 async function limparDadosDeTeste() {
   const conversas = await prisma.conversation.findMany({
