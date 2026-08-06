@@ -86,15 +86,85 @@ import { auth } from "@/lib/auth";
  * verdade — o mesmo critério do layout, sem duplicar uma versão mais fraca
  * aqui que pudesse discordar dele.
  */
+/**
+ * Monta o Content-Security-Policy da requisição, com um nonce novo a cada
+ * chamada.
+ *
+ * ## Por que o nonce mora aqui e não em next.config.ts
+ *
+ * Um CSP fixo em `next.config.ts` só consegue liberar script inline com
+ * `'unsafe-inline'`, que na prática desliga a proteção contra XSS — é
+ * exatamente o que um script injetado precisa. O nonce é um valor
+ * imprevisível gerado por requisição: o Next carimba ele nos próprios
+ * scripts durante o SSR, e qualquer script que apareça na página sem esse
+ * valor simplesmente não roda.
+ *
+ * ## As decisões que este CSP toma
+ *
+ * - **`style-src` com `'unsafe-inline'`.** Não é descuido. Sem
+ *   `'unsafe-inline'`, o CSP bloqueia também atributo `style=""` inline
+ *   (nonce não se aplica a atributo), e o quadro de funil escreve
+ *   `style="transform: ..."` no card a cada frame do arraste — o kanban
+ *   pararia de funcionar. CSS injetado é um vetor muito mais fraco que
+ *   script injetado; a proteção que importa (`script-src`) segue estrita.
+ * - **`'strict-dynamic'` só em produção.** Em desenvolvimento o React usa
+ *   `eval` para reconstruir stack de erro do servidor no navegador, daí o
+ *   `'unsafe-eval'` — que não vai para produção.
+ * - **`connect-src 'self'`.** Chamadas à OpenAI e à Evolution saem do
+ *   SERVIDOR, nunca do navegador. Se algum dia um script no cliente tentar
+ *   mandar dado de lead para fora, o navegador barra.
+ * - **`frame-ancestors 'none'`** e **`form-action 'self'`**: ninguém embute
+ *   o CRM num iframe, e nenhum formulário daqui posta para fora — o que
+ *   fecha o caminho de roubar credencial redirecionando o POST do login.
+ * - **`object-src 'none'`** e **`base-uri 'self'`**: mata plugin legado e a
+ *   injeção de `<base>`, que reescreveria o destino de todos os links
+ *   relativos da página.
+ */
+function montarCsp(nonce: string): string {
+  const ehDev = process.env.NODE_ENV === "development";
+
+  return [
+    "default-src 'self'",
+    `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'${ehDev ? " 'unsafe-eval'" : ""}`,
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' blob: data:",
+    "font-src 'self'",
+    "connect-src 'self'",
+    "object-src 'none'",
+    "base-uri 'self'",
+    "form-action 'self'",
+    "frame-ancestors 'none'",
+    "upgrade-insecure-requests",
+  ].join("; ");
+}
+
 export default auth(function proxy(req) {
   const isLoggedIn = !!req.auth;
   const isLoginPage = req.nextUrl.pathname === "/login";
 
+  const nonce = crypto.randomUUID();
+  const csp = montarCsp(nonce);
+
   if (!isLoggedIn && !isLoginPage) {
-    return NextResponse.redirect(new URL("/login", req.url));
+    // O redirect também leva o CSP: a resposta 307 não renderiza HTML, mas
+    // deixar um caminho sem header é o tipo de buraco que passa despercebido
+    // se um dia ele passar a renderizar algo.
+    const redirecionamento = NextResponse.redirect(new URL("/login", req.url));
+    redirecionamento.headers.set("Content-Security-Policy", csp);
+    return redirecionamento;
   }
 
-  return NextResponse.next();
+  // `x-nonce` no header da REQUISIÇÃO é como o Next entrega o valor para o
+  // render (Server Components leem via `headers()`); o CSP no header da
+  // RESPOSTA é o que o navegador aplica. Os dois precisam carregar o mesmo
+  // nonce — é dessa igualdade que a política inteira depende.
+  const requestHeaders = new Headers(req.headers);
+  requestHeaders.set("x-nonce", nonce);
+  requestHeaders.set("Content-Security-Policy", csp);
+
+  const resposta = NextResponse.next({ request: { headers: requestHeaders } });
+  resposta.headers.set("Content-Security-Policy", csp);
+  return resposta;
 });
 
 export const config = {
