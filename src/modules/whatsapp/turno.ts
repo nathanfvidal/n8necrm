@@ -2,6 +2,7 @@ import "server-only";
 
 import { DuplicateMessageError } from "@vercel/queue";
 
+import { BOT_CONFIG_ID } from "../../../config/bot";
 import { prisma } from "@/lib/prisma";
 
 import { publicarTurno, type TurnoJob } from "./fila";
@@ -229,8 +230,10 @@ async function processarMensagensPendentes(conversationId: string, meuToken: Dat
     // critério algum.
     const textoUnido = comTexto.map((mensagem) => truncarParaContexto(mensagem.texto!)).join("\n");
 
+    const configBot = await prisma.botConfig.findUniqueOrThrow({ where: { id: BOT_CONFIG_ID } });
+
     const resultado = await llmProvider.gerarResposta({
-      systemPrompt: montarPromptSistema(),
+      systemPrompt: montarPromptSistema(configBot),
       historico: [...historicoAnterior, { autor: "CLIENTE", texto: textoUnido }],
     });
 

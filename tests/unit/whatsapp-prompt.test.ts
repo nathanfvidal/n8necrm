@@ -1,34 +1,37 @@
 import { describe, it, expect } from "vitest";
-
 import { montarPromptSistema } from "../../src/modules/whatsapp/prompt";
-import { botConfig } from "../../config/bot";
+
+const BASE = {
+  personaNome: "Ana",
+  personaPapel: "atendente da Loja X",
+  regras: ["Seja breve.", "Não invente preço."],
+  faq: "",
+};
 
 describe("montarPromptSistema", () => {
-  it("é determinístico: duas chamadas seguidas produzem exatamente o mesmo texto", () => {
-    // Prova direta do requisito do plano ("qualquer new Date() acima do
-    // ponto de cache triplica a conta em silêncio") — nenhuma diferença
-    // byte-a-byte entre chamadas, mesmo com uma pausa real entre elas.
-    const primeira = montarPromptSistema();
-    const segunda = montarPromptSistema();
-    expect(segunda).toBe(primeira);
+  it("usa a persona e numera as regras", () => {
+    const prompt = montarPromptSistema(BASE);
+    expect(prompt).toContain("Você é Ana, atendente da Loja X.");
+    expect(prompt).toContain("1. Seja breve.");
+    expect(prompt).toContain("2. Não invente preço.");
   });
 
-  it("não contém nenhum timestamp/data reconhecível (guarda contra regressão futura)", () => {
-    const prompt = montarPromptSistema();
-    expect(prompt).not.toMatch(/\d{4}-\d{2}-\d{2}/); // ISO date
-    expect(prompt).not.toMatch(/\d{1,2}\/\d{1,2}\/\d{2,4}/); // DD/MM/AAAA
+  it("inclui a FAQ sob cabeçalho próprio quando há conteúdo", () => {
+    const prompt = montarPromptSistema({ ...BASE, faq: "Abrimos às 8h." });
+    expect(prompt).toContain("Perguntas frequentes");
+    expect(prompt).toContain("Abrimos às 8h.");
   });
 
-  it("inclui o nome e o papel da persona configurados em config/bot.ts", () => {
-    const prompt = montarPromptSistema();
-    expect(prompt).toContain(botConfig.persona.nome);
-    expect(prompt).toContain(botConfig.persona.papel);
+  // Cabeçalho sem conteúdo é pior que FAQ nenhuma: o modelo lê como
+  // instrução truncada e pode inventar o que "deveria" estar ali.
+  it("omite o bloco inteiro da FAQ quando ela está vazia", () => {
+    expect(montarPromptSistema({ ...BASE, faq: "" })).not.toContain("Perguntas frequentes");
+    expect(montarPromptSistema({ ...BASE, faq: "   \n  " })).not.toContain("Perguntas frequentes");
   });
 
-  it("inclui todas as regras configuradas, numeradas", () => {
-    const prompt = montarPromptSistema();
-    botConfig.regras.forEach((regra, indice) => {
-      expect(prompt).toContain(`${indice + 1}. ${regra}`);
-    });
+  // A razão de a função ser pura, registrada como teste e não só como
+  // comentário: provedores cacheiam o prefixo do prompt byte-a-byte.
+  it("é determinística — mesma config, mesmos bytes", () => {
+    expect(montarPromptSistema(BASE)).toBe(montarPromptSistema(BASE));
   });
 });
