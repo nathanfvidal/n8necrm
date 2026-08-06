@@ -355,6 +355,23 @@ describe("processarTurno", () => {
       );
       expect(await confirmarTitularidadeLease(conversation.id, tokenB!.processandoAte)).toBeNull();
     });
+
+    // A outra metade da distinção que motivou o tipo `MotivoAborto`: ainda
+    // titular do lease (token bate), mas a IA foi pausada nesta conversa —
+    // tem que devolver "ia-pausada", não "lease-perdido" nem `null`.
+    it("confirmarTitularidadeLease devolve \"ia-pausada\" quando o titular do lease está com a IA pausada", async () => {
+      const conversation = await criarConversation({ bufferSeq: 1 });
+      const token = await claimLease(conversation.id);
+
+      await prisma.conversation.update({
+        where: { id: conversation.id },
+        data: { iaAtiva: false, iaPausadaEm: new Date() },
+      });
+
+      expect(await confirmarTitularidadeLease(conversation.id, token!.processandoAte)).toBe(
+        "ia-pausada"
+      );
+    });
   });
 
   it(
@@ -570,18 +587,29 @@ describe("processarTurno", () => {
   describe("guarda da IA (Fatia 2)", () => {
     it("não responde quando a conversa está pausada, mas marca as pendentes", async () => {
       const conversation = await criarConversation({ iaAtiva: false });
-      await criarMensagemEntrada(conversation.id, { texto: "oi, tem o Onix 2020?" });
+      const pendente = await criarMensagemEntrada(conversation.id, { texto: "oi, tem o Onix 2020?" });
 
       await processarTurno({ conversationId: conversation.id, seq: conversation.bufferSeq });
 
       expect(enviarTextoMock).not.toHaveBeenCalled();
-      const pendentes = await prisma.whatsappMessage.findMany({
-        where: { conversationId: conversation.id, direcao: "ENTRADA", processadoEm: null },
+      // Busca pelo id e confere `processadoEm` não nulo (mesmo padrão do
+      // teste do teto por hora) -- não uma contagem de `processadoEm: null`,
+      // que uma implementação que APAGASSE a pendente em vez de marcá-la
+      // passaria igual, mascarando exatamente a propriedade "persiste mas
+      // para de responder, nunca descarta calado" que este teste existe para
+      // provar.
+      const pendenteAtualizada = await prisma.whatsappMessage.findUniqueOrThrow({
+        where: { id: pendente.id },
       });
-      expect(pendentes).toHaveLength(0);
+      expect(pendenteAtualizada.processadoEm).not.toBeNull();
     });
 
     it("não responde quando o interruptor global está desligado", async () => {
+      // Captura o valor original em vez de assumir `true`: o interruptor é
+      // uma feature editável pelo CRM nesta fatia -- restaurar um `true`
+      // fixo religaria em silêncio um bot que alguém tivesse desligado de
+      // propósito antes de rodar a suíte contra o banco de dev.
+      const original = await prisma.botConfig.findUniqueOrThrow({ where: { id: BOT_CONFIG_ID } });
       await prisma.botConfig.update({ where: { id: BOT_CONFIG_ID }, data: { ativo: false } });
       try {
         const conversation = await criarConversation();
@@ -591,7 +619,7 @@ describe("processarTurno", () => {
 
         expect(enviarTextoMock).not.toHaveBeenCalled();
       } finally {
-        await prisma.botConfig.update({ where: { id: BOT_CONFIG_ID }, data: { ativo: true } });
+        await prisma.botConfig.update({ where: { id: BOT_CONFIG_ID }, data: { ativo: original.ativo } });
       }
     });
 
@@ -601,7 +629,7 @@ describe("processarTurno", () => {
     // humano.
     it("descarta a resposta quando a IA é pausada durante a chamada ao modelo", async () => {
       const conversation = await criarConversation();
-      await criarMensagemEntrada(conversation.id, { texto: "quero saber o preço" });
+      const pendente = await criarMensagemEntrada(conversation.id, { texto: "quero saber o preço" });
 
       gerarRespostaMock.mockImplementationOnce(async () => {
         await prisma.conversation.update({
@@ -614,6 +642,16 @@ describe("processarTurno", () => {
       await processarTurno({ conversationId: conversation.id, seq: conversation.bufferSeq });
 
       expect(enviarTextoMock).not.toHaveBeenCalled();
+
+      // A outra metade da distinção que motivou trocar o retorno booleano por
+      // `MotivoAborto`: "ia-pausada" MARCA as pendentes (diferente de
+      // "lease-perdido", que não marca — ver o teste logo abaixo). Sem esta
+      // asserção, apagar `marcarPendentesComoProcessadas` deste ramo em
+      // `turno.ts` não quebraria nada aqui.
+      const pendenteAtualizada = await prisma.whatsappMessage.findUniqueOrThrow({
+        where: { id: pendente.id },
+      });
+      expect(pendenteAtualizada.processadoEm).not.toBeNull();
     });
 
     // A distinção que um booleano não consegue expressar: quem PERDEU o
@@ -655,7 +693,13 @@ describe("processarTurno", () => {
 
         const [chamada] = gerarRespostaMock.mock.calls.at(-1)!;
         expect(chamada.systemPrompt).toContain("Beatriz-do-teste");
-        expect(chamada.systemPrompt).not.toContain(botConfig.persona.nome);
+        // Asserte sobre a frase montada por `montarPromptSistema`
+        // ("Você é <nome>,"), não sobre a mera ausência do nome padrão
+        // ("Ana") no texto -- "Ana" tem três letras e aparece por acaso em
+        // qualquer regra ou FAQ que mencione um "Ana Paula" de exemplo, o
+        // que faria esta asserção falhar por um motivo que nada tem a ver
+        // com o que o teste prova (prompt vem do banco, não do arquivo).
+        expect(chamada.systemPrompt).not.toContain(`Você é ${botConfig.persona.nome},`);
       } finally {
         await prisma.botConfig.update({
           where: { id: BOT_CONFIG_ID },
