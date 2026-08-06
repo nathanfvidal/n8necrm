@@ -56,6 +56,43 @@ async function limparDadosDeTeste(): Promise<void> {
   await prisma.user.deleteMany({ where: { email: EMAIL_USUARIO_TESTE } });
 }
 
+// MODO SERIAL DE PROPÓSITO — não é excesso de cautela, é o que evita uma
+// corrida real entre workers. NÃO REMOVA esta linha sem entender o raciocínio
+// abaixo primeiro.
+//
+// `test.beforeAll`/`test.afterAll` do Playwright rodam UMA VEZ POR WORKER
+// PROCESS, não uma vez por arquivo (`node_modules/playwright/lib/runner/`,
+// `createTestGroups`). Com `fullyParallel: true` e `workers: 3`
+// (`playwright.config.ts`) e os quatro testes abaixo, o Playwright pode
+// despachar grupos deste MESMO arquivo para workers diferentes, sobrepostos
+// no tempo — e `limparDadosDeTeste()` apaga por PREFIXO COMPARTILHADO
+// (`Conversation.waId` começando com `PREFIXO_WAID`) e por e-mail fixo do
+// usuário descartável, sem escopo por teste individual. Sem `serial`, dois
+// grupos concorrentes deste arquivo pisam um no outro:
+// - o `beforeAll` do grupo que começa depois apaga a `Conversation` que o
+//   OUTRO grupo acabou de criar e ainda está usando;
+// - o `afterAll` do grupo que termina primeiro apaga tudo do prefixo,
+//   inclusive o que o outro grupo ainda está exercitando;
+// - se o `User` descartável do teste de sessão inválida for apagado por
+//   engano no meio do teste, `usuarioAtual()` lança um erro DIFERENTE de
+//   "Não autenticado" e aquele teste falha por um motivo que não tem nada a
+//   ver com o que ele pretende provar — o pior tipo de falha, porque manda
+//   investigar o lugar errado.
+//
+// `mode: "serial"` força os quatro testes deste arquivo ao MESMO worker, em
+// sequência — os hooks deste arquivo passam a rodar de fato uma vez só, sem
+// sobreposição. `fullyParallel` continua paralelizando ENTRE arquivos (este
+// roda em paralelo com auth.spec.ts, lead-to-won.spec.ts etc.), então a
+// suíte não fica mais lenta de forma relevante — só os quatro testes AQUI
+// DENTRO deixam de disputar workers entre si.
+//
+// O defeito que isto evita é INTERMITENTE: só se manifesta quando o
+// Playwright de fato despacha este arquivo em mais de um grupo, o que
+// depende de quantos outros testes/arquivos competem pelos mesmos workers
+// naquele instante. Uma bateria de execuções verdes sem este `configure`
+// NÃO prova que o problema não existe — só que não se manifestou desta vez.
+test.describe.configure({ mode: "serial" });
+
 test.beforeAll(async () => {
   await limparDadosDeTeste();
 });
