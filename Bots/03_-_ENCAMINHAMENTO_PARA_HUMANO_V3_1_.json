@@ -1,0 +1,613 @@
+{
+  "name": "03 - ENCAMINHAMENTO PARA HUMANO V3",
+  "nodes": [
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "whatsapp"
+            },
+            {
+              "name": "resumo"
+            },
+            {
+              "name": "email"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        112,
+        864
+      ],
+      "id": "da083495-573c-4acb-ae02-39e717ad3288",
+      "name": "recebeTransferencia"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "td-001",
+              "name": "numeroEquipe",
+              "value": "=NUMERO DA EQUIPE AQUI",
+              "type": "string"
+            },
+            {
+              "id": "td-002",
+              "name": "api_type",
+              "value": "=NOME DA SUA API AQUI",
+              "type": "string"
+            },
+            {
+              "id": "td-003",
+              "name": "evoDomain",
+              "value": "=URL DA SUA EVOLUTION AQUI",
+              "type": "string"
+            },
+            {
+              "id": "td-004",
+              "name": "evoInstance",
+              "value": "=NOME DA SUA INSTANCIA EVO AQUI",
+              "type": "string"
+            },
+            {
+              "id": "td-005",
+              "name": "evoAPIKey",
+              "value": "=API KEY EVO AQUI",
+              "type": "string"
+            },
+            {
+              "id": "td-006",
+              "name": "uazapiDomain",
+              "value": "=URL DA SUA UAZAPI AQUI",
+              "type": "string"
+            },
+            {
+              "id": "td-007",
+              "name": "uazapiToken",
+              "value": "=API KEY UAZAPI AQUI",
+              "type": "string"
+            },
+            {
+              "id": "td-008",
+              "name": "zapiInstanceId",
+              "value": "=ID DA SUA INSTANCIA ZAPI AQUI",
+              "type": "string"
+            },
+            {
+              "id": "td-009",
+              "name": "zapiToken",
+              "value": "=TOKEN ZAPI AQUI",
+              "type": "string"
+            },
+            {
+              "id": "td-010",
+              "name": "zapiClientToken",
+              "value": "=CLIENT TOKEN ZAPI AQUI",
+              "type": "string"
+            },
+            {
+              "id": "td-011",
+              "name": "numeroLead",
+              "value": "={{ $json.whatsapp }}",
+              "type": "string"
+            },
+            {
+              "id": "td-012",
+              "name": "resumoAtendimento",
+              "value": "={{ $json.resumo }}",
+              "type": "string"
+            },
+            {
+              "id": "td-013",
+              "name": "emailLead",
+              "value": "={{ $json.email }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "556570b0-859f-4a42-b273-73905d485ded",
+      "name": "trataDados1",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        400,
+        864
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "tableId": "chats",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "phone",
+              "condition": "eq",
+              "keyValue": "={{ $json.numeroLead }}"
+            }
+          ]
+        },
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "ai_service",
+              "fieldValue": "pause"
+            },
+            {
+              "fieldId": "email",
+              "fieldValue": "={{ $json.emailLead }}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        624,
+        864
+      ],
+      "id": "536e8556-32a5-4dcb-8b87-cd9afc31f989",
+      "name": "pausaIaSupabase",
+      "credentials": {
+        "supabaseApi": {
+          "id": "ZfrRkSvPSs8Mb22v",
+          "name": "Supabase Lia Assessora"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "msg-001",
+              "name": "mensagem",
+              "value": "={{ (() => {\n  const numero = $('trataDados1').item.json.numeroLead?.replace('@s.whatsapp.net', '').replace('@lid', '') || 'número inválido';\n  const link = `http://wa.me/${numero}`;\n  const resumo = $('trataDados1').item.json.resumoAtendimento || 'Resumo não informado';\n  return `*Lead precisa de atendimento*\\n\\n👉 *Número do lead:* ${link}\\n📋 *Resumo do atendimento:* ${resumo}`;\n})() }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        864,
+        864
+      ],
+      "id": "4aec39e7-1758-404e-a600-361057a45047",
+      "name": "criaMensagemEquipe"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "id": "sw-001",
+                    "leftValue": "={{ $('trataDados1').item.json.api_type }}",
+                    "rightValue": "evolution",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Evolution"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "id": "sw-002",
+                    "leftValue": "={{ $('trataDados1').item.json.api_type }}",
+                    "rightValue": "uazapi",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "UAZAPI"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "id": "sw-003",
+                    "leftValue": "={{ $('trataDados1').item.json.api_type }}",
+                    "rightValue": "zapi",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "ZAPI"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        1120,
+        864
+      ],
+      "id": "41d68f4e-7a89-4993-816b-10be1c92457a",
+      "name": "rotaApiEnvio"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('trataDados1').item.json.evoDomain }}/message/sendText/{{ $('trataDados1').item.json.evoInstance }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $('trataDados1').item.json.evoAPIKey }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "number",
+              "value": "={{ $('trataDados1').item.json.numeroEquipe }}"
+            },
+            {
+              "name": "delay",
+              "value": "={{ 1000 }}"
+            },
+            {
+              "name": "presence",
+              "value": "composing"
+            },
+            {
+              "name": "text",
+              "value": "={{ $json.mensagem }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1360,
+        688
+      ],
+      "id": "8436219a-1857-4c1d-8f3f-713730756a09",
+      "name": "enviaMensagemEquipeEvo"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('trataDados1').item.json.uazapiDomain }}/send/text",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "token",
+              "value": "={{ $('trataDados1').item.json.uazapiToken }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"number\": \"{{ $('trataDados1').item.json.numeroEquipe }}\",\n  \"text\": \"{{ $json.mensagem.replace(/\\n/g, '\\\\n') }}\",\n  \"readchat\": true,\n  \"delay\": 1000\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1360,
+        864
+      ],
+      "id": "036fa5e8-058e-46af-887c-86d60a1867a9",
+      "name": "enviaMensagemEquipeUAZAPI"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.z-api.io/instances/{{ $('trataDados1').item.json.zapiInstanceId }}/token/{{ $('trataDados1').item.json.zapiToken }}/send-text",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Client-Token",
+              "value": "={{ $('trataDados1').item.json.zapiClientToken }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "phone",
+              "value": "={{ $('trataDados1').item.json.numeroEquipe }}"
+            },
+            {
+              "name": "message",
+              "value": "={{ $json.mensagem }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1360,
+        1024
+      ],
+      "id": "0362e6d9-1c57-4911-bd1a-7d23a154d80e",
+      "name": "enviaMensagemEquipeZAPI"
+    },
+    {
+      "parameters": {
+        "numberInputs": 3
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        1600,
+        864
+      ],
+      "id": "018d0b9e-4931-44fe-945a-355a02ea7df8",
+      "name": "mergeEnvios"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "ret-001",
+              "name": "output",
+              "value": "=Atendimento transferido com sucesso para a equipe.",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1792,
+        880
+      ],
+      "id": "be72aed4-9bc8-4b40-970c-db1f6d188c80",
+      "name": "retornoWorkflow"
+    },
+    {
+      "parameters": {
+        "content": "#### ⚙️ CONFIGURAÇÃO OBRIGATÓRIA\n\nNo node **trataDados1**, preencha:\n\n**Geral:**\n- `numeroEquipe` → número que receberá o aviso\n- `api_type` → qual API usar: `evolution`, `uazapi` ou `zapi`\n\n**Evolution:**\n- `evoDomain`, `evoInstance`, `evoAPIKey`\n\n**UAZAPI:**\n- `uazapiDomain`, `uazapiToken`\n\n**ZAPI:**\n- `zapiInstanceId`, `zapiToken`, `zapiClientToken`",
+        "height": 692,
+        "width": 260,
+        "color": 3
+      },
+      "id": "85e496cb-68c4-479c-88f0-be65c77386ce",
+      "name": "Sticky Note1",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        320,
+        336
+      ]
+    },
+    {
+      "parameters": {
+        "content": "#### 🔀 ROTEAMENTO MULTI-API\n\nDetecta o `api_type` configurado\nem trataDados1 e envia pela\nAPI correspondente:\n\n→ **Evolution** `/message/sendText`\n→ **UAZAPI** `/send/text`\n→ **ZAPI** `api.z-api.io/send-text`",
+        "height": 580,
+        "width": 220,
+        "color": 6
+      },
+      "id": "334d51dc-8a32-48d4-b3f4-6cf5c679cb85",
+      "name": "Sticky Note2",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1072,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "content": "",
+        "height": 964,
+        "width": 2124,
+        "color": 7
+      },
+      "id": "4489dde4-ba9b-46e8-a149-a8f28a4ab141",
+      "name": "Sticky Note73",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -32,
+        288
+      ]
+    },
+    {
+      "parameters": {
+        "content": " ```\n██╗     ███████╗███╗   ██╗ █████╗      █████╗ ██╗\n██║     ██╔════╝████╗  ██║██╔══██╗    ██╔══██╗██║\n██║     █████╗  ██╔██╗ ██║███████║    ███████║██║\n██║     ██╔══╝  ██║╚██╗██║██╔══██║    ██╔══██║██║\n███████╗███████╗██║ ╚████║██║  ██║    ██║  ██║██║\n╚══════╝╚══════╝╚═╝  ╚═══╝╚═╝  ╚═╝    ╚═╝  ╚═╝╚═╝\n ```                                            ",
+        "width": 500,
+        "color": 6
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        0,
+        0
+      ],
+      "typeVersion": 1,
+      "id": "41153ad6-b5dc-42bc-96a1-cecb8452f672",
+      "name": "Sticky Note3"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "recebeTransferencia": {
+      "main": [
+        [
+          {
+            "node": "trataDados1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "trataDados1": {
+      "main": [
+        [
+          {
+            "node": "pausaIaSupabase",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "pausaIaSupabase": {
+      "main": [
+        [
+          {
+            "node": "criaMensagemEquipe",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "criaMensagemEquipe": {
+      "main": [
+        [
+          {
+            "node": "rotaApiEnvio",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "rotaApiEnvio": {
+      "main": [
+        [
+          {
+            "node": "enviaMensagemEquipeEvo",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "enviaMensagemEquipeUAZAPI",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "enviaMensagemEquipeZAPI",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "enviaMensagemEquipeEvo": {
+      "main": [
+        [
+          {
+            "node": "mergeEnvios",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "enviaMensagemEquipeUAZAPI": {
+      "main": [
+        [
+          {
+            "node": "mergeEnvios",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "enviaMensagemEquipeZAPI": {
+      "main": [
+        [
+          {
+            "node": "mergeEnvios",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "mergeEnvios": {
+      "main": [
+        [
+          {
+            "node": "retornoWorkflow",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "3a428fe0-9ee6-4f74-8748-034438e55733",
+  "meta": {
+    "instanceId": "cc904c3834610abef51c04a29ba4c38e9a293fdb9101b8c2e4590098b2640387"
+  },
+  "id": "lSq4FILLE9JQX0YE",
+  "tags": []
+}
