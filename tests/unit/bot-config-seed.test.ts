@@ -6,7 +6,7 @@
 // antes de qualquer import que puxe a cadeia.
 import "dotenv/config";
 
-import { describe, it, expect, beforeAll, vi } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 
 vi.mock("server-only", () => ({}));
 
@@ -22,6 +22,30 @@ const prisma = new PrismaClient({
 describe("seed do BotConfig", () => {
   beforeAll(async () => {
     await prisma.botConfig.deleteMany({ where: { id: BOT_CONFIG_ID } });
+  });
+
+  // Achado da revisão (rodada 1): o teste abaixo ("NÃO sobrescreve o que foi
+  // editado pelo CRM") grava "Editado pelo CRM" em personaNome de propósito
+  // — é o próprio ponto do teste — mas `semearBotConfig()` nunca sobrescreve
+  // por design, então sem este `afterAll` a mutação sobrevive à suíte e
+  // corrompe o Postgres de dev compartilhado (confirmado ao vivo: a linha
+  // ficou com personaNome "Editado pelo CRM" depois de rodar a suíte uma
+  // vez). `update`, não `delete`+recriar via seed: apagar deixaria uma
+  // janela em runtime, entre o fim deste arquivo e a próxima chamada de
+  // `semearBotConfig()`, em que `prisma.botConfig.findUniqueOrThrow` (o
+  // caminho de leitura de runtime, fora do seed) explodiria por falta de
+  // linha.
+  afterAll(async () => {
+    await prisma.botConfig.update({
+      where: { id: BOT_CONFIG_ID },
+      data: {
+        personaNome: botConfig.persona.nome,
+        personaPapel: botConfig.persona.papel,
+        regras: botConfig.regras,
+        faq: botConfig.faq,
+        ativo: true,
+      },
+    });
   });
 
   it("cria a linha única a partir de config/bot.ts", async () => {
