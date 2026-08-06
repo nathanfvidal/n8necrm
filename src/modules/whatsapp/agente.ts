@@ -3,6 +3,7 @@ import "server-only";
 import { prisma } from "@/lib/prisma";
 
 import { BOT_CONFIG_ID } from "../../../config/bot";
+import { whatsappGateway } from "./gateway";
 
 /**
  * Pausa a IA numa conversa. Idempotente e NÃO reescreve a autoria: se a
@@ -39,5 +40,66 @@ export async function salvarConfigBot(
   return prisma.botConfig.update({
     where: { id: BOT_CONFIG_ID },
     data: { ...dados, atualizadoPorId: usuarioId },
+  });
+}
+
+/** Teto de tamanho de uma mensagem enviada pelo humano — o WhatsApp corta bem
+ * acima disto, mas um campo sem limite é um campo que alguém cola um arquivo
+ * inteiro dentro. */
+const MAX_CARACTERES_RESPOSTA_HUMANA = 4000;
+
+/**
+ * Envia uma resposta escrita por um humano.
+ *
+ * ## A ordem importa e é contraintuitiva: pausa → envia → grava
+ *
+ * O envio é externo e não participa de transação, então alguma falha vai
+ * acontecer. Esta é a única ordem em que TODA falha erra para o lado seguro:
+ *
+ * | Falha        | Resultado                                                        |
+ * |--------------|------------------------------------------------------------------|
+ * | Envio falha  | Bot pausado, nada enviado. O humano vê o erro e repete           |
+ * | Gravação falha | Cliente recebeu, bot pausado, inbox sem a linha. Chato, não grave |
+ * | (se gravasse primeiro) envio falha | Inbox mostrando mensagem que o cliente nunca recebeu — o pior dos três |
+ *
+ * Nenhum caminho deixa a IA respondendo por cima de um humano. É a mesma
+ * semântica dos fluxos n8n que já rodam em produção (`Bots/01_-_ENTRADA_E_SAIDA`,
+ * nó `pausaAtendimentoIA`): quem escreve, pausa.
+ */
+export async function responderComoHumano(
+  conversationId: string,
+  texto: string,
+  usuarioId: string
+): Promise<void> {
+  const conteudo = texto.trim();
+  if (conteudo.length === 0) {
+    throw new Error("Mensagem vazia — nada a enviar.");
+  }
+  if (conteudo.length > MAX_CARACTERES_RESPOSTA_HUMANA) {
+    throw new Error(`Mensagem acima do limite de ${MAX_CARACTERES_RESPOSTA_HUMANA} caracteres.`);
+  }
+
+  const conversa = await prisma.conversation.findUniqueOrThrow({
+    where: { id: conversationId },
+    select: { waId: true },
+  });
+
+  // 1. Pausa primeiro — mesmo que tudo depois falhe, a IA fica calada.
+  await pausarIa(conversationId, usuarioId);
+
+  // 2. Envia.
+  const envio = await whatsappGateway.enviarTexto(conversa.waId, conteudo);
+
+  // 3. Grava.
+  await prisma.whatsappMessage.create({
+    data: {
+      conversationId,
+      idExterno: envio.idExterno,
+      direcao: "SAIDA",
+      autor: "HUMANO",
+      tipo: "TEXTO",
+      texto: conteudo,
+      processadoEm: new Date(),
+    },
   });
 }
