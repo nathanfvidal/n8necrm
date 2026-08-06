@@ -185,28 +185,32 @@ model RateLimit {
  * atômico que `checarRateLimit` (core/rate-limit/limiter.ts) já usa.
  */
 model Conversation {
-  id             String            @id @default(cuid())
-  waId           String            @unique
-  telefone       String?
-  contactId      String?
-  contact        Contact?          @relation(fields: [contactId], references: [id])
-  leadId         String?
-  lead           Lead?             @relation(fields: [leadId], references: [id])
-  nomeExibicao   String?
-  bufferSeq      Int               @default(0)
-  processandoAte DateTime?
-  criadoEm       DateTime          @default(now())
-  atualizadoEm   DateTime          @updatedAt
-  mensagens      WhatsappMessage[]
-  iaAtiva        Boolean           @default(true)
-  iaPausadaEm    DateTime?
-  iaPausadaPorId String?
-  iaPausadaPor   User?             @relation("ConversasPausadas", fields: [iaPausadaPorId], references: [id])
+  id                    String            @id @default(cuid())
+  waId                  String            @unique
+  telefone              String?
+  contactId             String?
+  contact               Contact?          @relation(fields: [contactId], references: [id])
+  leadId                String?
+  lead                  Lead?             @relation(fields: [leadId], references: [id])
+  nomeExibicao          String?
+  bufferSeq             Int               @default(0)
+  processandoAte        DateTime?
+  criadoEm              DateTime          @default(now())
+  atualizadoEm          DateTime          @updatedAt
+  mensagens             WhatsappMessage[]
+  iaAtiva               Boolean           @default(true)
+  iaPausadaEm           DateTime?
+  iaPausadaPorId        String?
+  iaPausadaPor          User?             @relation("ConversasPausadas", fields: [iaPausadaPorId], references: [id])
+  aguardandoHumanoDesde DateTime?
 
   // turno.ts faz UPDATE ... WHERE "processandoAte" IS NULL OR "processandoAte" < now()
   // a cada job de fila — sem índice, essa checagem varreria a tabela inteira
   // conforme o número de conversas ativas cresce.
   @@index([processandoAte])
+  // A lista de conversas ordena por este campo em toda navegação para
+  // /conversas — mesmo raciocínio do índice em `processandoAte`.
+  @@index([aguardandoHumanoDesde])
 }
 
 /// Configuração do agente de IA — LINHA ÚNICA, id fixo `bot-config`.
