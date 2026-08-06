@@ -113,6 +113,18 @@ indistinguível de um bug, e a primeira reação de quem vê é reabrir o códig
 | `atualizadoEm` | `DateTime @updatedAt` |
 | `atualizadoPorId` | `String?` → `User` |
 
+**Colisão de nome a evitar:** `config/bot.ts` já exporta uma
+`interface BotConfig` (aninhada: `persona.nome`, `persona.papel`, `regras`).
+O modelo Prisma acima gera um tipo com esse mesmo nome, e a ação de restaurar
+(§ 6) importa os dois no mesmo arquivo. A interface do config passa a se
+chamar `BotConfigPadrao`; o modelo fica com o nome bom.
+
+**`faq` também entra em `config/bot.ts`.** Sem isso, "voltar ao padrão do
+fork" restauraria a partir de um arquivo que não tem o campo — apagando a FAQ
+em vez de restaurá-la. O valor inicial do fork é uma FAQ curta e real (horário,
+endereço, formas de pagamento), não string vazia: uma tela que já nasce com
+conteúdo mostra o formato esperado sem precisar explicá-lo.
+
 **Linha única imposta pelo banco, não por convenção:** `id` tem o valor fixo
 `"bot-config"` como default, então todo `create` sem id explícito colide na
 chave primária — a segunda linha é impossível por construção, e nenhum código
@@ -124,6 +136,14 @@ persona vazia.
 
 O interruptor global mora aqui porque quando o bot faz besteira é preciso um
 botão, não desligar conversa por conversa.
+
+**RLS é obrigatória e não é automática.** O Prisma não emite
+`ENABLE ROW LEVEL SECURITY` nem `REVOKE` para modelo novo — a migração da
+Fatia 1 escreveu os dois à mão para `Conversation` e `WhatsappMessage`, e a
+migração `20260802000000_revoke_default_privileges_future_tables` cobre só a
+metade dos GRANTs. Sem as duas linhas escritas à mão, `BotConfig` nasce
+exposta pela API PostgREST pública — e ela guarda justamente o prompt do
+agente, que é o ativo comercial desta fatia.
 
 ## 5. Comportamento
 
@@ -137,6 +157,20 @@ valor variável ali em cima invalida esse cache a cada chamada.
 Ela passa a **receber a config como argumento**. Continua determinística
 (mesma config, mesmos bytes) e continua trivial de testar. Quem lê o banco é
 o `turno.ts`, uma vez por turno.
+
+O argumento é **plano**, no formato da linha do banco
+(`{ personaNome, personaPapel, regras, faq }`) e não no formato aninhado do
+`config/bot.ts` — quem chama em runtime é sempre o banco, e converter na
+borda rara (o seed, a restauração) é melhor que converter no caminho quente.
+O tipo é declarado no próprio `prompt.ts` como tipo estrutural, sem importar
+`@prisma/client`: mesmo motivo pelo qual `gateway/tipos.ts` não importa
+(o montador de prompt é texto puro, não deve depender do client do banco).
+
+**Onde a FAQ entra:** bloco próprio depois das regras, sob o cabeçalho
+`Perguntas frequentes (use estas respostas quando forem aplicáveis):`. Quando
+`faq` está vazia, o bloco é **omitido inteiro** — cabeçalho e tudo. Deixar um
+cabeçalho sem conteúdo é pior que não ter FAQ: o modelo lê como instrução
+truncada.
 
 Explicitamente **não** vamos fazer a função ir ao banco sozinha: viraria uma
 consulta escondida dentro de algo que todo mundo trata como função pura.
@@ -169,6 +203,16 @@ cliente recebe só a do humano.
 Custa uma coluna a mais numa consulta que já acontece, e reaproveita um ponto
 de corte que já existe e já é testado.
 
+**Os dois motivos de abortar não são o mesmo caso** — e é por isso que a
+função deixa de devolver booleano e passa a devolver o motivo:
+
+| Motivo | Pendentes | Por quê |
+|---|---|---|
+| Perdi o lease | **não** marcar | Quem assumiu o lease vai respondê-las; marcar aqui as faria sumir sem resposta |
+| IA foi pausada | **marcar** | Mesmo tratamento do teto por hora: um humano assumiu, não há resposta automática a dar |
+
+Com um booleano só, um dos dois casos fica necessariamente errado.
+
 ### 5.4 Ordem das operações no envio humano
 
 O envio é externo e não participa de transação. A ordem é:
@@ -191,12 +235,24 @@ Nenhum caminho deixa a IA respondendo em cima de um humano.
 ## 6. Telas
 
 **Inbox `/conversas/[id]`** — hoje só leitura. Ganha campo de resposta com
-botão enviar, indicador do estado da IA com botão de religar (mostrando quem
-pausou e quando), e mensagens `HUMANO` visualmente distintas das `IA`.
+botão enviar, e indicador do estado da IA com botão de religar (mostrando
+quem pausou e quando). A distinção visual entre `HUMANO` e `IA` **já existe**
+(o balão de saída carrega um `Badge` "Você"/"IA") — nada a fazer aqui além de
+conferir que continua correta quando o humano passa a escrever de verdade.
+
+**Lista `/conversas`** — o estado da IA aparece também aqui, não só no
+detalhe. É o que sustenta a mitigação do § 10: uma conversa pausada que só se
+distingue depois de aberta é uma conversa que ninguém percebe que está
+esperando. Exige `listarConversas()` selecionar `iaAtiva`.
 
 **`/conversas/agente`** — tela nova, alcançável por link no cabeçalho da
 inbox. Não vira item de menu: o painel já tem sete entradas e esta é uma tela
 de uso raro.
+
+O segmento estático `agente` convive com o dinâmico `[id]` porque o Next
+resolve estático antes de dinâmico — uma conversa cujo id fosse literalmente
+`"agente"` ficaria inacessível, o que não acontece com ids `cuid()`. Vale um
+teste explícito: é o tipo de coisa que, quebrando, parece bug de dado.
 
 Contém os campos da persona, a lista de regras, o bloco de FAQ, o interruptor
 global, e duas coisas que valem mais que os campos:
