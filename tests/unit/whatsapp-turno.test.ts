@@ -33,6 +33,7 @@ import {
   liberarLease,
   confirmarTitularidadeLease,
 } from "../../src/modules/whatsapp/turno";
+import { TIPO_CONVERSA_AGUARDANDO } from "../../src/modules/whatsapp/notificacao-tipos";
 import { BOT_CONFIG_ID, botConfig } from "../../config/bot";
 // criarConversation/criarMensagemEntrada extraídos para tests/unit/helpers/whatsapp.ts
 // (Task 4 da Fatia 2) — mesmo nome, mesma assinatura, mesmo PREFIXO interno
@@ -49,6 +50,23 @@ async function limparDadosDeTeste() {
   });
   const ids = conversas.map((c) => c.id);
   if (ids.length > 0) {
+    // A guarda de IA (Fatia 2) agora dispara `marcarAguardandoHumano`, que
+    // cria `Notification`. `Notification` não tem FK para `Conversation`
+    // (payload é só um `conversationId` solto em JSON) — escopado às
+    // conversas que ESTE arquivo criou, nunca um `deleteMany` por `tipo`
+    // sozinho, que apagaria aviso de conversa real no banco de dev
+    // compartilhado. Mesmo padrão de tests/unit/whatsapp-notificacoes.test.ts.
+    const notificacoes = await prisma.notification.findMany({
+      where: { tipo: TIPO_CONVERSA_AGUARDANDO },
+    });
+    const idsNotificacoes = notificacoes
+      .filter((n) =>
+        ids.includes((n.payload as { conversationId?: string } | null)?.conversationId ?? "")
+      )
+      .map((n) => n.id);
+    if (idsNotificacoes.length > 0) {
+      await prisma.notification.deleteMany({ where: { id: { in: idsNotificacoes } } });
+    }
     await prisma.whatsappMessage.deleteMany({ where: { conversationId: { in: ids } } });
     await prisma.conversation.deleteMany({ where: { id: { in: ids } } });
   }
@@ -683,6 +701,66 @@ describe("processarTurno", () => {
           data: { personaNome: original.personaNome },
         });
       }
+    });
+  });
+
+  describe("marca conversa aguardando humano", () => {
+    async function aguardandoDe(conversationId: string) {
+      const c = await prisma.conversation.findUniqueOrThrow({ where: { id: conversationId } });
+      return c.aguardandoHumanoDesde;
+    }
+
+    it("marca quando a conversa está pausada", async () => {
+      const conversa = await criarConversation({ iaAtiva: false });
+      await criarMensagemEntrada(conversa.id, { texto: "oi, tem o Onix?" });
+
+      await processarTurno({ conversationId: conversa.id, seq: conversa.bufferSeq });
+
+      expect(await aguardandoDe(conversa.id)).toBeInstanceOf(Date);
+    });
+
+    it("marca quando o interruptor global está desligado", async () => {
+      const original = await prisma.botConfig.findUniqueOrThrow({ where: { id: BOT_CONFIG_ID } });
+      await prisma.botConfig.update({ where: { id: BOT_CONFIG_ID }, data: { ativo: false } });
+      try {
+        const conversa = await criarConversation();
+        await criarMensagemEntrada(conversa.id, { texto: "bom dia" });
+
+        await processarTurno({ conversationId: conversa.id, seq: conversa.bufferSeq });
+
+        expect(await aguardandoDe(conversa.id)).toBeInstanceOf(Date);
+      } finally {
+        await prisma.botConfig.update({
+          where: { id: BOT_CONFIG_ID },
+          data: { ativo: original.ativo },
+        });
+      }
+    });
+
+    // O caso que, se quebrar, enche o sino de conversas que estão sendo
+    // atendidas normalmente pela IA — e a equipe para de olhar o sino.
+    it("NÃO marca quando a IA responde normalmente", async () => {
+      const conversa = await criarConversation();
+      await criarMensagemEntrada(conversa.id, { texto: "quanto custa?" });
+      enviarTextoMock.mockResolvedValue({ idExterno: `${PREFIXO}saida-${crypto.randomUUID()}` });
+
+      await processarTurno({ conversationId: conversa.id, seq: conversa.bufferSeq });
+
+      expect(await aguardandoDe(conversa.id)).toBeNull();
+    });
+
+    it("a resposta da IA limpa uma espera anterior", async () => {
+      const conversa = await criarConversation();
+      await prisma.conversation.update({
+        where: { id: conversa.id },
+        data: { aguardandoHumanoDesde: new Date() },
+      });
+      await criarMensagemEntrada(conversa.id, { texto: "voltei" });
+      enviarTextoMock.mockResolvedValue({ idExterno: `${PREFIXO}saida-${crypto.randomUUID()}` });
+
+      await processarTurno({ conversationId: conversa.id, seq: conversa.bufferSeq });
+
+      expect(await aguardandoDe(conversa.id)).toBeNull();
     });
   });
 });

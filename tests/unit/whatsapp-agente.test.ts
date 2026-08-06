@@ -138,4 +138,35 @@ describe("resposta humana", () => {
     );
     expect(enviarTextoMock).not.toHaveBeenCalled();
   });
+
+  it("responder como humano limpa o estado de espera", async () => {
+    const conversa = await criarConversation();
+    await prisma.conversation.update({
+      where: { id: conversa.id },
+      data: { aguardandoHumanoDesde: new Date() },
+    });
+    enviarTextoMock.mockResolvedValueOnce({ idExterno: `teste-${crypto.randomUUID()}` });
+
+    await responderComoHumano(conversa.id, "Oi! Já te ajudo.", ID_DO_ADMIN);
+
+    const depois = await prisma.conversation.findUniqueOrThrow({ where: { id: conversa.id } });
+    expect(depois.aguardandoHumanoDesde).toBeNull();
+  });
+
+  // Se limpasse antes do envio, uma falha de gateway deixaria a conversa
+  // parecendo atendida — e ela sumiria do topo da lista sem ninguém ter falado
+  // com o cliente. Mesmo raciocínio da ordem pausa → envia → grava.
+  it("falha de envio NÃO limpa o estado de espera", async () => {
+    const conversa = await criarConversation();
+    await prisma.conversation.update({
+      where: { id: conversa.id },
+      data: { aguardandoHumanoDesde: new Date() },
+    });
+    enviarTextoMock.mockRejectedValueOnce(new Error("gateway fora do ar"));
+
+    await expect(responderComoHumano(conversa.id, "teste", ID_DO_ADMIN)).rejects.toThrow();
+
+    const depois = await prisma.conversation.findUniqueOrThrow({ where: { id: conversa.id } });
+    expect(depois.aguardandoHumanoDesde).not.toBeNull();
+  });
 });

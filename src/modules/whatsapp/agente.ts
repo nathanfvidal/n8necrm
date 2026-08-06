@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 
 import { BOT_CONFIG_ID, botConfig } from "../../../config/bot";
 import { whatsappGateway } from "./gateway";
+import { limparAguardandoHumano } from "./notificacoes";
 
 /**
  * Pausa a IA numa conversa. Idempotente e NÃO reescreve a autoria: se a
@@ -104,6 +105,12 @@ export class RespostaHumanaInvalidaError extends Error {}
  * Nenhum caminho deixa a IA respondendo por cima de um humano. É a mesma
  * semântica dos fluxos n8n que já rodam em produção (`Bots/01_-_ENTRADA_E_SAIDA`,
  * nó `pausaAtendimentoIA`): quem escreve, pausa.
+ *
+ * Fatia 3 (aviso de conversa aguardando humano) acrescenta um quarto passo,
+ * pausa → envia → grava → **limpa**: `limparAguardandoHumano` só depois que
+ * os três primeiros terminaram, pelo mesmo motivo de sempre — limpar antes
+ * do envio apagaria o sinal de espera por cima de uma mensagem que o cliente
+ * nunca recebeu.
  */
 export async function responderComoHumano(
   conversationId: string,
@@ -166,4 +173,11 @@ export async function responderComoHumano(
     );
     throw erro;
   }
+
+  // 4. Limpa o estado de espera — só depois do envio E da gravação, nunca
+  // antes: mesmo raciocínio da ordem pausa → envia → grava acima. Se isto
+  // viesse antes do envio, uma falha do gateway apagaria o sinal de que o
+  // cliente ainda espera, e a conversa sumiria do topo da lista sem ninguém
+  // ter falado com ele.
+  await limparAguardandoHumano(conversationId);
 }
