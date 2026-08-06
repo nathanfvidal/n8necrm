@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { montarPromptSistema } from "../../src/modules/whatsapp/prompt";
+import { botConfig } from "../../config/bot";
 
 const BASE = {
   personaNome: "Ana",
@@ -44,15 +45,31 @@ describe("montarPromptSistema", () => {
   // atendimento com informação vencida sem ninguém perceber. Esta guarda
   // por regex é o que pega esse caso.
   //
-  // Aplicada só a `BASE` (cujo `faq` é ""), não a uma config com FAQ
-  // preenchida: a FAQ é texto livre editável pelo cliente e PODE
-  // legitimamente conter uma data ("atendemos até 24/12") — aplicar a
-  // mesma guarda a esse conteúdo criaria falso positivo para um uso válido.
-  // O que este teste protege é a persona/papel/regras e o esqueleto que o
-  // próprio código gera (numeração, cabeçalhos) — nunca texto livre vindo
-  // da config.
-  it("não introduz nenhum padrão de data reconhecível na persona/regras/esqueleto do prompt", () => {
-    const prompt = montarPromptSistema(BASE);
+  // Revisão final da fatia, achado I4: esta guarda rodava sobre `BASE` — um
+  // objeto que o PRÓPRIO teste escreve no topo deste arquivo. Nenhuma data
+  // hardcoded pode aparecer ali por acidente, então a guarda não podia
+  // falhar nunca, não importa o que acontecesse com o conteúdo real. Antes
+  // desta fatia, a mesma guarda rodava sobre `botConfig` (`config/bot.ts`)
+  // — o conteúdo de fábrica que o dono de um fork de fato edita, e onde uma
+  // data colada por engano teria efeito real. Corrigido montando a config
+  // achatada a partir de `botConfig` (mesma conversão que
+  // `restaurarConfigPadrao` faz em `src/modules/whatsapp/agente.ts`:
+  // `personaNome: botConfig.persona.nome` etc.), não a partir de `BASE`.
+  //
+  // `faq: ""` de propósito, não `botConfig.faq`: a FAQ é texto livre
+  // editável pelo cliente e PODE legitimamente conter uma data ("atendemos
+  // até 24/12"); incluí-la faria este teste falhar por um USO CORRETO do
+  // campo, não por um bug. O que este teste protege é a persona/papel/regras
+  // e o esqueleto que o próprio código gera (numeração, cabeçalhos) — nunca
+  // texto livre vindo da config.
+  it("não introduz nenhum padrão de data reconhecível na persona/regras/esqueleto do prompt real do fork", () => {
+    const configReal = {
+      personaNome: botConfig.persona.nome,
+      personaPapel: botConfig.persona.papel,
+      regras: botConfig.regras,
+      faq: "",
+    };
+    const prompt = montarPromptSistema(configReal);
     expect(prompt).not.toMatch(/\d{4}-\d{2}-\d{2}/); // ISO date
     expect(prompt).not.toMatch(/\d{1,2}\/\d{1,2}\/\d{2,4}/); // DD/MM/AAAA
   });
