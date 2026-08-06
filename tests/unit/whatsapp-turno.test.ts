@@ -33,14 +33,18 @@ import {
   liberarLease,
   confirmarTitularidadeLease,
 } from "../../src/modules/whatsapp/turno";
+import { BOT_CONFIG_ID, botConfig } from "../../config/bot";
 
 const PREFIXO = "teste-turno-";
 
-async function criarConversation(overrides: Partial<{ waId: string; bufferSeq: number }> = {}) {
+async function criarConversation(
+  overrides: Partial<{ waId: string; bufferSeq: number; iaAtiva: boolean }> = {}
+) {
   return prisma.conversation.create({
     data: {
       waId: overrides.waId ?? `${PREFIXO}${crypto.randomUUID()}`,
       bufferSeq: overrides.bufferSeq ?? 1,
+      iaAtiva: overrides.iaAtiva ?? true,
     },
   });
 }
@@ -336,7 +340,8 @@ describe("processarTurno", () => {
       const conversation = await criarConversation({ bufferSeq: 1 });
       const tokenA = await claimLease(conversation.id);
 
-      expect(await confirmarTitularidadeLease(conversation.id, tokenA!.processandoAte)).toBe(true);
+      // Ainda titular e IA ativa: pode seguir (`null`).
+      expect(await confirmarTitularidadeLease(conversation.id, tokenA!.processandoAte)).toBeNull();
 
       await prisma.conversation.update({
         where: { id: conversation.id },
@@ -345,8 +350,10 @@ describe("processarTurno", () => {
       const tokenB = await claimLease(conversation.id);
 
       // O token antigo (A) não é mais o titular; o novo (B) é.
-      expect(await confirmarTitularidadeLease(conversation.id, tokenA!.processandoAte)).toBe(false);
-      expect(await confirmarTitularidadeLease(conversation.id, tokenB!.processandoAte)).toBe(true);
+      expect(await confirmarTitularidadeLease(conversation.id, tokenA!.processandoAte)).toBe(
+        "lease-perdido"
+      );
+      expect(await confirmarTitularidadeLease(conversation.id, tokenB!.processandoAte)).toBeNull();
     });
   });
 
@@ -558,6 +565,104 @@ describe("processarTurno", () => {
     const ultimaEntrada = contexto.historico.at(-1);
     expect(ultimaEntrada.texto.length).toBeLessThan(textoEnorme.length);
     expect(ultimaEntrada.texto).toContain("truncada");
+  });
+
+  describe("guarda da IA (Fatia 2)", () => {
+    it("não responde quando a conversa está pausada, mas marca as pendentes", async () => {
+      const conversation = await criarConversation({ iaAtiva: false });
+      await criarMensagemEntrada(conversation.id, { texto: "oi, tem o Onix 2020?" });
+
+      await processarTurno({ conversationId: conversation.id, seq: conversation.bufferSeq });
+
+      expect(enviarTextoMock).not.toHaveBeenCalled();
+      const pendentes = await prisma.whatsappMessage.findMany({
+        where: { conversationId: conversation.id, direcao: "ENTRADA", processadoEm: null },
+      });
+      expect(pendentes).toHaveLength(0);
+    });
+
+    it("não responde quando o interruptor global está desligado", async () => {
+      await prisma.botConfig.update({ where: { id: BOT_CONFIG_ID }, data: { ativo: false } });
+      try {
+        const conversation = await criarConversation();
+        await criarMensagemEntrada(conversation.id, { texto: "bom dia" });
+
+        await processarTurno({ conversationId: conversation.id, seq: conversation.bufferSeq });
+
+        expect(enviarTextoMock).not.toHaveBeenCalled();
+      } finally {
+        await prisma.botConfig.update({ where: { id: BOT_CONFIG_ID }, data: { ativo: true } });
+      }
+    });
+
+    // O caso que motiva a mudança de tipo de retorno: pausar DEPOIS que o
+    // modelo já respondeu, mas antes do envio. A resposta gerada tem que ser
+    // jogada fora -- é dinheiro já gasto, e mandá-la seria falar por cima do
+    // humano.
+    it("descarta a resposta quando a IA é pausada durante a chamada ao modelo", async () => {
+      const conversation = await criarConversation();
+      await criarMensagemEntrada(conversation.id, { texto: "quero saber o preço" });
+
+      gerarRespostaMock.mockImplementationOnce(async () => {
+        await prisma.conversation.update({
+          where: { id: conversation.id },
+          data: { iaAtiva: false, iaPausadaEm: new Date() },
+        });
+        return { mensagens: ["Resposta que não deve ser enviada"] };
+      });
+
+      await processarTurno({ conversationId: conversation.id, seq: conversation.bufferSeq });
+
+      expect(enviarTextoMock).not.toHaveBeenCalled();
+    });
+
+    // A distinção que um booleano não consegue expressar: quem PERDEU o
+    // lease não pode marcar as pendentes -- quem assumiu o lease vai
+    // respondê-las.
+    it("perder o lease NÃO marca as pendentes como processadas", async () => {
+      const conversation = await criarConversation();
+      await criarMensagemEntrada(conversation.id, { texto: "oi" });
+
+      gerarRespostaMock.mockImplementationOnce(async () => {
+        await prisma.conversation.update({
+          where: { id: conversation.id },
+          data: { processandoAte: new Date(Date.now() + 60_000) }, // outro dono
+        });
+        return { mensagens: ["resposta órfã"] };
+      });
+
+      await processarTurno({ conversationId: conversation.id, seq: conversation.bufferSeq });
+
+      const pendentes = await prisma.whatsappMessage.findMany({
+        where: { conversationId: conversation.id, direcao: "ENTRADA", processadoEm: null },
+      });
+      expect(pendentes).toHaveLength(1);
+    });
+
+    it("monta o prompt a partir do banco, não de config/bot.ts", async () => {
+      const original = await prisma.botConfig.findUniqueOrThrow({ where: { id: BOT_CONFIG_ID } });
+      await prisma.botConfig.update({
+        where: { id: BOT_CONFIG_ID },
+        data: { personaNome: "Beatriz-do-teste" },
+      });
+
+      try {
+        const conversation = await criarConversation();
+        await criarMensagemEntrada(conversation.id, { texto: "oi" });
+        enviarTextoMock.mockResolvedValue({ idExterno: `${PREFIXO}saida-${conversation.id}` });
+
+        await processarTurno({ conversationId: conversation.id, seq: conversation.bufferSeq });
+
+        const [chamada] = gerarRespostaMock.mock.calls.at(-1)!;
+        expect(chamada.systemPrompt).toContain("Beatriz-do-teste");
+        expect(chamada.systemPrompt).not.toContain(botConfig.persona.nome);
+      } finally {
+        await prisma.botConfig.update({
+          where: { id: BOT_CONFIG_ID },
+          data: { personaNome: original.personaNome },
+        });
+      }
+    });
   });
 });
 

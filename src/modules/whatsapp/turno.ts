@@ -185,6 +185,27 @@ async function processarMensagensPendentes(conversationId: string, meuToken: Dat
 
   if (pendentes.length === 0) return;
 
+  // Fatia 2: a guarda fica AQUI, não no webhook. A mensagem do cliente
+  // continua sendo ingerida e aparece na inbox mesmo com a IA calada — barrar
+  // no webhook faria a mensagem sumir, que é o pior comportamento possível
+  // numa conversa sob atendimento humano.
+  //
+  // Mesmo tratamento que o teto de respostas por hora logo abaixo: as
+  // pendentes são marcadas como processadas SEM resposta ("persiste mas para
+  // de responder", nunca "descarta calado").
+  const configBot = await prisma.botConfig.findUniqueOrThrow({ where: { id: BOT_CONFIG_ID } });
+  const conversaAtual = await prisma.conversation.findUniqueOrThrow({
+    where: { id: conversationId },
+    select: { iaAtiva: true },
+  });
+
+  if (!configBot.ativo || !conversaAtual.iaAtiva) {
+    const motivo = !configBot.ativo ? "interruptor global desligado" : "IA pausada nesta conversa";
+    console.info(`Conversa ${conversationId}: ${motivo} — pendentes marcadas sem resposta automática.`);
+    await marcarPendentesComoProcessadas(pendentes);
+    return;
+  }
+
   // Fix round 1/5, achado do revisor (I2): o rate limit do webhook é por
   // IP — e todo tráfego legítimo vem de UM IP (a instância Evolution), então
   // aquele limite nunca protege CUSTO por cliente: N números de telefone
@@ -201,10 +222,7 @@ async function processarMensagensPendentes(conversationId: string, meuToken: Dat
       `Conversa ${conversationId} atingiu o teto de ${TETO_RESPOSTAS_IA_POR_HORA} respostas de IA na ` +
         `última hora — pendentes marcadas como processadas sem resposta automática.`
     );
-    await prisma.whatsappMessage.updateMany({
-      where: { id: { in: pendentes.map((mensagem) => mensagem.id) } },
-      data: { processadoEm: new Date() },
-    });
+    await marcarPendentesComoProcessadas(pendentes);
     return;
   }
 
@@ -230,8 +248,6 @@ async function processarMensagensPendentes(conversationId: string, meuToken: Dat
     // critério algum.
     const textoUnido = comTexto.map((mensagem) => truncarParaContexto(mensagem.texto!)).join("\n");
 
-    const configBot = await prisma.botConfig.findUniqueOrThrow({ where: { id: BOT_CONFIG_ID } });
-
     const resultado = await llmProvider.gerarResposta({
       systemPrompt: montarPromptSistema(configBot),
       historico: [...historicoAnterior, { autor: "CLIENTE", texto: textoUnido }],
@@ -254,12 +270,20 @@ async function processarMensagensPendentes(conversationId: string, meuToken: Dat
   // `finally` de `processarTurno`) continua sendo a segunda camada: mesmo
   // que este check e o envio corram entre si de alguma forma, o release só
   // afeta a linha se o token ainda bater.
-  const aindaSouTitular = await confirmarTitularidadeLease(conversationId, meuToken);
-  if (!aindaSouTitular) {
+  const motivoAborto = await confirmarTitularidadeLease(conversationId, meuToken);
+  if (motivoAborto === "lease-perdido") {
     console.warn(
       `Turno da conversa ${conversationId} abortado antes de enviar: outro processador assumiu o ` +
         `lease enquanto este aguardava o modelo. Resposta gerada descartada para não duplicar envio.`
     );
+    return;
+  }
+  if (motivoAborto === "ia-pausada") {
+    console.info(
+      `Turno da conversa ${conversationId} abortado antes de enviar: um humano assumiu a conversa ` +
+        `enquanto o modelo respondia. Resposta gerada descartada.`
+    );
+    await marcarPendentesComoProcessadas(pendentes);
     return;
   }
 
@@ -293,13 +317,25 @@ async function processarMensagensPendentes(conversationId: string, meuToken: Dat
     });
 
     if (!pendentesMarcadas) {
-      await prisma.whatsappMessage.updateMany({
-        where: { id: { in: pendentes.map((mensagem) => mensagem.id) } },
-        data: { processadoEm: new Date() },
-      });
+      await marcarPendentesComoProcessadas(pendentes);
       pendentesMarcadas = true;
     }
   }
+}
+
+/**
+ * Marca um lote de mensagens ENTRADA como processadas SEM que uma resposta
+ * automática tenha sido enviada — usado nos três pontos onde as pendentes
+ * precisam ficar visíveis no inbox humano mesmo sem resposta da IA: a guarda
+ * de IA pausada/interruptor desligado, o teto de respostas por hora, e o
+ * envio normal (chamado aqui de novo, com o mesmo formato, para não
+ * duplicar a query em três lugares).
+ */
+async function marcarPendentesComoProcessadas(pendentes: Array<{ id: string }>): Promise<void> {
+  await prisma.whatsappMessage.updateMany({
+    where: { id: { in: pendentes.map((mensagem) => mensagem.id) } },
+    data: { processadoEm: new Date() },
+  });
 }
 
 async function respostasIaNaUltimaHoraAtingiuTeto(conversationId: string): Promise<boolean> {
@@ -316,20 +352,43 @@ function truncarParaContexto(texto: string): string {
 }
 
 /**
- * Confere se `token` ainda é o valor de `processandoAte` gravado agora —
- * usado depois da chamada (lenta) ao modelo, antes de enviar qualquer
- * mensagem (ver comentário em `processarMensagensPendentes`). Exportada
- * (junto com `claimLease`/`liberarLease` abaixo) para
- * `tests/unit/whatsapp-turno.test.ts` poder provar o mecanismo do fencing
- * token diretamente, sem depender de temporização real entre chamadas
- * concorrentes a `processarTurno`.
+ * Motivo pelo qual o turno deve abortar antes de enviar — `null` quando pode
+ * seguir.
+ *
+ * Os dois motivos NÃO recebem o mesmo tratamento, e é por isso que isto
+ * deixou de ser um booleano na Fatia 2:
+ *
+ * - `lease-perdido`: outro processador assumiu a conversa e vai responder as
+ *   pendentes. Marcá-las aqui as faria sumir sem resposta nenhuma.
+ * - `ia-pausada`: um humano assumiu enquanto o modelo pensava. Não há
+ *   resposta automática a dar, então as pendentes SÃO marcadas — mesmo
+ *   tratamento do teto por hora.
+ *
+ * Com um booleano só, um dos dois casos fica necessariamente errado.
  */
-export async function confirmarTitularidadeLease(conversationId: string, token: Date): Promise<boolean> {
+export type MotivoAborto = "lease-perdido" | "ia-pausada" | null;
+
+/**
+ * Confere se `token` ainda é o valor de `processandoAte` gravado agora, e se
+ * a IA continua ativa nesta conversa — usado depois da chamada (lenta) ao
+ * modelo, antes de enviar qualquer mensagem (ver comentário em
+ * `processarMensagensPendentes`). Exportada (junto com
+ * `claimLease`/`liberarLease` abaixo) para `tests/unit/whatsapp-turno.test.ts`
+ * poder provar o mecanismo do fencing token diretamente, sem depender de
+ * temporização real entre chamadas concorrentes a `processarTurno`.
+ */
+export async function confirmarTitularidadeLease(
+  conversationId: string,
+  token: Date
+): Promise<MotivoAborto> {
   const conversation = await prisma.conversation.findUnique({
     where: { id: conversationId },
-    select: { processandoAte: true },
+    select: { processandoAte: true, iaAtiva: true },
   });
-  return conversation?.processandoAte?.getTime() === token.getTime();
+
+  if (conversation?.processandoAte?.getTime() !== token.getTime()) return "lease-perdido";
+  if (!conversation.iaAtiva) return "ia-pausada";
+  return null;
 }
 
 /**
