@@ -119,8 +119,8 @@ describe("formatarDataBR / formatarDataHoraBR / dataISOEmSaoPaulo (timestamps, f
 describe("formatarDuracaoDesde", () => {
   const agora = new Date("2026-08-06T12:00:00.000Z");
 
-  it("0 minutos: mostra 'agora'", () => {
-    expect(formatarDuracaoDesde(agora, agora)).toBe("agora");
+  it("0 minutos: mostra '< 1 min'", () => {
+    expect(formatarDuracaoDesde(agora, agora)).toBe("< 1 min");
   });
 
   it("59 minutos: ainda em minutos, não vira '1 h'", () => {
