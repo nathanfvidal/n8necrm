@@ -24,6 +24,7 @@ import "dotenv/config";
 import { PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { test, expect, type Page, type Locator } from "@playwright/test";
+import { EMAIL_ADMIN_E2E, senhaE2e } from "./credenciais";
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL! });
 const prisma = new PrismaClient({ adapter });
@@ -330,8 +331,8 @@ test("cria um lead manualmente e move até a etapa final do funil", async ({ pag
 
   await test.step("login", async () => {
     await page.goto("/login");
-    await page.getByLabel("E-mail").fill("admin@exemplo.com");
-    await page.getByLabel("Senha").fill("senha123");
+    await page.getByLabel("E-mail").fill(EMAIL_ADMIN_E2E);
+    await page.getByLabel("Senha").fill(senhaE2e());
     await page.getByRole("button", { name: "Entrar" }).click();
     await page.waitForURL("/");
   });

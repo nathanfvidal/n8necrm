@@ -24,6 +24,7 @@ import { PrismaPg } from "@prisma/adapter-pg";
 import bcrypt from "bcryptjs";
 import { randomUUID } from "node:crypto";
 import { test, expect, type Page } from "@playwright/test";
+import { EMAIL_ADMIN_E2E, EMAIL_VENDEDOR_E2E, senhaE2e } from "./credenciais";
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL! });
 const prisma = new PrismaClient({ adapter });
@@ -123,7 +124,7 @@ test.afterAll(async () => {
  * herdaria a sessão do teste anterior e passaria por engano, o pior resultado
  * possível para um teste de autorização.
  */
-async function login(page: Page, email: string, senha = "senha123"): Promise<void> {
+async function login(page: Page, email: string, senha = senhaE2e()): Promise<void> {
   await page.goto("/login");
   await page.waitForLoadState("networkidle");
   await page.getByLabel("E-mail").fill(email);
@@ -152,7 +153,7 @@ test("pausar, responder e religar a IA numa conversa", async ({ page }) => {
     },
   });
 
-  await login(page, "admin@exemplo.com");
+  await login(page, EMAIL_ADMIN_E2E);
 
   await page.goto(`/conversas/${conversa.id}`);
   await expect(page.getByText("IA respondendo")).toBeVisible();
@@ -176,13 +177,13 @@ test("pausar, responder e religar a IA numa conversa", async ({ page }) => {
 });
 
 test("a tela do agente é inacessível a quem não é ADMIN", async ({ page }) => {
-  await login(page, "vendedor@exemplo.com");
+  await login(page, EMAIL_VENDEDOR_E2E);
   await page.goto("/conversas/agente");
   await expect(page).toHaveURL(/\/conversas$/);
 });
 
 test("editar a persona muda a prévia do prompt", async ({ page }) => {
-  await login(page, "admin@exemplo.com");
+  await login(page, EMAIL_ADMIN_E2E);
   await page.goto("/conversas/agente");
   await page.getByLabel("Nome da persona").fill("Beatriz");
   await expect(page.getByTestId("previa-prompt")).toContainText("Você é Beatriz");
@@ -216,7 +217,7 @@ test("editar a persona muda a prévia do prompt", async ({ page }) => {
  * o usuário DEPOIS do login (sem derrubar o cookie) reproduz "sessão
  * inválida" sem expirar nada de verdade. `pausarIaAction` nunca chama
  * `whatsappGateway` — a rejeição acontece antes, dentro de `usuarioAtual()`.
- * Usuário descartável (não `admin@exemplo.com`/`vendedor@exemplo.com`) para
+ * Usuário descartável (não as contas fixas de `credenciais.ts`) para
  * não desativar, ainda que por um instante, uma conta que outros specs desta
  * suíte usam em paralelo (`workers: 3`, `fullyParallel: true`).
  */

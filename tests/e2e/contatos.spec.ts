@@ -14,9 +14,9 @@
 //    não ganhou um gate de ADMIN por descuido.
 // 2. O limite de tentativas de login é POR CONTA (10 a cada 10 minutos, ver
 //    core/rate-limit/login.ts), e a suíte já consome quase todo o orçamento
-//    de `admin@exemplo.com`. Mais um login de admin aqui deixaria a suíte na
+//    de `e2e-admin@teste.invalid`. Mais um login de admin aqui deixaria a suíte na
 //    borda, e o sintoma seria "credenciais inválidas" em testes sem relação
-//    nenhuma com login. `vendedor@exemplo.com` tem chave própria.
+//    nenhuma com login. `e2e-vendedor@teste.invalid` tem chave própria.
 //
 // Limpeza por MARCA no nome, antes e depois — `test.afterAll` roda mesmo com
 // teste falhando, então uma asserção quebrada não deixa lixo no banco
@@ -25,6 +25,7 @@ import "dotenv/config";
 import { PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { test, expect } from "@playwright/test";
+import { EMAIL_VENDEDOR_E2E, senhaE2e } from "./credenciais";
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL! });
 const prisma = new PrismaClient({ adapter });
@@ -73,8 +74,8 @@ test("vendedor cadastra, encontra e abre um contato, e o telefone repetido é re
 }) => {
   await page.goto("/login");
   await page.waitForLoadState("networkidle");
-  await page.getByLabel("E-mail").fill("vendedor@exemplo.com");
-  await page.getByLabel("Senha").fill("senha123");
+  await page.getByLabel("E-mail").fill(EMAIL_VENDEDOR_E2E);
+  await page.getByLabel("Senha").fill(senhaE2e());
   await page.getByRole("button", { name: "Entrar" }).click();
   await page.waitForURL("/");
 

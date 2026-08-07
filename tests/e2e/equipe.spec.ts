@@ -21,6 +21,7 @@ import "dotenv/config";
 import { PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { test, expect, type Page } from "@playwright/test";
+import { EMAIL_ADMIN_E2E, senhaE2e } from "./credenciais";
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL! });
 const prisma = new PrismaClient({ adapter });
@@ -38,7 +39,7 @@ const SENHA_NOVA_PESSOA = "senha-teste-e2e-123";
  * ELES.
  *
  * O escopo da auditoria é por `entidadeId`, nunca por `userId`: quem grava
- * essas linhas é o `admin@exemplo.com`, e apagar "os AuditLog do admin"
+ * essas linhas é o `e2e-admin@teste.invalid`, e apagar "os AuditLog do admin"
  * levaria junto o histórico real de tudo que já foi feito no CRM.
  */
 async function limparDadosDeTeste(): Promise<void> {
@@ -84,10 +85,10 @@ test("ADMIN cadastra uma pessoa, ela entra, e desativar derruba a sessão dela",
 }) => {
   // UM login de admin no arquivo inteiro, de propósito. O limite de
   // tentativas é de 10 por conta a cada 10 minutos (`core/rate-limit/login.ts`)
-  // e a suíte já consome a maior parte disso com `admin@exemplo.com` — é por
+  // e a suíte já consome a maior parte disso com `e2e-admin@teste.invalid` — é por
   // isso que a segunda sessão abaixo é um CONTEXTO NOVO com a pessoa recém
   // criada (chave de rate limit própria), e não um segundo login do admin.
-  await login(page, "admin@exemplo.com", "senha123");
+  await login(page, EMAIL_ADMIN_E2E, senhaE2e());
 
   await page.goto("/usuarios");
   await expect(page.getByRole("heading", { name: "Equipe" })).toBeVisible();

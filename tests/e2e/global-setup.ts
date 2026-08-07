@@ -1,6 +1,43 @@
 import "dotenv/config";
+import bcrypt from "bcryptjs";
 import { PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
+
+import { EMAIL_ADMIN_E2E, EMAIL_VENDEDOR_E2E, senhaE2e } from "./credenciais";
+
+/**
+ * Custo 10, o mesmo de `src/core/users/service.ts` e do hash inerte de
+ * `src/core/auth/credenciais.ts`. Aquele hash existe para que "e-mail não
+ * existe" e "senha errada" levem o mesmo tempo; uma conta com custo diferente
+ * responderia em outro tempo e reabriria a enumeração de usuário que aquele
+ * código fechou — inclusive para estas contas de teste, que são reais no banco
+ * como qualquer outra.
+ */
+const CUSTO_BCRYPT = 10;
+
+/**
+ * Garante que as contas de teste existem, estão ativas e com a senha atual.
+ *
+ * `upsert` e não `create`: roda antes de toda execução da suíte e não pode
+ * quebrar na segunda vez nem depender de o banco estar num estado anterior.
+ * O `update` regrava `senhaHash`, `ativo` e `papel` porque cada um desses já
+ * foi motivo de suíte quebrada — conta desativada por um teste que falhou no
+ * meio, papel trocado por um teste de permissão, senha rotacionada no `.env`.
+ */
+async function garantirContasDeTeste(prisma: PrismaClient): Promise<void> {
+  const senhaHash = await bcrypt.hash(senhaE2e(), CUSTO_BCRYPT);
+
+  for (const [email, nome, papel] of [
+    [EMAIL_ADMIN_E2E, "E2E Admin", "ADMIN"],
+    [EMAIL_VENDEDOR_E2E, "E2E Vendedor", "VENDEDOR"],
+  ] as const) {
+    await prisma.user.upsert({
+      where: { email },
+      update: { senhaHash, ativo: true, papel },
+      create: { nome, email, senhaHash, papel },
+    });
+  }
+}
 
 /**
  * Zera o contador de tentativas de login antes da suíte E2E.
@@ -9,7 +46,7 @@ import { PrismaPg } from "@prisma/adapter-pg";
  *
  * O limite de tentativas (`src/core/rate-limit/login.ts`) conta TODA
  * tentativa, certa ou errada, e a suíte E2E faz vários logins seguidos com a
- * mesma conta (`admin@exemplo.com`). Uma execução isolada cabe folgada no
+ * mesma conta (`e2e-admin@teste.invalid`). Uma execução isolada cabe folgada no
  * teto de 10 por 10 minutos; duas execuções dentro da mesma janela, não —
  * e a segunda falha com "E-mail ou senha inválidos" em testes que não têm
  * nada a ver com login.
@@ -30,6 +67,8 @@ export default async function globalSetup() {
   });
 
   try {
+    await garantirContasDeTeste(prisma);
+
     const { count } = await prisma.rateLimit.deleteMany({
       where: { chave: { startsWith: "login:" } },
     });
