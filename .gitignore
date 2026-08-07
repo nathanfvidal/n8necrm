@@ -27,6 +27,18 @@ node_modules/
 # o CRM.
 /Bots/.claude/
 
+# Ferramental pessoal do desenvolvedor, que mora na pasta do projeto mas não é
+# do projeto. Este CRM é forkado por cliente: tudo que fica rastreável aqui
+# viaja para o repositório de TODO cliente.
+#
+# `Skills Claude/` são 5,9 MB de skills do Claude Code exportadas do ambiente
+# local — já instaladas em `~/.claude/skills`, então a pasta aqui é backup.
+# `guia-seguranca.html` é o guia do qual a skill `auditoria-seguranca` foi
+# destilada. `.claude/` guarda configuração de editor por máquina.
+/Skills Claude/
+/guia-seguranca.html
+/.claude/
+
 # next.js
 /out/
 

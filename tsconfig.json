@@ -30,5 +30,10 @@
     ".next/dev/types/**/*.ts",
     "**/*.mts"
   ],
-  "exclude": ["node_modules"]
+  // `include` acima é `**/*.ts`, que varre a raiz inteira — e `.gitignore` não
+  // tem efeito nenhum aqui. Qualquer pasta de material de referência largada
+  // dentro do projeto entra no typecheck e quebra o build, mesmo estando fora
+  // do git. Foi o que aconteceu com `Skills Claude/`: 99 erros de TypeScript
+  // vindos de exemplos de skills, nenhum do código do CRM.
+  "exclude": ["node_modules", "Skills Claude", "Bots"]
 }

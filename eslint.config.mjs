@@ -20,6 +20,14 @@ const eslintConfig = defineConfig([
     // que nunca fica verde deixa de ser lido. Nada em `Bots/` é compilado,
     // importado ou publicado por este CRM.
     "Bots/**",
+    // Mesma história, outra pasta: material de referência do desenvolvedor
+    // largado na raiz do projeto. `Skills Claude/` são skills do Claude Code
+    // exportadas do ambiente local (já instaladas em `~/.claude/skills`), e os
+    // exemplos que vêm dentro delas rendem 17 erros de lint e 99 de
+    // TypeScript — nenhum deste CRM. Estar no `.gitignore` não basta: nem o
+    // eslint nem o `tsc` leem o `.gitignore`, então a exclusão precisa ser
+    // dita nos dois lugares (aqui e em `tsconfig.json#exclude`).
+    "Skills Claude/**",
   ]),
   // Fronteira arquitetural: src/core não pode importar de src/modules.
   // Este é um projeto clonado por cliente — core é compartilhado por todos os
