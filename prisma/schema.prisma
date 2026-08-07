@@ -86,6 +86,21 @@ model PipelineStage {
   @@unique([ordem])
 }
 
+// TRÊS COLUNAS RESERVADAS, sem código que as leia ou escreva hoje: `itemId`,
+// `sessionId` e `utm`. Não são resíduo de refatoração — nasceram na migração
+// inicial para a Fase 2 do roteiro antigo (catálogo + site mostruário), que foi
+// abandonada. Ver `docs/superpowers/specs/2026-08-07-nucleo-e-modulos-sob-demanda.md`
+// § 5.
+//
+// Ficam porque são nuláveis, sem chave estrangeira e sem índice: removê-las
+// custaria uma migração para resolver problema nenhum. Se o rastreio de origem
+// voltar, `sessionId` e `utm` servem a qualquer vertical (não só a catálogo) e
+// são a parte reaproveitável daquele plano; `itemId` só faz sentido junto com
+// um módulo `catalog` que ainda não existe.
+//
+// Antes de usar qualquer uma delas, leia a § 5 daquela spec: elas foram
+// desenhadas para um fluxo específico (visitante anônimo → evento → lead) e
+// reaproveitar sem esse contexto é como herdar significado que nunca existiu.
 model Lead {
   id                String         @id @default(cuid())
   contactId         String?
