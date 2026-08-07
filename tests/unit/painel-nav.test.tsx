@@ -2,16 +2,25 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, cleanup } from "@testing-library/react";
 
-// A grade de módulos exibidos hoje (catalog, analytics) é definida dentro de
-// painel-nav.tsx, não em config/client.ts — então não dá pra provar a
-// filtragem lendo o config real: config/client.ts envia modulos: [] (nenhuma
-// rota de módulo existe ainda — Fases 2 e 3), então não haveria módulo ativo
-// para checar o caminho "aparece". Por isso mockamos config/client aqui,
-// controlando explicitamente um módulo ligado e um desligado, sem depender
-// do estado atual do arquivo real — se um fork mudar client.modulos, este
-// teste continua válido.
+// `config/client` é mockado para que o teste não dependa do que o fork atual
+// tem ligado: se alguém mexer em `client.modulos`, estes casos continuam
+// válidos.
+//
+// Mutável (via `vi.hoisted`, porque a fábrica de `vi.mock` é içada acima das
+// declarações do arquivo) para que os dois lados da filtragem possam ser
+// provados de verdade — antes de 2026-08-07 havia três links de módulo na
+// nav, dois deles para rotas inexistentes, e o teste usava um módulo ligado e
+// outro desligado. Com um único módulo de verdade (`whatsapp`), provar o caso
+// "não aparece" exige trocar a lista entre um teste e outro; um mock fixo só
+// conseguiria testar metade.
+const mocks = vi.hoisted(() => ({ modulos: ["whatsapp"] as string[] }));
+
 vi.mock("../../config/client", () => ({
-  client: { modulos: ["catalog"] },
+  client: {
+    get modulos() {
+      return mocks.modulos;
+    },
+  },
 }));
 
 // PainelNav (Task 19) agora renderiza <NotificationBell> como último item —
@@ -45,21 +54,30 @@ const { PainelNav } = await import("../../src/components/painel-nav");
 describe("PainelNav", () => {
   afterEach(() => {
     cleanup();
+    // Restaura o padrão para não vazar o estado de um teste para o seguinte —
+    // `mocks` é um objeto único compartilhado por todo o arquivo.
+    mocks.modulos = ["whatsapp"];
   });
 
   it("mostra o link de um módulo ativo", () => {
     render(<PainelNav />);
-    expect(screen.getByRole("link", { name: "Catálogo" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Conversas" })).toBeTruthy();
   });
 
-  it("não mostra o link de um módulo desativado", () => {
-    render(<PainelNav />);
-    expect(screen.queryByRole("link", { name: "Analytics" })).toBeNull();
-  });
-
-  it("não mostra o link de Conversas (whatsapp) quando o módulo está desligado", () => {
+  it("não mostra o link de um módulo desligado", () => {
+    mocks.modulos = [];
     render(<PainelNav />);
     expect(screen.queryByRole("link", { name: "Conversas" })).toBeNull();
+  });
+
+  // Guarda de regressão: `linksDeModulo` já teve entradas para `/catalogo` e
+  // `/analytics`, rotas que nunca existiram — o link aparecia e a navegação
+  // dava 404. Se alguém reintroduzir um link sem a rota, este teste avisa.
+  it("não anuncia catálogo nem analytics, que não têm rota", () => {
+    mocks.modulos = ["catalog", "analytics", "whatsapp"];
+    render(<PainelNav />);
+    expect(screen.queryByRole("link", { name: "Catálogo" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Analytics" })).toBeNull();
   });
 
   it("sempre mostra os links fixos, independente dos módulos", () => {

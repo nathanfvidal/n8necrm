@@ -11,17 +11,19 @@ const linksFixos = [
   { href: "/tasks", label: "Tarefas" },
 ];
 
-// Rotas /catalogo e /analytics ainda não existem (Fases 2 e 3) — até lá o
-// link aparece (se o módulo estiver ativo) e a navegação dá 404, o que é o
-// comportamento esperado nesta fase. /conversas (Fatia 1 do WhatsApp) já
-// existe de verdade — `exigirModulo("whatsapp")` no topo daquela página
-// devolve 404 se o módulo for desligado num fork, mesmo padrão dos outros
-// dois.
-const linksDeModulo = [
-  { href: "/catalogo", label: "Catálogo", modulo: "catalog" as const },
-  { href: "/analytics", label: "Analytics", modulo: "analytics" as const },
-  { href: "/conversas", label: "Conversas", modulo: "whatsapp" as const },
-];
+// Um link por módulo que tem rota de verdade. `moduloAtivo` decide se ele
+// aparece; `exigirModulo()` no topo da page é que faz a rota devolver 404 num
+// fork com o módulo desligado — o menu esconder não é a defesa.
+//
+// **Só entre aqui quando a rota existir.** Até 2026-08-07 esta lista também
+// tinha `/catalogo` e `/analytics`, das Fases 2 e 3 do roteiro antigo: rotas
+// que nunca foram construídas, então o link prometia funcionalidade e
+// entregava 404. O roteiro de fases foi substituído por núcleo + módulos sob
+// demanda (`docs/superpowers/specs/2026-08-07-nucleo-e-modulos-sob-demanda.md`),
+// e os dois módulos continuam existindo como candidatos no enum de
+// `config/client.schema.ts` — o que saiu foi a promessa no menu, não a
+// intenção. Ver `docs/receita-modulo.md`, passo 6.
+const linksDeModulo = [{ href: "/conversas", label: "Conversas", modulo: "whatsapp" as const }];
 
 /**
  * `notificacoesNaoLidas` chega por PROP, opcional (default `[]`) — de
