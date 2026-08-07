@@ -83,13 +83,35 @@ exige um desenvolvedor para tarefas que são de recepcionista.
 | Notificações in-app | Pronto |
 | Dashboard | Pronto |
 | Auditoria, RLS, rate limit | Pronto |
-| **Gestão de usuários** | **Falta** — a permissão existe, a tela não |
-| **Contatos como entidade própria** | **Falta** — só nasce colado num lead |
-| **Observabilidade** | **Falta** — Sentry consta da Fase 0 e nunca foi instalado |
+| Gestão de usuários | Pronto — criar, editar papel, ativar/desativar, redefinir senha |
+| Contatos como entidade própria | Pronto — agenda com busca, cadastro avulso e detalhe |
+| Observabilidade | Pronto no código — Sentry só de servidor; **inerte até haver `SENTRY_DSN`** |
 
-O e-mail de notificação está codado mas nunca foi exercitado: sem `RESEND_API_KEY`,
-o despacho sai pelo caminho de "não configurado". Não conta como pronto até um
-e-mail real chegar em alguém.
+Os três últimos eram os buracos que impediam entregar a um segundo cliente, e
+foram fechados na branch `feature/nucleo-entregavel` (2026-08-07). O critério da
+§ 2.3 — instalar e operar sem que ninguém edite código — passa a valer para
+cadastrar equipe e corrigir cadastro de cliente.
+
+Duas coisas continuam **codadas e nunca exercitadas**, e não contam como prontas
+até um evento real chegar do outro lado:
+
+- **E-mail de notificação.** Sem `RESEND_API_KEY`, o despacho sai pelo caminho de
+  "não configurado".
+- **Sentry.** Sem `SENTRY_DSN`, `register()` retorna antes de inicializar.
+
+São a mesma classe de dívida: caminho de integração que existe no código e nunca
+rodou contra o serviço de verdade.
+
+### Achado que vale para qualquer rota nova do painel
+
+Acrescentar link ao menu do painel introduziu uma corrida de sessão real, pega
+pelo e2e: o `<Link>` do Next pré-carrega, então há requisições às rotas
+protegidas em voo o tempo todo; no logout, uma delas chega depois carregando o
+cookie recém-invalidado, e o Auth.js **reemite o cookie de sessão** na resposta —
+"Sair" deixava de revogar. A navegação inteira passou a usar `prefetch={false}`
+(`painel-nav.tsx`), o que custa pouco porque toda página do painel é
+`force-dynamic` e o Next não pré-carrega conteúdo de rota dinâmica sem
+`loading.tsx`.
 
 ## 4. Módulos
 
