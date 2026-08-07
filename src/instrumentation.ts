@@ -45,6 +45,14 @@ export async function register() {
 
   Sentry.init({
     dsn: process.env.SENTRY_DSN,
+    // Ligado por variável de ambiente, desligado por padrão. Nasceu na
+    // verificação desta integração e ficou porque resolve um problema real:
+    // quando o Sentry "não recebe nada", a pergunta é se o `register()` não
+    // rodou, se o `onRequestError` não disparou, ou se o envio falhou — e as
+    // três têm a mesma aparência (silêncio). Com `SENTRY_DEBUG=1` o SDK
+    // imprime cada etapa no log do servidor, e a resposta sai em segundos.
+    // Nunca imprime o DSN.
+    debug: !!process.env.SENTRY_DEBUG,
     // `false` é o padrão do SDK; explícito porque é a decisão que impede o
     // Sentry de anexar IP, cookie e corpo de requisição por conta própria.
     sendDefaultPii: false,
