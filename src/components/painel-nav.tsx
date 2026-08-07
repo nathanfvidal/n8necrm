@@ -10,6 +10,7 @@ const linksFixos = [
   { href: "/", label: "Dashboard" },
   { href: "/leads", label: "Leads" },
   { href: "/leads/kanban", label: "Funil" },
+  { href: "/contatos", label: "Contatos" },
   { href: "/tasks", label: "Tarefas" },
 ];
 
@@ -56,38 +57,42 @@ export function PainelNav({
     // núcleo, existe em todo fork. `papelUsuario` é opcional para o
     // componente continuar renderizável sem sessão nos testes — sem ele o
     // link some, que é o padrão seguro.
-    // `prefetch: false` — ver o comentário do `<Link>` abaixo.
     ...(papelUsuario && hasPermission(papelUsuario, "gerenciar_usuarios")
-      ? [{ href: "/usuarios", label: "Equipe", prefetch: false }]
+      ? [{ href: "/usuarios", label: "Equipe" }]
       : []),
   ];
 
   return (
     <nav className="flex items-center gap-4 border-b p-4">
       {/*
-        `prefetch` por link, e não global. O padrão do Next é pré-carregar todo
-        `<Link>` visível, o que é bom para telas de uso constante (Leads,
-        Funil) e ruim para "Equipe": é uma tela de uso raro, e o prefetch
-        dispara em TODA página do painel de todo ADMIN.
+        `prefetch={false}` em TODOS os links do painel, e isto não é
+        conservadorismo — é a correção de um defeito que o e2e pegou.
 
-        O custo apareceu no e2e como um teste de logout falhando de forma
-        intermitente. O prefetch mantém requisições a `/usuarios` em voo o
-        tempo todo; quando o logout acontece, uma dessas requisições chega
-        depois — carregando o cookie que acabou de ser invalidado. Duas coisas
-        ruins saíam disso: a rejeição de `usuarioAtual()` subindo sem
-        tratamento (corrigido também na própria page), e o Auth.js reemitindo
-        o cookie de sessão na resposta, o que ressuscitava a sessão que o
-        logout tinha acabado de encerrar.
+        O padrão do Next é pré-carregar todo `<Link>` visível. Como esta nav
+        aparece em toda página do painel, isso significa requisições às rotas
+        protegidas em voo o tempo todo. Quando alguém sai, uma dessas
+        requisições chega DEPOIS do logout carregando o cookie que acabou de
+        ser invalidado — e o Auth.js reemite o cookie de sessão na resposta.
+        A sessão que o logout encerrou volta a valer, e "Sair" deixa de ser
+        revogação para virar navegação.
 
-        Desligar o prefetch aqui remove a fonte do tráfego. O link continua
-        funcionando igual ao clicar — só não é mais buscado antes de alguém
-        querer.
+        Foi medido, não suposto: o teste `auth.spec.ts` ("o botão Sair encerra
+        a sessão de verdade") passou a falhar de forma intermitente a cada
+        link novo acrescentado aqui. Uma primeira correção desligou o prefetch
+        só do link novo daquela vez; acrescentar o link seguinte trouxe a
+        falha de volta, o que mostrou que o problema é do MECANISMO, não de
+        uma rota específica.
+
+        O custo é baixo: toda página do painel é `force-dynamic`
+        (`(painel)/layout.tsx`), e o Next não pré-carrega o conteúdo de rota
+        dinâmica sem um `loading.tsx` — que este projeto não tem. Ou seja, o
+        prefetch aqui gastava requisição sem entregar navegação mais rápida.
       */}
       {links.map((link) => (
         <Link
           key={link.href}
           href={link.href}
-          prefetch={"prefetch" in link ? link.prefetch : undefined}
+          prefetch={false}
           className="text-sm font-medium hover:underline"
         >
           {link.label}

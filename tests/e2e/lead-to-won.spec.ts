@@ -272,10 +272,51 @@ async function arrastarComTeclado(
   colunaDestino: Locator,
   tecla: "ArrowLeft" | "ArrowRight"
 ): Promise<void> {
-  await card.focus();
-  await page.keyboard.press("Space");
-  await page.keyboard.press(tecla);
-  await expect(colunaDestino).toHaveClass(/bg-muted\/50/);
+  // Espera a hidratação antes de mexer no teclado. O card fica VISÍVEL já no
+  // HTML do servidor, mas o `KeyboardSensor` do dnd-kit só passa a escutar
+  // depois que o React hidrata — antes disso, o Space de pegar não é ouvido
+  // por ninguém, `over` fica `null`, e a coluna de destino nunca recebe
+  // `bg-muted/50`. O sintoma é exatamente o de um arrasto que "não funciona".
+  //
+  // Este passo faltava, e a suíte só não cobrava porque era lenta o
+  // bastante: a hidratação terminava durante a espera de outra coisa. Ao
+  // desligar o prefetch da navegação do painel (`painel-nav.tsx`), a suíte
+  // ficou ~25% mais rápida e esta folga não declarada sumiu — o teste passou
+  // a falhar sempre, no mesmo ponto. Mesmo `waitForLoadState("networkidle")`
+  // que o helper de login de `whatsapp-agente.spec.ts` já usa pelo mesmo
+  // motivo.
+  await page.waitForLoadState("networkidle");
+
+  // A tomada do card é REPETIDA até funcionar, e isto não é chute de timing —
+  // é a única forma de esperar por algo que não tem sinal observável próprio.
+  //
+  // `networkidle` acima garante que os scripts chegaram, mas não que o React
+  // já hidratou. Antes da hidratação o card está visível (veio no HTML do
+  // servidor) e o `KeyboardSensor` do dnd-kit ainda não escuta: o Space de
+  // pegar não é ouvido por ninguém, `over` fica `null`, e a coluna de destino
+  // nunca recebe `bg-muted/50`. Não há atributo no DOM que diga "hidratado",
+  // então o único sinal confiável é o próprio arrasto responder.
+  //
+  // `toPass` repete o bloco inteiro até ele passar. O `Escape` no começo de
+  // cada tentativa cancela um arrasto que porventura tenha começado na
+  // tentativa anterior — sem ele, um segundo Space viraria "soltar" em vez de
+  // "pegar", e a repetição alternaria entre os dois estados para sempre.
+  //
+  // Isto NÃO afrouxa o que o teste prova: a asserção continua sendo a coluna
+  // de destino acender, e se o arrasto por teclado estiver realmente quebrado
+  // nenhuma repetição salva — o `toPass` estoura e o teste falha.
+  //
+  // Ficou visível ao desligar o prefetch da navegação do painel
+  // (`painel-nav.tsx`): a suíte ficou ~25% mais rápida e a folga não
+  // declarada de que este teste dependia sumiu.
+  await expect(async () => {
+    await page.keyboard.press("Escape");
+    await card.focus();
+    await page.keyboard.press("Space");
+    await page.keyboard.press(tecla);
+    await expect(colunaDestino).toHaveClass(/bg-muted\/50/, { timeout: 1_000 });
+  }).toPass({ timeout: 15_000 });
+
   await page.keyboard.press("Space");
 }
 

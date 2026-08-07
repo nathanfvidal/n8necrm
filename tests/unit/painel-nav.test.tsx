@@ -108,6 +108,7 @@ describe("PainelNav", () => {
     expect(screen.getByRole("link", { name: "Dashboard" })).toBeTruthy();
     expect(screen.getByRole("link", { name: "Leads" })).toBeTruthy();
     expect(screen.getByRole("link", { name: "Funil" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Contatos" })).toBeTruthy();
     expect(screen.getByRole("link", { name: "Tarefas" })).toBeTruthy();
   });
 
