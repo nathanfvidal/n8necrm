@@ -8,8 +8,9 @@
 // nenhum teste de status HTTP percebe. A única verificação que vale é abrir
 // cada página num navegador e ler o console.
 import { test, expect, type Page } from "@playwright/test";
+import { EMAIL_ADMIN_E2E, senhaE2e } from "./credenciais";
 
-const CREDENCIAIS = { email: "admin@exemplo.com", senha: "senha123" };
+const CREDENCIAIS = { email: EMAIL_ADMIN_E2E, senha: senhaE2e() };
 
 /** Telas que um usuário logado realmente usa. Se o CSP quebrar, quebra aqui. */
 const TELAS = ["/", "/leads", "/leads/kanban", "/tasks", "/conversas"];

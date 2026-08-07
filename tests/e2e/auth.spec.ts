@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { EMAIL_ADMIN_E2E, senhaE2e } from "./credenciais";
 
 // Smoke test do harness do Playwright (Task 11). O teste de e2e "de verdade"
 // é a Task 22 — este arquivo só prova que a suíte sobe o build de produção,
@@ -16,8 +17,8 @@ test("visitante não autenticado é redirecionado para /login", async ({ page })
 test("login com credenciais válidas leva ao painel autenticado", async ({ page }) => {
   await page.goto("/login");
 
-  await page.getByLabel("E-mail").fill("admin@exemplo.com");
-  await page.getByLabel("Senha").fill("senha123");
+  await page.getByLabel("E-mail").fill(EMAIL_ADMIN_E2E);
+  await page.getByLabel("Senha").fill(senhaE2e());
   await page.getByRole("button", { name: "Entrar" }).click();
 
   // Só renderiza depois de login (ver src/app/(painel)/layout.tsx: PainelNav
@@ -34,8 +35,8 @@ test("o botão Sair encerra a sessão de verdade, não só troca de tela", async
   // Num computador compartilhado da revenda, isso é a próxima pessoa
   // sentando na conta de quem saiu.
   await page.goto("/login");
-  await page.getByLabel("E-mail").fill("admin@exemplo.com");
-  await page.getByLabel("Senha").fill("senha123");
+  await page.getByLabel("E-mail").fill(EMAIL_ADMIN_E2E);
+  await page.getByLabel("Senha").fill(senhaE2e());
   await page.getByRole("button", { name: "Entrar" }).click();
   await expect(page.getByRole("link", { name: "Dashboard" })).toBeVisible();
 
@@ -53,7 +54,7 @@ test("o botão Sair encerra a sessão de verdade, não só troca de tela", async
 test("credenciais inválidas permanecem em /login com mensagem de erro", async ({ page }) => {
   await page.goto("/login");
 
-  await page.getByLabel("E-mail").fill("admin@exemplo.com");
+  await page.getByLabel("E-mail").fill(EMAIL_ADMIN_E2E);
   await page.getByLabel("Senha").fill("senha-errada");
   await page.getByRole("button", { name: "Entrar" }).click();
 

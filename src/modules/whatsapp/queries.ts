@@ -55,3 +55,35 @@ export async function buscarConversaComMensagens(id: string) {
 }
 
 export type ConversaComMensagens = NonNullable<Awaited<ReturnType<typeof buscarConversaComMensagens>>>;
+
+/**
+ * Conversas de um contato, para a tela de detalhe da agenda
+ * (`/contatos/[id]`).
+ *
+ * Mora AQUI, no módulo, e não em `core/contacts/queries.ts`, mesmo sendo a
+ * agenda quem consome: `Conversation` é conceito do módulo `whatsapp`, e
+ * `src/core` não pode conhecê-lo (regra de ESLint, § 3.3 da spec base). A
+ * página de detalhe vive em `src/app/`, que pode importar dos dois lados — e
+ * só chama esta função quando `moduloAtivo("whatsapp")`, então num fork com o
+ * módulo desligado a tabela nem é consultada.
+ *
+ * `nomeExibicao` pode ser nulo (a Evolution nem sempre manda o nome do
+ * perfil); quem renderiza cai para o telefone ou o `waId`, mesma cadeia da
+ * inbox.
+ */
+export async function listarConversasDoContato(contactId: string) {
+  return prisma.conversation.findMany({
+    where: { contactId },
+    orderBy: { atualizadoEm: "desc" },
+    select: {
+      id: true,
+      waId: true,
+      telefone: true,
+      nomeExibicao: true,
+      iaAtiva: true,
+      atualizadoEm: true,
+    },
+  });
+}
+
+export type ConversaDoContato = Awaited<ReturnType<typeof listarConversasDoContato>>[number];

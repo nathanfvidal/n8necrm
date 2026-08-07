@@ -81,7 +81,14 @@ export default async function PainelLayout({ children }: { children: React.React
 
   return (
     <div className="min-h-screen">
-      <PainelNav notificacoesNaoLidas={notificacoesNaoLidas} nomeUsuario={usuario.nome} />
+      {/* `papelUsuario` alimenta o link de "Equipe", que só ADMIN vê.
+          `PainelNav` é síncrona e não tem acesso à sessão — o papel vem daqui,
+          do `usuario` que `usuarioAtual()` já resolveu, sem consulta nova. */}
+      <PainelNav
+        notificacoesNaoLidas={notificacoesNaoLidas}
+        nomeUsuario={usuario.nome}
+        papelUsuario={usuario.papel}
+      />
       <main>{children}</main>
     </div>
   );
