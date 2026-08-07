@@ -12,6 +12,14 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // `Bots/` é material de referência colocado ali de propósito: fluxos do
+    // n8n que rodam em produção e worktrees de OUTROS projetos, com stack e
+    // convenções próprias (`require()`, JSX solto, scripts `.cjs`). Sem esta
+    // linha o eslint varre tudo aquilo e `npm run lint` sai com 30 erros que
+    // nenhum deles é deste projeto — o portão nunca fica verde, e um portão
+    // que nunca fica verde deixa de ser lido. Nada em `Bots/` é compilado,
+    // importado ou publicado por este CRM.
+    "Bots/**",
   ]),
   // Fronteira arquitetural: src/core não pode importar de src/modules.
   // Este é um projeto clonado por cliente — core é compartilhado por todos os
