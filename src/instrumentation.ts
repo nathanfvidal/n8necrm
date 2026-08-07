@@ -56,11 +56,45 @@ export async function register() {
     // `false` é o padrão do SDK; explícito porque é a decisão que impede o
     // Sentry de anexar IP, cookie e corpo de requisição por conta própria.
     sendDefaultPii: false,
+
+    /**
+     * Ruído que não é defeito e não tem ação possível.
+     *
+     * "The destination stream closed early" é do streaming de SSR do React:
+     * o cliente desconectou antes de a resposta terminar — trocou de página,
+     * fechou a aba, perdeu sinal. Não há nada a corrigir, e no painel ele
+     * aparece como erro NÃO TRATADO, competindo com erro de verdade. Já
+     * chegou 4 vezes vindo de `GET /contatos/[id]`.
+     *
+     * Esta lista precisa continuar curtíssima e cada entrada precisa ser
+     * inacionável POR NATUREZA, não só chata. Silenciar erro é a forma mais
+     * fácil de tornar a observabilidade inútil sem ninguém perceber — foi
+     * justamente por não ter monitoramento que o deploy ficou três dias
+     * quebrado sem aviso.
+     */
+    ignoreErrors: ["The destination stream closed early."],
     // Sem tracing: o valor aqui é saber que quebrou e onde, não medir
     // latência. Amostragem de traces custa volume e não responde nenhuma
     // pergunta que este CRM tenha hoje.
     tracesSampleRate: 0,
-    environment: process.env.VERCEL_ENV ?? process.env.NODE_ENV,
+    // NUNCA `?? process.env.NODE_ENV`. `next start` roda com
+    // NODE_ENV=production, então uma execução na máquina de quem desenvolve —
+    // ou a suíte e2e, que sobe o build de produção — chegava ao Sentry
+    // carimbada como `production`, misturada com erro de cliente de verdade.
+    //
+    // Não é hipótese: o painel do Sentry mostrou `Não autenticado` em
+    // `GET /leads` e `The destination stream closed early` em
+    // `GET /contatos/[id]` como se fossem produção, quando vieram do e2e local.
+    // Observabilidade que mente sobre a origem é pior que não ter, porque a
+    // reação a "erro em produção" é diferente da reação a "erro no meu teste".
+    //
+    // `VERCEL_ENV` só existe dentro da Vercel e vale `production`, `preview` ou
+    // `development`. Fora dela é a máquina de alguém — a menos que um deploy
+    // próprio declare `SENTRY_ENVIRONMENT` de propósito.
+    //
+    // Para não mandar nada da máquina local, basta remover `SENTRY_DSN` do
+    // `.env`: `register()` retorna antes de inicializar.
+    environment: process.env.SENTRY_ENVIRONMENT ?? process.env.VERCEL_ENV ?? "local",
 
     /**
      * Último portão antes do envio. O SDK não olha dentro do TEXTO do erro, e
