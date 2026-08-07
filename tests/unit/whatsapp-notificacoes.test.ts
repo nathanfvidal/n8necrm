@@ -20,6 +20,7 @@ const { marcarAguardandoHumano, limparAguardandoHumano } = await import(
 const { TIPO_CONVERSA_AGUARDANDO } = await import(
   "../../src/modules/whatsapp/notificacao-tipos"
 );
+const { listarConversas } = await import("../../src/modules/whatsapp/queries");
 
 async function notificacoesDaConversa(conversationId: string) {
   const todas = await prisma.notification.findMany({
@@ -143,5 +144,34 @@ describe("aviso de conversa aguardando humano", () => {
 
     // O ciclo fecha e reabre: o cliente voltou, ninguém respondeu, avisa de novo.
     expect(await marcarAguardandoHumano(conversa.id)).toBe(true);
+  });
+
+  it("listarConversas põe quem aguarda no topo, mais antiga primeiro", async () => {
+    const recenteSemEspera = await criarConversaDeTeste();
+    const esperaNova = await criarConversaDeTeste();
+    const esperaAntiga = await criarConversaDeTeste();
+
+    await prisma.conversation.update({
+      where: { id: esperaNova.id },
+      data: { aguardandoHumanoDesde: new Date(Date.now() - 5 * 60_000) },
+    });
+    await prisma.conversation.update({
+      where: { id: esperaAntiga.id },
+      data: { aguardandoHumanoDesde: new Date(Date.now() - 60 * 60_000) },
+    });
+    // `recenteSemEspera` precisa ser a mais recente por `atualizadoEm` —
+    // senão, sendo a mais antiga por criação, ela iria para o fim da lista
+    // de qualquer jeito e o teste passaria mesmo com a ordenação por espera
+    // errada. Um `update` qualquer (`@updatedAt` no schema) basta.
+    await prisma.conversation.update({
+      where: { id: recenteSemEspera.id },
+      data: { iaAtiva: true },
+    });
+
+    const lista = await listarConversas();
+    const posicao = (id: string) => lista.findIndex((c) => c.id === id);
+
+    expect(posicao(esperaAntiga.id)).toBeLessThan(posicao(esperaNova.id));
+    expect(posicao(esperaNova.id)).toBeLessThan(posicao(recenteSemEspera.id));
   });
 });

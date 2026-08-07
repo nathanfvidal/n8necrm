@@ -12,6 +12,7 @@ import {
   formatarDataBR,
   formatarDataHoraBR,
   dataISOEmSaoPaulo,
+  formatarDuracaoDesde,
 } from "../../src/lib/date";
 
 describe("parseDataCivil", () => {
@@ -108,5 +109,37 @@ describe("formatarDataBR / formatarDataHoraBR / dataISOEmSaoPaulo (timestamps, f
   it("não muda o comportamento de parseDataCivil/formatarDataCivilBR (data civil continua ancorada em UTC)", () => {
     const vencimento = parseDataCivil("2026-08-05");
     expect(formatarDataCivilBR(vencimento)).toBe("05/08/2026");
+  });
+});
+
+// `formatarDuracaoDesde` recebe `agora` por argumento (em vez de ler
+// `new Date()` internamente) exatamente para estes testes não precisarem
+// congelar relógio — ver comentário na função em src/lib/date.ts. Fronteiras
+// cobertas: 0 min, 59 min, 60 min, 23 h, 24 h.
+describe("formatarDuracaoDesde", () => {
+  const agora = new Date("2026-08-06T12:00:00.000Z");
+
+  it("0 minutos: mostra 'agora'", () => {
+    expect(formatarDuracaoDesde(agora, agora)).toBe("agora");
+  });
+
+  it("59 minutos: ainda em minutos, não vira '1 h'", () => {
+    const data = new Date(agora.getTime() - 59 * 60_000);
+    expect(formatarDuracaoDesde(data, agora)).toBe("59 min");
+  });
+
+  it("60 minutos: vira '1 h', não '60 min'", () => {
+    const data = new Date(agora.getTime() - 60 * 60_000);
+    expect(formatarDuracaoDesde(data, agora)).toBe("1 h");
+  });
+
+  it("23 horas: ainda em horas, não vira '1 d'", () => {
+    const data = new Date(agora.getTime() - 23 * 60 * 60_000);
+    expect(formatarDuracaoDesde(data, agora)).toBe("23 h");
+  });
+
+  it("24 horas: vira '1 d', não '24 h'", () => {
+    const data = new Date(agora.getTime() - 24 * 60 * 60_000);
+    expect(formatarDuracaoDesde(data, agora)).toBe("1 d");
   });
 });

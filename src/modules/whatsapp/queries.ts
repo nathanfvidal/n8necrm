@@ -11,8 +11,16 @@ import { prisma } from "@/lib/prisma";
  */
 
 /**
- * Lista conversas para a tela de inbox, mais recentemente atualizada
- * primeiro, com a última mensagem (qualquer direção) para a prévia.
+ * Lista conversas para a tela de inbox, com quem aguarda humano no topo
+ * (mais antiga espera primeiro — a que mais precisa de atenção) e o resto
+ * por atividade recente, com a última mensagem (qualquer direção) para a
+ * prévia.
+ *
+ * `nulls: "last"` explícito: o padrão do Postgres em `ASC` já manda nulos
+ * para o fim, então omitir funcionaria — por acaso. Escrito explícito para
+ * não depender desse acaso: no dia em que alguém trocar para `desc` (nulos
+ * viram primeiro por padrão), a falha seria silenciosa — conversas sem
+ * espera subiriam ao topo e esconderiam exatamente as que esperam.
  *
  * `take: 100` — mesmo raciocínio de teto simples que outras listagens deste
  * projeto (ex.: export/leads/route.ts): sem sinal real de volume que
@@ -21,7 +29,10 @@ import { prisma } from "@/lib/prisma";
  */
 export async function listarConversas() {
   return prisma.conversation.findMany({
-    orderBy: { atualizadoEm: "desc" },
+    orderBy: [
+      { aguardandoHumanoDesde: { sort: "asc", nulls: "last" } },
+      { atualizadoEm: "desc" },
+    ],
     take: 100,
     include: {
       contact: { select: { id: true, nome: true } },

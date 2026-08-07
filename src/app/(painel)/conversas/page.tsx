@@ -5,7 +5,7 @@ import { listarConversas } from "@/modules/whatsapp/queries";
 import { EmptyState } from "@/components/empty-state";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { formatarDataHoraBR } from "@/lib/date";
+import { formatarDataHoraBR, formatarDuracaoDesde } from "@/lib/date";
 
 /**
  * Inbox de conversas do WhatsApp — esta tela continua SÓ LEITURA (pausar/
@@ -18,6 +18,16 @@ import { formatarDataHoraBR } from "@/lib/date";
  * conversa pausada e esquecida: sem ele, o estado só aparecia depois de abrir
  * a conversa, e ninguém percebe que algo está esperando sem entrar em cada
  * linha para checar.
+ *
+ * O selo "Aguardando há Xh" (`Conversation.aguardandoHumanoDesde`, Task 1
+ * desta fatia) é o mesmo raciocínio aplicado a QUANDO alguém precisa agir:
+ * o sino (`NotificationBell`) avisa uma vez, no instante em que a espera
+ * começa, mas some da tela ao ser marcado como lido — o selo aqui é visível
+ * toda vez que a inbox é aberta, enquanto a espera durar. `variant="destructive"`
+ * (mesmo componente do selo "IA pausada", variante diferente) porque este é
+ * o único selo desta lista que pede AÇÃO, não só descreve um estado; na
+ * prática o tom é discreto (fundo em baixa opacidade, ver `badge.tsx`), não
+ * um vermelho sólido — não compete visualmente com "IA pausada" ao lado.
  *
  * `exigirModulo("whatsapp")` faz esta rota devolver 404 se algum fork
  * desligar o módulo em `config/client.ts` — mesma defesa em profundidade de
@@ -71,6 +81,11 @@ export default async function ConversasPage() {
                         {conversa.contact?.nome ?? conversa.nomeExibicao ?? "Sem contato identificado"}
                       </span>
                       {!conversa.iaAtiva && <Badge variant="secondary">IA pausada</Badge>}
+                      {conversa.aguardandoHumanoDesde && (
+                        <Badge variant="destructive">
+                          Aguardando há {formatarDuracaoDesde(conversa.aguardandoHumanoDesde)}
+                        </Badge>
+                      )}
                     </Link>
                   </TableCell>
                   <TableCell className="max-w-xs truncate text-muted-foreground">

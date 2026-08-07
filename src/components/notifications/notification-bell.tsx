@@ -7,6 +7,10 @@ import { Bell } from "lucide-react";
 
 import { marcarNotificacaoComoLidaAction } from "@/core/notifications/actions";
 import { extrairPayloadNovoLead } from "@/core/notifications/types";
+import {
+  TIPO_CONVERSA_AGUARDANDO,
+  extrairPayloadConversaAguardando,
+} from "@/modules/whatsapp/notificacao-tipos";
 
 export type NotificacaoNaoLida = {
   id: string;
@@ -134,6 +138,10 @@ export function NotificationBell({ notificacoes: iniciais }: { notificacoes: Not
                 // removido depois; ver comentário em `notifications/types.ts`).
                 const dadosNovoLead =
                   notificacao.tipo === "NOVO_LEAD" ? extrairPayloadNovoLead(notificacao.payload) : null;
+                const dadosConversa =
+                  notificacao.tipo === TIPO_CONVERSA_AGUARDANDO
+                    ? extrairPayloadConversaAguardando(notificacao.payload)
+                    : null;
 
                 return (
                   <li
@@ -150,6 +158,17 @@ export function NotificationBell({ notificacoes: iniciais }: { notificacoes: Not
                             onClick={() => setAberto(false)}
                           >
                             Ver lead
+                          </Link>
+                        </>
+                      ) : dadosConversa ? (
+                        <>
+                          <p>Conversa aguardando: {dadosConversa.nomeExibicao}</p>
+                          <Link
+                            href={`/conversas/${dadosConversa.conversationId}`}
+                            className="text-xs text-primary underline"
+                            onClick={() => setAberto(false)}
+                          >
+                            Ver conversa
                           </Link>
                         </>
                       ) : (
