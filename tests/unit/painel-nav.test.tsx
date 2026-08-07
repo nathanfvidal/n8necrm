@@ -80,6 +80,29 @@ describe("PainelNav", () => {
     expect(screen.queryByRole("link", { name: "Analytics" })).toBeNull();
   });
 
+  // "Equipe" (/usuarios) é filtrado por PAPEL, não por módulo: gestão de
+  // usuários é núcleo, existe em todo fork. Esconder o link não é a defesa —
+  // a página redireciona e cada Server Action checa a permissão — mas mostrar
+  // a um VENDEDOR um link que só leva a um redirecionamento é ruído.
+  it("mostra Equipe para ADMIN", () => {
+    render(<PainelNav papelUsuario="ADMIN" />);
+    expect(screen.getByRole("link", { name: "Equipe" })).toBeTruthy();
+  });
+
+  it("não mostra Equipe para GESTOR nem VENDEDOR", () => {
+    render(<PainelNav papelUsuario="GESTOR" />);
+    expect(screen.queryByRole("link", { name: "Equipe" })).toBeNull();
+    cleanup();
+
+    render(<PainelNav papelUsuario="VENDEDOR" />);
+    expect(screen.queryByRole("link", { name: "Equipe" })).toBeNull();
+  });
+
+  it("omite Equipe quando o papel não é informado — padrão seguro", () => {
+    render(<PainelNav />);
+    expect(screen.queryByRole("link", { name: "Equipe" })).toBeNull();
+  });
+
   it("sempre mostra os links fixos, independente dos módulos", () => {
     render(<PainelNav />);
     expect(screen.getByRole("link", { name: "Dashboard" })).toBeTruthy();

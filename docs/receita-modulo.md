@@ -173,6 +173,14 @@ fiação:
 testes que "passavam" sem exercitar nada foram pegos assim nas fatias do WhatsApp — um
 deles passava justamente porque o popover estava fechado.
 
+**Mas cuidado com o que a sabotagem libera.** Quando o teste prova que uma guarda
+RECUSA algo, desligar a guarda faz a operação acontecer de verdade — e o banco é
+compartilhado com dado real. Aconteceu ao testar a proteção das contas de sistema:
+desligar `recusarContaDeSistema` fez o teste renomear o usuário do WhatsApp no Postgres
+de produção. Antes de sabotar uma guarda, pergunte o que a operação faz quando passa, e
+prefira sabotar contra dado que o próprio teste criou. Se não der, tenha o comando de
+reparo pronto antes de rodar.
+
 Armadilhas do ambiente, todas com custo de diagnóstico já pago:
 
 - `import "server-only"` sempre lança sob Vitest. Teste que toca esses módulos precisa

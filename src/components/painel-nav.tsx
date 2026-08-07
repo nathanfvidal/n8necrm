@@ -1,8 +1,10 @@
 import Link from "next/link";
 
 import { moduloAtivo } from "@/lib/module-gate";
+import { hasPermission } from "@/core/auth/permissions";
 import { NotificationBell, type NotificacaoNaoLida } from "@/components/notifications/notification-bell";
 import { sairAction } from "@/core/auth/actions";
+import type { Role } from "@prisma/client";
 
 const linksFixos = [
   { href: "/", label: "Dashboard" },
@@ -41,13 +43,22 @@ const linksDeModulo = [{ href: "/conversas", label: "Conversas", modulo: "whatsa
 export function PainelNav({
   notificacoesNaoLidas = [],
   nomeUsuario,
+  papelUsuario,
 }: {
   notificacoesNaoLidas?: NotificacaoNaoLida[];
   nomeUsuario?: string;
+  papelUsuario?: Role;
 } = {}) {
   const links = [
     ...linksFixos,
     ...linksDeModulo.filter((link) => moduloAtivo(link.modulo)),
+    // "Equipe" é filtrado por PAPEL, não por módulo: gestão de usuários é
+    // núcleo, existe em todo fork. `papelUsuario` é opcional para o
+    // componente continuar renderizável sem sessão nos testes — sem ele o
+    // link some, que é o padrão seguro.
+    ...(papelUsuario && hasPermission(papelUsuario, "gerenciar_usuarios")
+      ? [{ href: "/usuarios", label: "Equipe" }]
+      : []),
   ];
 
   return (
