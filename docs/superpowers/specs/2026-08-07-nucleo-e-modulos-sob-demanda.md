@@ -17,7 +17,14 @@ Campanhas anunciavam os itens do catálogo.
 O que sobrou, na prática, foi outra coisa — e a evidência é o próprio histórico. O
 módulo `whatsapp`, que é hoje a parte comercialmente mais forte do sistema, **não
 existia em nenhuma das sete fases**. Foi construído porque um cliente precisava dele.
-Três fatias depois, funciona em produção.
+Três fatias depois, está construído e coberto por testes.
+
+> **Correção de 2026-08-07.** Esta frase dizia "funciona em produção". Não
+> funcionava — nunca chegou lá. Uma auditoria descobriu que o deploy da Vercel
+> falhava desde 4 de agosto, então o site público servia uma versão anterior ao
+> módulo inteiro. A causa está na § 7. Fica registrado porque o erro é
+> instrutivo: "os testes passam" e "está no ar" pareciam a mesma coisa, e
+> ninguém tinha como notar a diferença sem olhar.
 
 Isso não foi um desvio do plano. Foi o plano real se revelando.
 
@@ -85,22 +92,20 @@ exige um desenvolvedor para tarefas que são de recepcionista.
 | Auditoria, RLS, rate limit | Pronto |
 | Gestão de usuários | Pronto — criar, editar papel, ativar/desativar, redefinir senha |
 | Contatos como entidade própria | Pronto — agenda com busca, cadastro avulso e detalhe |
-| Observabilidade | Pronto no código — Sentry só de servidor; **inerte até haver `SENTRY_DSN`** |
+| Observabilidade | **Pronto e recebendo** — Sentry só de servidor, com `SENTRY_DSN` na Vercel. Redação de PII confirmada no painel (§ 7) |
 
 Os três últimos eram os buracos que impediam entregar a um segundo cliente, e
 foram fechados na branch `feature/nucleo-entregavel` (2026-08-07). O critério da
 § 2.3 — instalar e operar sem que ninguém edite código — passa a valer para
 cadastrar equipe e corrigir cadastro de cliente.
 
-Duas coisas continuam **codadas e nunca exercitadas**, e não contam como prontas
-até um evento real chegar do outro lado:
+O **e-mail de notificação** continua codado e nunca exercitado: sem
+`RESEND_API_KEY`, o despacho sai pelo caminho de "não configurado". É a classe de
+dívida em que um caminho de integração existe no código e nunca rodou contra o
+serviço de verdade — e a única que resta no núcleo.
 
-- **E-mail de notificação.** Sem `RESEND_API_KEY`, o despacho sai pelo caminho de
-  "não configurado".
-- **Sentry.** Sem `SENTRY_DSN`, `register()` retorna antes de inicializar.
-
-São a mesma classe de dívida: caminho de integração que existe no código e nunca
-rodou contra o serviço de verdade.
+O Sentry saiu dessa lista em 2026-08-07: recebe evento de verdade e a redação de
+PII foi confirmada no painel (§ 7).
 
 ### Achado que vale para qualquer rota nova do painel
 
@@ -119,7 +124,7 @@ Um existe. Os outros são nomes plausíveis, não compromissos.
 
 | Módulo | Estado |
 |---|---|
-| `whatsapp` | **Construído** — atendente com IA, controle pelo CRM, aviso de conversa esperando |
+| `whatsapp` | **Construído, inerte em produção** — atendente com IA, controle pelo CRM, aviso de conversa esperando. Falta `EVOLUTION_*`, `OPENAI_API_KEY` e `WHATSAPP_*` na Vercel; sem elas o webhook recusa toda entrada (§ 7) |
 | `catalog` | Candidato. Era a Fase 2; volta se um cliente pedir vitrine de produtos |
 | `analytics` | Candidato. Depende de haver site público para medir |
 | `automation` | Candidato |
@@ -157,3 +162,44 @@ só a catálogo — são a parte reaproveitável do plano antigo.
 | Módulo feito às pressas para fechar venda | A receita (`docs/receita-modulo.md`) fixa o mínimo: gate, fronteira, testes. O `whatsapp` levou três fatias e nenhuma foi supérflua |
 | Fork divergir do núcleo e travar propagação de correção | O mesmo que a spec base já mitigava: núcleo pequeno e isolado por regra de lint. O modelo novo reduz o risco, porque tira do núcleo o que era vertical |
 | Cliente pedir algo que não cabe em módulo | Aí é decisão de negócio, não de arquitetura — e fica visível como tal em vez de virar exceção escondida no núcleo |
+
+## 7. O deploy que passou três dias quebrado
+
+Auditoria de segurança de 2026-08-07, primeira rodada da regra do `AGENTS.md`.
+
+Produção servia uma versão de 4 de agosto. Todo deploy desde então falhava, e o
+site continuava no ar com o último build bom — que é o comportamento certo da
+Vercel e também o que torna a falha invisível: nada quebra, só para de mudar.
+
+**A causa.** `gateway/index.ts` e `llm/index.ts` validavam `EVOLUTION_*` e
+`OPENAI_API_KEY` no escopo do módulo. `next build` avalia todo módulo alcançável
+para coletar a configuração das rotas, e a cadeia `api/queues/whatsapp-turn` →
+`turno.ts` → `gateway` fazia a validação rodar em tempo de build. Sem aquelas
+variáveis na Vercel, o build inteiro falhava — inclusive leads, funil e login.
+
+O sintoma só aparece na Vercel: numa máquina de desenvolvimento o `.env` tem
+tudo e o build passa. A correção foi adiar a construção para o primeiro uso;
+`tests/unit/whatsapp-config-preguicosa.test.ts` trava a regressão.
+
+**O que isto ensina, além do bug.** Nenhum sinal ligava "os testes passam" a
+"está no ar". Suíte verde, `main` em dia, e três dias de código não publicado.
+A pergunta que faltava não era sobre qualidade do código, era: *o que está
+rodando agora no endereço que o cliente acessa?*
+
+Duas mudanças que respondem a isso:
+
+- **Auditoria antes de integrar branch** (`AGENTS.md`), com verificação contra
+  o deploy real e não só contra a máquina local.
+- **Sentry rotula o ambiente pela `VERCEL_ENV`**, nunca pela `NODE_ENV`.
+  `next start` roda com `NODE_ENV=production`, então a suíte e2e local chegava
+  ao painel carimbada como produção — o monitoramento mentia sobre a origem.
+
+### O que ficou verificado com evidência
+
+| Item | Estado |
+|---|---|
+| Rota da fila alcançável da internet | **Não** — 404 em GET e POST no deploy real, enquanto o webhook responde. Confirma o air-gap que a doc da Vercel promete e que o código registrava como não verificável |
+| Redação de PII no Sentry | Funciona — os eventos chegam com `[telefone]`, `[e-mail]` e `[hash]` |
+| Contas com senha do repositório | Desativadas. `admin@exemplo.com`/`senha123` era ADMIN ativo e alcançável pelo deploy público |
+| Autorização de Server Action | As quatro de `core/users` recusam VENDEDOR chamando direto por HTTP, sem passar pela tela |
+| RLS e grants | RLS ligada nas 13 tabelas, zero grants para `anon`/`authenticated`, e tabela futura nasce protegida |
