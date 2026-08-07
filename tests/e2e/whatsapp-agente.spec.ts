@@ -63,7 +63,7 @@ async function limparDadosDeTeste(): Promise<void> {
 // `test.beforeAll`/`test.afterAll` do Playwright rodam UMA VEZ POR WORKER
 // PROCESS, não uma vez por arquivo (`node_modules/playwright/lib/runner/`,
 // `createTestGroups`). Com `fullyParallel: true` e `workers: 3`
-// (`playwright.config.ts`) e os quatro testes abaixo, o Playwright pode
+// (`playwright.config.ts`) e os seis testes abaixo, o Playwright pode
 // despachar grupos deste MESMO arquivo para workers diferentes, sobrepostos
 // no tempo — e `limparDadosDeTeste()` apaga por PREFIXO COMPARTILHADO
 // (`Conversation.waId` começando com `PREFIXO_WAID`) e por e-mail fixo do
@@ -79,11 +79,11 @@ async function limparDadosDeTeste(): Promise<void> {
 //   ver com o que ele pretende provar — o pior tipo de falha, porque manda
 //   investigar o lugar errado.
 //
-// `mode: "serial"` força os quatro testes deste arquivo ao MESMO worker, em
+// `mode: "serial"` força os seis testes deste arquivo ao MESMO worker, em
 // sequência — os hooks deste arquivo passam a rodar de fato uma vez só, sem
 // sobreposição. `fullyParallel` continua paralelizando ENTRE arquivos (este
 // roda em paralelo com auth.spec.ts, lead-to-won.spec.ts etc.), então a
-// suíte não fica mais lenta de forma relevante — só os quatro testes AQUI
+// suíte não fica mais lenta de forma relevante — só os seis testes AQUI
 // DENTRO deixam de disputar workers entre si.
 //
 // O defeito que isto evita é INTERMITENTE: só se manifesta quando o
@@ -256,4 +256,94 @@ test("erro de sessão inválida chega à tela ao tentar pausar a IA", async ({ p
     where: { id: conversa.id },
   });
   expect(conversaAposClique.iaAtiva).toBe(true);
+});
+
+/**
+ * Task 4 da fatia "conversa aguardando humano" — prova pela tela real o que
+ * as Tasks 1-3 só garantem no servidor: `Conversation.aguardandoHumanoDesde`
+ * marcado vira o selo "Aguardando há X" em `/conversas`
+ * (`ConversasPage`, `Badge variant="destructive"`).
+ *
+ * `nomeExibicao` único escopa a asserção a ESTA linha, não à página inteira
+ * — o banco é compartilhado e outra conversa aguardando já faria
+ * `getByText(/Aguardando há/)` bater em algum lugar da tela pelo motivo
+ * errado, o que num teste é pior que falhar. `telefone` não serve para
+ * escopar: a tabela de `/conversas` não renderiza esse campo em nenhuma
+ * célula (só a tela de detalhe, `conversas/[id]/page.tsx`, mostra
+ * `conversa.telefone`) — mesma técnica de escopo do teste "pausar,
+ * responder e religar a IA" acima, por essa mesma razão.
+ */
+test("conversa aguardando humano aparece com o selo na lista", async ({ page }) => {
+  const nomeExibicao = `E2E Aguardando ${randomUUID().slice(0, 8)}`;
+  await prisma.conversation.create({
+    data: {
+      waId: `${PREFIXO_WAID}${randomUUID()}`,
+      telefone: "5511999990001",
+      nomeExibicao,
+      iaAtiva: false,
+      aguardandoHumanoDesde: new Date(),
+    },
+  });
+
+  await login(page, "admin@exemplo.com");
+  await page.goto("/conversas");
+
+  const linkConversa = page.getByRole("link", { name: nomeExibicao });
+  await expect(linkConversa.getByText(/Aguardando há/)).toBeVisible();
+});
+
+/**
+ * Cobertura extra além do que o brief da Task 4 pedia: `listarConversas()`
+ * (`modules/whatsapp/queries.ts`) já tem teste unitário para a ordenação
+ * (`aguardandoHumanoDesde` ASC com nulls last, antes de `atualizadoEm`
+ * DESC), mas aquilo só prova a CONSULTA — não prova que `ConversasPage`
+ * renderiza o resultado na ordem em que chega. Só um navegador real fecha
+ * essa lacuna.
+ *
+ * Compara as posições das DUAS conversas que este teste cria, não a posição
+ * absoluta na tabela: o banco de dev é compartilhado, então nada garante
+ * que estas sejam as duas primeiras linhas se outra conversa já estiver
+ * aguardando. `nomeExibicao` único em cada uma permite achar a linha de
+ * cada uma no texto de todas as linhas e comparar os índices — a aguardando
+ * tem que vir antes da comum, não importa o que mais exista no banco.
+ *
+ * `listarConversas()` usa `take: 100`; se o banco de dev algum dia passar
+ * de ~100 conversas, a comum (sem `aguardandoHumanoDesde`, portanto no fim
+ * da ordenação) pode ficar de fora da página e este teste passa a falhar
+ * por um motivo alheio ao que ele prova. Conferido por consulta direta ao
+ * escrever este teste: o banco de desenvolvimento tinha 0 conversas, longe
+ * do teto — ver o relatório da Task 4 para o número exato no dia.
+ */
+test("conversa aguardando aparece antes de uma conversa comum na lista", async ({ page }) => {
+  const nomeAguardando = `E2E Aguardando Ordem ${randomUUID().slice(0, 8)}`;
+  const nomeComum = `E2E Comum Ordem ${randomUUID().slice(0, 8)}`;
+
+  await prisma.conversation.create({
+    data: {
+      waId: `${PREFIXO_WAID}${randomUUID()}`,
+      telefone: "5511999990003",
+      nomeExibicao: nomeAguardando,
+      aguardandoHumanoDesde: new Date(),
+    },
+  });
+  await prisma.conversation.create({
+    data: {
+      waId: `${PREFIXO_WAID}${randomUUID()}`,
+      telefone: "5511999990004",
+      nomeExibicao: nomeComum,
+    },
+  });
+
+  await login(page, "admin@exemplo.com");
+  await page.goto("/conversas");
+
+  await expect(page.getByRole("link", { name: nomeAguardando })).toBeVisible();
+  await expect(page.getByRole("link", { name: nomeComum })).toBeVisible();
+
+  const linhas = await page.locator("tbody tr").allTextContents();
+  const indiceAguardando = linhas.findIndex((linha) => linha.includes(nomeAguardando));
+  const indiceComum = linhas.findIndex((linha) => linha.includes(nomeComum));
+  expect(indiceAguardando).toBeGreaterThanOrEqual(0);
+  expect(indiceComum).toBeGreaterThanOrEqual(0);
+  expect(indiceAguardando).toBeLessThan(indiceComum);
 });
