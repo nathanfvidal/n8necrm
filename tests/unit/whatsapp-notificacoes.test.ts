@@ -171,7 +171,20 @@ describe("aviso de conversa aguardando humano", () => {
     const lista = await listarConversas();
     const posicao = (id: string) => lista.findIndex((c) => c.id === id);
 
-    expect(posicao(esperaAntiga.id)).toBeLessThan(posicao(esperaNova.id));
-    expect(posicao(esperaNova.id)).toBeLessThan(posicao(recenteSemEspera.id));
+    // `findIndex` devolve -1 para quem não está na lista (ex.: caiu fora do
+    // `take: 100` de `listarConversas()`) — e `expect(-1).toBeLessThan(n)`
+    // passaria mesmo assim, mascarando exatamente o cenário que este teste
+    // existe para pegar. As guardas abaixo travam essa saída antes da
+    // comparação de ordem, mesmo padrão do e2e irmão
+    // (`tests/e2e/whatsapp-agente.spec.ts`).
+    const posicaoAntiga = posicao(esperaAntiga.id);
+    const posicaoNova = posicao(esperaNova.id);
+    const posicaoRecente = posicao(recenteSemEspera.id);
+    expect(posicaoAntiga).toBeGreaterThanOrEqual(0);
+    expect(posicaoNova).toBeGreaterThanOrEqual(0);
+    expect(posicaoRecente).toBeGreaterThanOrEqual(0);
+
+    expect(posicaoAntiga).toBeLessThan(posicaoNova);
+    expect(posicaoNova).toBeLessThan(posicaoRecente);
   });
 });
