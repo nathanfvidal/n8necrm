@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 
-import { usuarioAtual } from "@/core/auth/session";
+import { usuarioAtualOuLogin } from "@/core/auth/session";
 import { hasPermission } from "@/core/auth/permissions";
 import { listarUsuarios } from "@/core/users/queries";
 import { UserForm } from "@/components/users/user-form";
@@ -26,25 +26,15 @@ import { UserTable } from "@/components/users/user-table";
  * que nunca passou por esta página.
  */
 export default async function UsuariosPage() {
-  // `try/catch` em volta de `usuarioAtual()`, espelhando `(painel)/layout.tsx`.
-  // Não é redundância com o layout: o Next renderiza layout e página em
-  // paralelo, então uma sessão que morre no meio (logout, ou a conta sendo
-  // desativada) pode alcançar esta página mesmo com o layout já a caminho do
-  // redirecionamento — e aí a rejeição sobe SEM tratamento e vira tela de
-  // erro genérica com digest, em vez de mandar para o login.
+  // `usuarioAtualOuLogin()` e não `usuarioAtual()`: o porquê está no docstring
+  // dela, em `core/auth/session.ts`. Esta foi a primeira página onde o defeito
+  // apareceu — pego num e2e intermitente — porque é a primeira rota do painel
+  // a virar item de MENU, e `<Link>` pré-carrega.
   //
-  // Isto foi um defeito real, pego no e2e: esta rota é a primeira do painel a
-  // virar item de MENU protegido por papel, e `<Link>` pré-carrega. O
-  // prefetch dispara em toda página do painel, então o caminho "requisição a
-  // /usuarios com sessão recém-morta" deixou de ser hipótese e passou a
-  // acontecer a cada logout de ADMIN. As telas de `/conversas/agente` têm a
-  // mesma forma e nunca sofreram porque nunca viraram item de menu.
-  let usuario;
-  try {
-    usuario = await usuarioAtual();
-  } catch {
-    redirect("/login");
-  }
+  // Supunha-se que as outras telas escapavam por não estarem no menu. O Sentry
+  // desmentiu: `Não autenticado` aparece como erro não tratado em `GET /leads`.
+  // Menu só tornou o caminho mais frequente, nunca foi a condição.
+  const usuario = await usuarioAtualOuLogin();
 
   if (!hasPermission(usuario.papel, "gerenciar_usuarios")) {
     redirect("/");

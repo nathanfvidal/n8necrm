@@ -1,7 +1,7 @@
 import { notFound } from "next/navigation";
 
 import { prisma } from "@/lib/prisma";
-import { usuarioAtual } from "@/core/auth/session";
+import { usuarioAtualOuLogin } from "@/core/auth/session";
 import { listarNotas, TEXTO_MAX_LENGTH } from "@/core/leads/notes";
 import { listarTasksPendentesDoLead } from "@/core/tasks/queries";
 import { EmptyState } from "@/components/empty-state";
@@ -57,7 +57,7 @@ export default async function LeadDetalhePage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const usuario = await usuarioAtual();
+  const usuario = await usuarioAtualOuLogin();
 
   // `responsavel` narrowed para só `id`/`nome` (fix round 1/5, achado do
   // revisor): `include: { responsavel: true }` carregava a linha inteira de

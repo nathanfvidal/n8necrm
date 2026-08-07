@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/prisma";
-import { usuarioAtual } from "@/core/auth/session";
+import { usuarioAtualOuLogin } from "@/core/auth/session";
 import { hasPermission } from "@/core/auth/permissions";
 import { LeadForm } from "@/components/leads/lead-form";
 import { LeadTable, type LeadLinha } from "@/components/leads/lead-table";
@@ -17,7 +17,7 @@ import { dataISOEmSaoPaulo, formatarDataBR } from "@/lib/date";
  * formulário e decidir se busca a lista de vendedores abaixo.
  */
 export default async function LeadsPage() {
-  const usuario = await usuarioAtual();
+  const usuario = await usuarioAtualOuLogin();
 
   // Só ADMIN e GESTOR (ação `ver_dashboard_geral`) conseguem atribuir um
   // lead a outra pessoa — `criarLeadManual` clampa `responsavelId` no

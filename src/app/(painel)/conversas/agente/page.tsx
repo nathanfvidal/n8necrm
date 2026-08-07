@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 import Link from "next/link";
 
 import { exigirModulo } from "@/lib/module-gate";
-import { usuarioAtual } from "@/core/auth/session";
+import { usuarioAtualOuLogin } from "@/core/auth/session";
 import { hasPermission } from "@/core/auth/permissions";
 import { lerConfigBot } from "@/modules/whatsapp/agente";
 import { AgenteForm } from "@/components/agente-form";
@@ -28,7 +28,7 @@ import { AgenteForm } from "@/components/agente-form";
 export default async function AgentePage() {
   exigirModulo("whatsapp");
 
-  const usuario = await usuarioAtual();
+  const usuario = await usuarioAtualOuLogin();
   if (!hasPermission(usuario.papel, "configurar_agente")) {
     redirect("/conversas");
   }

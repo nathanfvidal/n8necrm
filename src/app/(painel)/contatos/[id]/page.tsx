@@ -1,7 +1,7 @@
 import Link from "next/link";
-import { notFound, redirect } from "next/navigation";
+import { notFound } from "next/navigation";
 
-import { usuarioAtual } from "@/core/auth/session";
+import { usuarioAtualOuLogin } from "@/core/auth/session";
 import { buscarContatoComHistorico } from "@/core/contacts/queries";
 import { moduloAtivo } from "@/lib/module-gate";
 import { listarConversasDoContato } from "@/modules/whatsapp/queries";
@@ -27,11 +27,7 @@ import { formatarDataHoraBR } from "@/lib/date";
  * servidor não pagaria a complexidade.
  */
 export default async function ContatoPage({ params }: { params: Promise<{ id: string }> }) {
-  try {
-    await usuarioAtual();
-  } catch {
-    redirect("/login");
-  }
+  await usuarioAtualOuLogin();
 
   const { id } = await params;
   const contato = await buscarContatoComHistorico(id);

@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/prisma";
-import { usuarioAtual } from "@/core/auth/session";
+import { usuarioAtualOuLogin } from "@/core/auth/session";
 import { listarEtapas } from "@/core/pipeline/stages";
 import { listarLeadsPorEtapa } from "@/core/leads/queries";
 import { listarTasksPendentes } from "@/core/tasks/service";
@@ -29,7 +29,7 @@ import { formatarDataHoraBR } from "@/lib/date";
  * `listarTasksPendentes(usuario.id)`, não a lista inteira.
  */
 export default async function DashboardPage() {
-  const usuario = await usuarioAtual();
+  const usuario = await usuarioAtualOuLogin();
 
   const [etapas, leadsPorEtapa, tasksPendentes] = await Promise.all([
     listarEtapas(),

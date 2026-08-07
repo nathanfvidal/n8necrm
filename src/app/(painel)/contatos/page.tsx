@@ -1,7 +1,6 @@
 import Link from "next/link";
-import { redirect } from "next/navigation";
 
-import { usuarioAtual } from "@/core/auth/session";
+import { usuarioAtualOuLogin } from "@/core/auth/session";
 import { listarContatos } from "@/core/contacts/queries";
 import { ContactForm } from "@/components/contacts/contact-form";
 import { EmptyState } from "@/components/empty-state";
@@ -34,11 +33,7 @@ export default async function ContatosPage({
 }: {
   searchParams: Promise<{ q?: string }>;
 }) {
-  try {
-    await usuarioAtual();
-  } catch {
-    redirect("/login");
-  }
+  await usuarioAtualOuLogin();
 
   const { q } = await searchParams;
   const busca = q?.trim() ?? "";
