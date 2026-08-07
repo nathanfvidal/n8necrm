@@ -19,13 +19,46 @@ const llmEnvSchema = z.object({
 function getLlmEnv() {
   const resultado = llmEnvSchema.safeParse({ OPENAI_API_KEY: process.env.OPENAI_API_KEY });
   if (!resultado.success) {
-    const detalhes = resultado.error.issues.map((issue) => issue.message).join("; ");
+    // Nomeia a variável — ver o comentário equivalente em `gateway/index.ts`:
+    // com valor `undefined` o Zod para na checagem de tipo e a mensagem
+    // customizada acima nunca aparece.
+    const detalhes = resultado.error.issues
+      .map((issue) => `${issue.path.join(".") || "(desconhecida)"}: ${issue.message}`)
+      .join("; ");
     throw new Error(`Configuração do provedor de LLM inválida: ${detalhes}`);
   }
   return resultado.data;
 }
 
-// Trocar de provedor no futuro (outro modelo, outra API) é trocar esta
-// linha por outra implementação de LlmProvider — turno.ts e prompt.ts só
-// conhecem a interface.
-export const llmProvider: LlmProvider = new OpenAiProvider(getLlmEnv().OPENAI_API_KEY);
+let instancia: LlmProvider | null = null;
+
+/**
+ * Preguiçoso pelo mesmo motivo de `gateway/index.ts` — leia o comentário
+ * longo de lá.
+ *
+ * Em resumo: `next build` avalia todo módulo alcançável para coletar a
+ * configuração das rotas, então validar no escopo do módulo transforma uma
+ * variável de integração ausente em falha do build INTEIRO, inclusive das
+ * telas que não têm nada a ver com WhatsApp. Este arquivo foi o segundo elo
+ * da mesma cadeia: corrigir só o gateway fazia o build avançar e quebrar
+ * aqui, com outra mensagem.
+ */
+function obterProvedor(): LlmProvider {
+  if (instancia) return instancia;
+
+  // Trocar de provedor no futuro (outro modelo, outra API) é trocar esta
+  // linha por outra implementação de LlmProvider — turno.ts e prompt.ts só
+  // conhecem a interface.
+  instancia = new OpenAiProvider(getLlmEnv().OPENAI_API_KEY);
+
+  return instancia;
+}
+
+/** Mesma forma de sempre para quem consome; ver `gateway/index.ts`. */
+export const llmProvider: LlmProvider = new Proxy({} as LlmProvider, {
+  get(_alvo, propriedade) {
+    const real = obterProvedor() as unknown as Record<string | symbol, unknown>;
+    const valor = real[propriedade];
+    return typeof valor === "function" ? valor.bind(real) : valor;
+  },
+});
