@@ -56,15 +56,40 @@ export function PainelNav({
     // núcleo, existe em todo fork. `papelUsuario` é opcional para o
     // componente continuar renderizável sem sessão nos testes — sem ele o
     // link some, que é o padrão seguro.
+    // `prefetch: false` — ver o comentário do `<Link>` abaixo.
     ...(papelUsuario && hasPermission(papelUsuario, "gerenciar_usuarios")
-      ? [{ href: "/usuarios", label: "Equipe" }]
+      ? [{ href: "/usuarios", label: "Equipe", prefetch: false }]
       : []),
   ];
 
   return (
     <nav className="flex items-center gap-4 border-b p-4">
+      {/*
+        `prefetch` por link, e não global. O padrão do Next é pré-carregar todo
+        `<Link>` visível, o que é bom para telas de uso constante (Leads,
+        Funil) e ruim para "Equipe": é uma tela de uso raro, e o prefetch
+        dispara em TODA página do painel de todo ADMIN.
+
+        O custo apareceu no e2e como um teste de logout falhando de forma
+        intermitente. O prefetch mantém requisições a `/usuarios` em voo o
+        tempo todo; quando o logout acontece, uma dessas requisições chega
+        depois — carregando o cookie que acabou de ser invalidado. Duas coisas
+        ruins saíam disso: a rejeição de `usuarioAtual()` subindo sem
+        tratamento (corrigido também na própria page), e o Auth.js reemitindo
+        o cookie de sessão na resposta, o que ressuscitava a sessão que o
+        logout tinha acabado de encerrar.
+
+        Desligar o prefetch aqui remove a fonte do tráfego. O link continua
+        funcionando igual ao clicar — só não é mais buscado antes de alguém
+        querer.
+      */}
       {links.map((link) => (
-        <Link key={link.href} href={link.href} className="text-sm font-medium hover:underline">
+        <Link
+          key={link.href}
+          href={link.href}
+          prefetch={"prefetch" in link ? link.prefetch : undefined}
+          className="text-sm font-medium hover:underline"
+        >
           {link.label}
         </Link>
       ))}
