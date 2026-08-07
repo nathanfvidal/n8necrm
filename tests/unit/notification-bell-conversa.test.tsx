@@ -40,8 +40,12 @@ describe("NotificationBell — conversa aguardando", () => {
   });
 
   // Sem isto, um payload malformado (ou um tipo futuro) derrubaria o sino
-  // inteiro em vez de degradar naquela linha.
-  it("não quebra com payload malformado", () => {
+  // inteiro em vez de degradar naquela linha. O `<li>` só existe dentro de
+  // `{aberto && ...}` (`notification-bell.tsx`), então o teste precisa abrir
+  // o sino — senão `extrairPayloadConversaAguardando` nunca roda e a
+  // asserção não prova nada. Mesmo padrão de
+  // `notification-bell.test.tsx`, "payload sem o formato esperado...".
+  it("não quebra com payload malformado: degrada para 'Notificação'", () => {
     render(
       <NotificationBell
         notificacoes={[
@@ -49,6 +53,9 @@ describe("NotificationBell — conversa aguardando", () => {
         ]}
       />
     );
-    expect(screen.getByRole("button")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Notificações" }));
+
+    expect(screen.getByText("Notificação")).toBeTruthy();
   });
 });
