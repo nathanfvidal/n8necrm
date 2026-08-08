@@ -16,8 +16,21 @@ import { dataISOEmSaoPaulo, formatarDataBR } from "@/lib/date";
  * página descobre QUEM está logado, para saber o `responsavelId` padrão do
  * formulário e decidir se busca a lista de vendedores abaixo.
  */
-export default async function LeadsPage() {
+export default async function LeadsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ arquivados?: string }>;
+}) {
   const usuario = await usuarioAtualOuLogin();
+
+  // Sem este alternador, arquivar seria mão única: o lead some das quatro
+  // listagens e não existe caminho para encontrá-lo e chamar
+  // `desarquivarLead`. A autorrevisão da spec pegou justamente isso.
+  //
+  // `?arquivados=1` no molde do `?q=` da busca de contatos — `<form
+  // method="get">`, sem estado no cliente: o estado do filtro fica na URL,
+  // que é compartilhável e sobrevive a um recarregamento.
+  const mostrarArquivados = (await searchParams).arquivados === "1";
 
   // Só ADMIN e GESTOR (ação `ver_dashboard_geral`) conseguem atribuir um
   // lead a outra pessoa — `criarLeadManual` clampa `responsavelId` no
@@ -56,7 +69,7 @@ export default async function LeadsPage() {
   // histórico de um lead que "pertence" a outro para atender um cliente que
   // chegou na loja. `listarLeads()` voltou a listar todo lead para todo
   // papel — mesmo comportamento do kanban, sem escopo por responsável.
-  const leads = await listarLeads();
+  const leads = await listarLeads({ incluirArquivados: mostrarArquivados });
 
   const linhas: LeadLinha[] = leads.map((lead) => ({
     id: lead.id,
@@ -75,6 +88,7 @@ export default async function LeadsPage() {
     // rotulada "04/08" perto da virada da meia-noite.
     criadoEm: formatarDataBR(lead.criadoEm),
     criadoEmISO: dataISOEmSaoPaulo(lead.criadoEm),
+    arquivado: lead.arquivadoEm !== null,
   }));
 
   const etapasUnicas = [...new Set(linhas.map((linha) => linha.etapaNome))];
@@ -84,16 +98,28 @@ export default async function LeadsPage() {
     <div className="space-y-6 p-6">
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold">Leads</h1>
-        {podeExportar && (
+        <div className="flex items-center gap-3">
+          {/* `<form method="get">` sem JS: o próprio navegador monta a URL.
+              O `<input type="hidden">` só existe quando o filtro está
+              desligado — é o que faz o botão alternar nos dois sentidos, já
+              que um campo ausente some da query string. */}
+          <form method="get" className="flex items-center">
+            {!mostrarArquivados && <input type="hidden" name="arquivados" value="1" />}
+            <button type="submit" className="text-sm underline">
+              {mostrarArquivados ? "Ocultar arquivados" : "Mostrar arquivados"}
+            </button>
+          </form>
+          {podeExportar && (
           // Link nativo, não `router.push`/`onClick` com `fetch`: a rota
           // devolve `Content-Disposition: attachment` (Task 21), então o
           // próprio navegador trata a navegação como download e permanece
           // em `/leads` — não precisa de `target="_blank"` (abriria uma aba
           // em branco à toa) nem de JS extra para disparar o download.
-          <a href="/export/leads" className={buttonVariants({ variant: "outline" })}>
-            Exportar CSV
-          </a>
-        )}
+            <a href="/export/leads" className={buttonVariants({ variant: "outline" })}>
+              Exportar CSV
+            </a>
+          )}
+        </div>
       </div>
       <LeadForm
         responsavelPadraoId={usuario.id}
