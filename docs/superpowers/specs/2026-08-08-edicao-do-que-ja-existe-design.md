@@ -10,10 +10,13 @@ histórico definitivamente. Um levantamento contra CRMs em geral mostrou muitas 
 esta é a mais visível no uso diário: não é falta de recurso avançado, é falta de desfazer.
 
 Há um segundo problema, encontrado durante o levantamento e maior do que parece.
-**`Lead.valorEstimado` está morto**: a coluna existe, e nenhum caminho de código a escreve
-ou lê. A única menção no projeto é um comentário em `core/audit/log.ts` sobre serialização
-de `Decimal`. Quer dizer que o CRM não sabe quanto vale nenhum negócio — o dado que faz
-funil e painel terem sentido.
+**Nenhuma tela do CRM lê nem escreve `Lead.valorEstimado`.** A aplicação inteira ignora a
+coluna: não há formulário que a preencha e não há tela que a mostre.
+
+> **Correção de 2026-08-08.** A primeira versão desta seção dizia que a coluna estava
+> "morta, nunca escrita". Errado, e a checagem antes da migração pegou: `prisma/seed-demo.ts`
+> grava valores nela, e 11 dos 15 leads do banco têm valor preenchido. O fato real é pior
+> do que o que eu tinha escrito — existe dado de valor guardado que **nenhuma tela mostra**.
 
 Então "editar lead" não é só corrigir digitação. É a primeira vez que o sistema vai
 registrar o valor de um negócio.
@@ -80,8 +83,11 @@ model LeadNote {
 
 **`@db.Decimal(14, 2)`** corrige um defeito existente: sem precisão declarada, o Prisma
 usa o padrão do Postgres e a coluna aceita 30 casas decimais — frações de centavo. Dinheiro
-tem exatamente duas. A migração é segura porque a coluna está inteiramente nula hoje: não
-existe valor gravado para arredondar ou truncar.
+tem exatamente duas.
+
+A migração foi verificada contra o banco real antes de aplicar, e não presumida: 11 linhas
+têm valor, o maior é 171.000, **nenhuma** perderia casas decimais (são todos inteiros) e
+nenhuma estoura o limite de `Decimal(14,2)` — 999.999.999.999,99.
 
 **`arquivadoEm` e não `ativo`**, e **coluna e não etapa "Arquivado"**. A coluna guarda
 *quando*, seguindo `Task.concluidaEm`. Uma etapa no funil seria mais barata (zero

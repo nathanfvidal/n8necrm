@@ -69,6 +69,9 @@ function leadFake(overrides: Partial<LeadFake> = {}): LeadFake {
     utm: null,
     criadoEm: new Date("2026-08-02T12:34:00.000Z"),
     ultimaInteracaoEm: new Date("2026-08-02T12:34:00.000Z"),
+    // Lead ativo. `arquivadoEm` nasceu com a edição/arquivamento
+    // (2026-08-08) e é obrigatório no tipo, ainda que nulo.
+    arquivadoEm: null,
     contact: contactFake(),
     responsavel: { id: "usuario-fake-id", nome: "Responsável Fake" },
     stage: etapaFake,

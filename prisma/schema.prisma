@@ -111,17 +111,28 @@ model Lead {
   responsavelId     String?
   responsavel       User?          @relation("LeadResponsavel", fields: [responsavelId], references: [id])
   canal             LeadChannel
-  valorEstimado     Decimal?
+  // `@db.Decimal(14, 2)`: sem precisão declarada, o Prisma usa o padrão do
+  // Postgres — `numeric(65, 30)`, que aceita 30 casas decimais, ou seja
+  // frações de centavo. Dinheiro tem exatamente duas.
+  valorEstimado     Decimal?       @db.Decimal(14, 2)
   sessionId         String?
   utm               Json?
   criadoEm          DateTime       @default(now())
   ultimaInteracaoEm DateTime       @default(now())
+  // `arquivadoEm` (null = ativo) em vez de `ativo Boolean`, e coluna em vez de
+  // uma etapa "Arquivado" no funil: uma etapa manteria o lead DENTRO do funil,
+  // aparecendo no kanban e somando no painel — o oposto do que arquivar serve.
+  // Guarda *quando*, seguindo `Task.concluidaEm`.
+  //
+  // TODA listagem de lead filtra por esta coluna. Ver `core/leads/queries.ts`.
+  arquivadoEm       DateTime?
   notes             LeadNote[]
   tasks             Task[]
   conversations     Conversation[]
 
   @@index([stageId, responsavelId])
   @@index([criadoEm])
+  @@index([arquivadoEm])
 }
 
 model LeadNote {
@@ -132,6 +143,9 @@ model LeadNote {
   autor    User     @relation(fields: [autorId], references: [id])
   texto    String
   criadoEm DateTime @default(now())
+  // Marca que o texto foi corrigido depois de escrito. Sem isto o histórico
+  // mente por omissão: o texto muda e nada indica que mudou.
+  editadoEm DateTime?
 }
 
 model Task {
@@ -217,11 +231,26 @@ model Conversation {
   iaPausadaEm    DateTime?
   iaPausadaPorId String?
   iaPausadaPor   User?             @relation("ConversasPausadas", fields: [iaPausadaPorId], references: [id])
+  // Declarado aqui, mas SEM código que o leia ou escreva nesta branch: a
+  // coluna já existe no banco, aplicada pela migração
+  // `20260806231518_conversa_aguardando_humano` de
+  // `feature/conversa-aguardando-humano`, que nunca foi mesclada. O banco é
+  // compartilhado com produção, então a migração daquela branch marcou o
+  // schema real de forma permanente.
+  //
+  // Sem esta linha, o Prisma compararia o schema com o histórico de migrações
+  // e geraria um DROP COLUMN — apagando a coluna em produção. O campo e o
+  // arquivo de migração são cópias idênticas às daquela branch, então mesclá-la
+  // depois não gera conflito.
+  aguardandoHumanoDesde DateTime?
 
   // turno.ts faz UPDATE ... WHERE "processandoAte" IS NULL OR "processandoAte" < now()
   // a cada job de fila — sem índice, essa checagem varreria a tabela inteira
   // conforme o número de conversas ativas cresce.
   @@index([processandoAte])
+  // A lista de conversas ordena por este campo em toda navegação para
+  // /conversas — mesmo raciocínio do índice em `processandoAte`.
+  @@index([aguardandoHumanoDesde])
 }
 
 /// Configuração do agente de IA — LINHA ÚNICA, id fixo `bot-config`.
