@@ -214,34 +214,23 @@ model RateLimit {
  * atômico que `checarRateLimit` (core/rate-limit/limiter.ts) já usa.
  */
 model Conversation {
-  id             String            @id @default(cuid())
-  waId           String            @unique
-  telefone       String?
-  contactId      String?
-  contact        Contact?          @relation(fields: [contactId], references: [id])
-  leadId         String?
-  lead           Lead?             @relation(fields: [leadId], references: [id])
-  nomeExibicao   String?
-  bufferSeq      Int               @default(0)
-  processandoAte DateTime?
-  criadoEm       DateTime          @default(now())
-  atualizadoEm   DateTime          @updatedAt
-  mensagens      WhatsappMessage[]
-  iaAtiva        Boolean           @default(true)
-  iaPausadaEm    DateTime?
-  iaPausadaPorId String?
-  iaPausadaPor   User?             @relation("ConversasPausadas", fields: [iaPausadaPorId], references: [id])
-  // Declarado aqui, mas SEM código que o leia ou escreva nesta branch: a
-  // coluna já existe no banco, aplicada pela migração
-  // `20260806231518_conversa_aguardando_humano` de
-  // `feature/conversa-aguardando-humano`, que nunca foi mesclada. O banco é
-  // compartilhado com produção, então a migração daquela branch marcou o
-  // schema real de forma permanente.
-  //
-  // Sem esta linha, o Prisma compararia o schema com o histórico de migrações
-  // e geraria um DROP COLUMN — apagando a coluna em produção. O campo e o
-  // arquivo de migração são cópias idênticas às daquela branch, então mesclá-la
-  // depois não gera conflito.
+  id                    String            @id @default(cuid())
+  waId                  String            @unique
+  telefone              String?
+  contactId             String?
+  contact               Contact?          @relation(fields: [contactId], references: [id])
+  leadId                String?
+  lead                  Lead?             @relation(fields: [leadId], references: [id])
+  nomeExibicao          String?
+  bufferSeq             Int               @default(0)
+  processandoAte        DateTime?
+  criadoEm              DateTime          @default(now())
+  atualizadoEm          DateTime          @updatedAt
+  mensagens             WhatsappMessage[]
+  iaAtiva               Boolean           @default(true)
+  iaPausadaEm           DateTime?
+  iaPausadaPorId        String?
+  iaPausadaPor          User?             @relation("ConversasPausadas", fields: [iaPausadaPorId], references: [id])
   aguardandoHumanoDesde DateTime?
 
   // turno.ts faz UPDATE ... WHERE "processandoAte" IS NULL OR "processandoAte" < now()

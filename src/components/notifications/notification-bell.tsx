@@ -11,6 +11,10 @@ import {
   extrairPayloadAlertaAtividade,
   TIPO_ALERTA_ATIVIDADE,
 } from "@/core/notifications/types";
+import {
+  TIPO_CONVERSA_AGUARDANDO,
+  extrairPayloadConversaAguardando,
+} from "@/modules/whatsapp/notificacao-tipos";
 
 export type NotificacaoNaoLida = {
   id: string;
@@ -138,6 +142,10 @@ export function NotificationBell({ notificacoes: iniciais }: { notificacoes: Not
                 // removido depois; ver comentário em `notifications/types.ts`).
                 const dadosNovoLead =
                   notificacao.tipo === "NOVO_LEAD" ? extrairPayloadNovoLead(notificacao.payload) : null;
+                const dadosConversa =
+                  notificacao.tipo === TIPO_CONVERSA_AGUARDANDO
+                    ? extrairPayloadConversaAguardando(notificacao.payload)
+                    : null;
 
                 // Alerta de rajada destrutiva (`core/audit/alerta.ts`). Sem
                 // este ramo ele cairia no fallback "Notificação" abaixo — um
@@ -163,6 +171,17 @@ export function NotificationBell({ notificacoes: iniciais }: { notificacoes: Not
                             onClick={() => setAberto(false)}
                           >
                             Ver lead
+                          </Link>
+                        </>
+                      ) : dadosConversa ? (
+                        <>
+                          <p>Conversa aguardando: {dadosConversa.nomeExibicao}</p>
+                          <Link
+                            href={`/conversas/${dadosConversa.conversationId}`}
+                            className="text-xs text-primary underline"
+                            onClick={() => setAberto(false)}
+                          >
+                            Ver conversa
                           </Link>
                         </>
                       ) : dadosAlerta ? (

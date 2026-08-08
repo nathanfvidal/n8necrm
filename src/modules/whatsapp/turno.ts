@@ -9,6 +9,7 @@ import { publicarTurno, type TurnoJob } from "./fila";
 import { whatsappGateway } from "./gateway";
 import { llmProvider } from "./llm";
 import type { AutorMensagemContexto } from "./llm/tipos";
+import { limparAguardandoHumano, marcarAguardandoHumano } from "./notificacoes";
 import { montarPromptSistema } from "./prompt";
 
 export type { TurnoJob } from "./fila";
@@ -203,6 +204,11 @@ async function processarMensagensPendentes(conversationId: string, meuToken: Dat
     const motivo = !configBot.ativo ? "interruptor global desligado" : "IA pausada nesta conversa";
     console.info(`Conversa ${conversationId}: ${motivo} — pendentes marcadas sem resposta automática.`);
     await marcarPendentesComoProcessadas(pendentes);
+    // Depois de marcar as pendentes, não antes: se isto lançasse primeiro, o
+    // turno lançaria e o job seria reentregue com a conversa já sinalizada
+    // por um trabalho que não terminou (ver docstring de
+    // `marcarPendentesComoProcessadas` para os quatro pontos irmãos deste).
+    await marcarAguardandoHumano(conversationId);
     return;
   }
 
@@ -223,6 +229,7 @@ async function processarMensagensPendentes(conversationId: string, meuToken: Dat
         `última hora — pendentes marcadas como processadas sem resposta automática.`
     );
     await marcarPendentesComoProcessadas(pendentes);
+    await marcarAguardandoHumano(conversationId);
     return;
   }
 
@@ -284,6 +291,7 @@ async function processarMensagensPendentes(conversationId: string, meuToken: Dat
         `enquanto o modelo respondia. Resposta gerada descartada.`
     );
     await marcarPendentesComoProcessadas(pendentes);
+    await marcarAguardandoHumano(conversationId);
     return;
   }
 
@@ -318,6 +326,10 @@ async function processarMensagensPendentes(conversationId: string, meuToken: Dat
 
     if (!pendentesMarcadas) {
       await marcarPendentesComoProcessadas(pendentes);
+      // A IA falou com o cliente — ninguém está mais esperando um humano.
+      // Depois de marcar as pendentes, mesmo raciocínio dos outros três
+      // pontos: nunca sinalizar (aqui, limpar) antes do trabalho concluir.
+      await limparAguardandoHumano(conversationId);
       pendentesMarcadas = true;
     }
   }
@@ -337,6 +349,14 @@ async function processarMensagensPendentes(conversationId: string, meuToken: Dat
  *    caso que motivou o tipo `MotivoAborto` existir, ver o comentário dele.
  * 4. O envio normal (chamado aqui de novo, com o mesmo formato, para não
  *    duplicar a query em quatro lugares).
+ *
+ * Fatia 3 (aviso de conversa aguardando humano): os pontos 1-3 são "processou
+ * sem responder" — cada um é seguido de `marcarAguardandoHumano`, sempre
+ * DEPOIS desta chamada (se ela falhar, o turno lança e o job é reentregue; a
+ * conversa não pode ficar sinalizada por um trabalho que não terminou). O
+ * ponto 4 é o envio bem-sucedido da IA — seguido de `limparAguardandoHumano`,
+ * não de `marcarAguardandoHumano`: marcar aqui encheria o sino de conversas
+ * que a IA está atendendo normalmente, e a equipe pararia de olhar o sino.
  */
 async function marcarPendentesComoProcessadas(pendentes: Array<{ id: string }>): Promise<void> {
   await prisma.whatsappMessage.updateMany({

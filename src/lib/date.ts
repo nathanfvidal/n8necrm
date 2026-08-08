@@ -175,3 +175,26 @@ export function dataISOEmSaoPaulo(data: Date): string {
   const valor = (tipo: string) => partes.find((parte) => parte.type === tipo)?.value ?? "";
   return `${valor("year")}-${valor("month")}-${valor("day")}`;
 }
+
+/**
+ * Duração curta desde `data` até agora, em português: "< 1 min", "3 min",
+ * "2 h", "1 d". Para a lista de conversas, onde o número importa mais que a
+ * precisão: quem espera há 40 minutos precisa ser distinguível de quem
+ * espera há 4, e ninguém precisa dos segundos.
+ *
+ * "< 1 min" (não "agora") porque compõe com o texto fixo que chama esta
+ * função — `conversas/page.tsx` mostra "Aguardando há {...}", e "Aguardando
+ * há agora" não é português natural.
+ *
+ * Recebe `agora` por argumento (com default) para o teste não precisar
+ * congelar relógio — mesmo motivo de `montarPromptSistema` receber a config
+ * em vez de lê-la.
+ */
+export function formatarDuracaoDesde(data: Date, agora: Date = new Date()): string {
+  const minutos = Math.floor((agora.getTime() - data.getTime()) / 60_000);
+  if (minutos < 1) return "< 1 min";
+  if (minutos < 60) return `${minutos} min`;
+  const horas = Math.floor(minutos / 60);
+  if (horas < 24) return `${horas} h`;
+  return `${Math.floor(horas / 24)} d`;
+}

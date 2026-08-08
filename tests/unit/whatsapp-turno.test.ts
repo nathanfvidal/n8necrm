@@ -33,6 +33,7 @@ import {
   liberarLease,
   confirmarTitularidadeLease,
 } from "../../src/modules/whatsapp/turno";
+import { TIPO_CONVERSA_AGUARDANDO } from "../../src/modules/whatsapp/notificacao-tipos";
 import { BOT_CONFIG_ID, botConfig } from "../../config/bot";
 // criarConversation/criarMensagemEntrada extraídos para tests/unit/helpers/whatsapp.ts
 // (Task 4 da Fatia 2) — mesmo nome, mesma assinatura, mesmo PREFIXO interno
@@ -49,6 +50,23 @@ async function limparDadosDeTeste() {
   });
   const ids = conversas.map((c) => c.id);
   if (ids.length > 0) {
+    // A guarda de IA (Fatia 2) agora dispara `marcarAguardandoHumano`, que
+    // cria `Notification`. `Notification` não tem FK para `Conversation`
+    // (payload é só um `conversationId` solto em JSON) — escopado às
+    // conversas que ESTE arquivo criou, nunca um `deleteMany` por `tipo`
+    // sozinho, que apagaria aviso de conversa real no banco de dev
+    // compartilhado. Mesmo padrão de tests/unit/whatsapp-notificacoes.test.ts.
+    const notificacoes = await prisma.notification.findMany({
+      where: { tipo: TIPO_CONVERSA_AGUARDANDO },
+    });
+    const idsNotificacoes = notificacoes
+      .filter((n) =>
+        ids.includes((n.payload as { conversationId?: string } | null)?.conversationId ?? "")
+      )
+      .map((n) => n.id);
+    if (idsNotificacoes.length > 0) {
+      await prisma.notification.deleteMany({ where: { id: { in: idsNotificacoes } } });
+    }
     await prisma.whatsappMessage.deleteMany({ where: { conversationId: { in: ids } } });
     await prisma.conversation.deleteMany({ where: { id: { in: ids } } });
   }
@@ -683,6 +701,128 @@ describe("processarTurno", () => {
           data: { personaNome: original.personaNome },
         });
       }
+    });
+  });
+
+  describe("marca conversa aguardando humano", () => {
+    async function aguardandoDe(conversationId: string) {
+      const c = await prisma.conversation.findUniqueOrThrow({ where: { id: conversationId } });
+      return c.aguardandoHumanoDesde;
+    }
+
+    it("marca quando a conversa está pausada", async () => {
+      const conversa = await criarConversation({ iaAtiva: false });
+      await criarMensagemEntrada(conversa.id, { texto: "oi, tem o Onix?" });
+
+      await processarTurno({ conversationId: conversa.id, seq: conversa.bufferSeq });
+
+      expect(await aguardandoDe(conversa.id)).toBeInstanceOf(Date);
+    });
+
+    it("marca quando o interruptor global está desligado", async () => {
+      const original = await prisma.botConfig.findUniqueOrThrow({ where: { id: BOT_CONFIG_ID } });
+      await prisma.botConfig.update({ where: { id: BOT_CONFIG_ID }, data: { ativo: false } });
+      try {
+        const conversa = await criarConversation();
+        await criarMensagemEntrada(conversa.id, { texto: "bom dia" });
+
+        await processarTurno({ conversationId: conversa.id, seq: conversa.bufferSeq });
+
+        expect(await aguardandoDe(conversa.id)).toBeInstanceOf(Date);
+      } finally {
+        await prisma.botConfig.update({
+          where: { id: BOT_CONFIG_ID },
+          data: { ativo: original.ativo },
+        });
+      }
+    });
+
+    // O caso que, se quebrar, enche o sino de conversas que estão sendo
+    // atendidas normalmente pela IA — e a equipe para de olhar o sino.
+    it("NÃO marca quando a IA responde normalmente", async () => {
+      const conversa = await criarConversation();
+      await criarMensagemEntrada(conversa.id, { texto: "quanto custa?" });
+
+      await processarTurno({ conversationId: conversa.id, seq: conversa.bufferSeq });
+
+      expect(await aguardandoDe(conversa.id)).toBeNull();
+    });
+
+    it("a resposta da IA limpa uma espera anterior", async () => {
+      const conversa = await criarConversation();
+      await prisma.conversation.update({
+        where: { id: conversa.id },
+        data: { aguardandoHumanoDesde: new Date() },
+      });
+      await criarMensagemEntrada(conversa.id, { texto: "voltei" });
+
+      await processarTurno({ conversationId: conversa.id, seq: conversa.bufferSeq });
+
+      expect(await aguardandoDe(conversa.id)).toBeNull();
+    });
+
+    it("marca quando atinge o teto de respostas de IA por hora", async () => {
+      const conversa = await criarConversation({ bufferSeq: 1 });
+      await prisma.whatsappMessage.createMany({
+        data: Array.from({ length: 20 }, (_, i) => ({
+          conversationId: conversa.id,
+          idExterno: `${PREFIXO}saida-teto-aguardando-${i}-${crypto.randomUUID()}`,
+          direcao: "SAIDA" as const,
+          autor: "IA" as const,
+          tipo: "TEXTO" as const,
+          texto: "resposta anterior",
+          processadoEm: new Date(),
+        })),
+      });
+      await criarMensagemEntrada(conversa.id, { texto: "mais uma pergunta" });
+
+      await processarTurno({ conversationId: conversa.id, seq: conversa.bufferSeq });
+
+      expect(await aguardandoDe(conversa.id)).toBeInstanceOf(Date);
+    });
+
+    // A distinção que motivou `MotivoAborto` (ver o comentário do tipo em
+    // turno.ts): quem PERDEU o lease não marca -- quem assumiu o lease vai
+    // responder as pendentes, e um aviso aqui seria falso (a conversa está
+    // sendo atendida, só que por outro processador). Prova em separado do
+    // teste "perder o lease NÃO marca as pendentes como processadas", que
+    // não afirma nada sobre `aguardandoHumanoDesde`.
+    it("lease perdido no aborto pós-modelo NÃO marca — quem assumiu o lease vai responder", async () => {
+      const conversa = await criarConversation();
+      await criarMensagemEntrada(conversa.id, { texto: "oi" });
+
+      gerarRespostaMock.mockImplementationOnce(async () => {
+        await prisma.conversation.update({
+          where: { id: conversa.id },
+          data: { processandoAte: new Date(Date.now() + 60_000) }, // outro dono
+        });
+        return { mensagens: ["resposta órfã"] };
+      });
+
+      await processarTurno({ conversationId: conversa.id, seq: conversa.bufferSeq });
+
+      expect(await aguardandoDe(conversa.id)).toBeNull();
+    });
+
+    // A outra metade da distinção: IA pausada DEPOIS da chamada ao modelo
+    // (um humano assumiu enquanto o modelo pensava) marca -- não há resposta
+    // automática a dar, mesmo tratamento do teto por hora e da guarda de
+    // entrada.
+    it("IA pausada durante a chamada ao modelo marca aguardando", async () => {
+      const conversa = await criarConversation();
+      await criarMensagemEntrada(conversa.id, { texto: "quero saber o preço" });
+
+      gerarRespostaMock.mockImplementationOnce(async () => {
+        await prisma.conversation.update({
+          where: { id: conversa.id },
+          data: { iaAtiva: false, iaPausadaEm: new Date() },
+        });
+        return { mensagens: ["Resposta que não deve ser enviada"] };
+      });
+
+      await processarTurno({ conversationId: conversa.id, seq: conversa.bufferSeq });
+
+      expect(await aguardandoDe(conversa.id)).toBeInstanceOf(Date);
     });
   });
 });
