@@ -286,7 +286,20 @@ test("conversa aguardando humano aparece com o selo na lista", async ({ page }) 
     },
   });
 
-  await login(page, "admin@exemplo.com");
+  // Este teste entrava com `admin@exemplo.com`, conta de demonstração que a
+  // correção da auditoria de segurança DESATIVOU (senha literal em arquivo
+  // versionado, com deploy público no ar). Usuário inativo não faz login, e o
+  // sintoma era timeout em `waitForURL("/")` — parece falha do selo, é falha
+  // de autenticação.
+  //
+  // Conta de VENDEDOR, e não a de admin, por duas razões: `/conversas` não tem
+  // checagem de papel (o teste "a tela do agente é inacessível a quem não é
+  // ADMIN", acima, depende justamente de um vendedor conseguir cair nela), e o
+  // orçamento de login por conta é 10 a cada 10 minutos
+  // (`core/rate-limit/login.ts`). Jogar estes dois testes no admin levava a
+  // suíte a ~11 logins dele por execução e derrubava o ÚLTIMO teste da fila,
+  // por rate limit — um sintoma que não se parece nada com a causa.
+  await login(page, EMAIL_VENDEDOR_E2E);
   await page.goto("/conversas");
 
   const linkConversa = page.getByRole("link", { name: nomeExibicao });
@@ -335,7 +348,9 @@ test("conversa aguardando aparece antes de uma conversa comum na lista", async (
     },
   });
 
-  await login(page, "admin@exemplo.com");
+  // Mesma troca do teste acima, pelas mesmas duas razões: conta de
+  // demonstração desativada, e orçamento de login do admin já apertado.
+  await login(page, EMAIL_VENDEDOR_E2E);
   await page.goto("/conversas");
 
   await expect(page.getByRole("link", { name: nomeAguardando })).toBeVisible();
