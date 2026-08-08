@@ -121,9 +121,14 @@ com os algarismos entrando pela direita, como caixa de banco:
 
 | Teclas | Mostra |
 |---|---|
-| `15050` | `1.500,50` |
+| `15050` | `150,50` |
+| `150050` | `1.500,50` |
 | `15000000` | `150.000,00` |
 | `150000000` | `1.500.000,00` |
+
+Os algarismos são **centavos**: `15050` são quinze mil e cinquenta centavos, isto é
+R$ 150,50. A primeira versão desta tabela errava justamente aqui, por um dígito — o que é
+uma demonstração do problema que o campo resolve.
 
 Assim "1,5 milhão" e "150 mil" deixam de ser problema de interpretação e viram conferência
 visual — a pessoa vê a ordem de grandeza formada na tela e confirma na hora.
