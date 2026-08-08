@@ -63,9 +63,21 @@ pertence a alguém.
 `excluirNota`. São dados do funil, que a equipe inteira vê e sobre os quais um gestor
 precisa saber quem mexeu.
 
-**Não auditado** — `editarTask`, `excluirTask`. Consistente com `criarTask` e
-`concluirTask`, que já não auditam. Uma linha de auditoria por título de lembrete
-corrigido é ruído.
+**Não auditado** — `editarTask`. Consistente com `criarTask` e `concluirTask`, que já não
+auditam. Uma linha de auditoria por título de lembrete corrigido é ruído.
+
+> **Correção de 2026-08-08, decisão do dono do projeto na auditoria de segurança.**
+> Esta seção colocava `excluirTask` junto de `editarTask`, sem auditoria. **Errado**, e o
+> motivo é a diferença entre corrigir e destruir: editar deixa a linha no banco, excluir a
+> apaga para sempre. Sem registro, alguém que queira sabotar a empresa apaga os lembretes
+> da equipe e não sobra nada que mostre o que existia nem quem apagou.
+>
+> `excluirTask` **audita** (`acao: "excluir_task"`), e o campo `antes` guarda o conteúdo
+> destruído — é o único lugar onde ele passa a existir depois do `DELETE`. A auditoria roda
+> **depois** do delete, para nunca registrar uma exclusão que não aconteceu.
+>
+> A regra geral continua valendo: tarefa é lembrete pessoal e não pipeline compartilhado.
+> A exceção é só para a operação irreversível. Não "harmonize" isto de volta.
 
 ## 4. Modelo de dados
 
