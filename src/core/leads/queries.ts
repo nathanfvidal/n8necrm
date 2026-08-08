@@ -31,6 +31,13 @@ export type LeadListado = Lead & {
 export async function listarLeadsPorEtapa(): Promise<Record<string, LeadComRelacoes[]>> {
   const etapas = await prisma.pipelineStage.findMany({ orderBy: { ordem: "asc" } });
   const leads = await prisma.lead.findMany({
+    // Arquivado sai do funil por definição — ver `arquivarLead`
+    // (`leads/service.ts`). Este filtro cobre DUAS telas de uma vez, o kanban
+    // e o painel, porque as duas consomem esta função;
+    // `tests/unit/leads-arquivar.test.ts` percorre todos os caminhos de
+    // listagem, porque esquecer um faz o lead reaparecer justamente onde
+    // arquivar deveria tê-lo removido.
+    where: { arquivadoEm: null },
     include: { contact: true, responsavel: { select: { id: true, nome: true } } },
     orderBy: { criadoEm: "desc" },
   });
@@ -61,8 +68,15 @@ export async function listarLeadsPorEtapa(): Promise<Record<string, LeadComRelac
  * errada por decisão de produto, não só por bug de superfície — daí ter sido
  * removida aqui em vez de espalhada para as outras telas.
  */
-export async function listarLeads(): Promise<LeadListado[]> {
+export async function listarLeads(opcoes?: {
+  incluirArquivados?: boolean;
+}): Promise<LeadListado[]> {
   return prisma.lead.findMany({
+    // Filtra arquivados por PADRÃO — quem quiser vê-los pede explicitamente
+    // (o alternador "mostrar arquivados" da tela `/leads`). O padrão seguro é
+    // o de esconder: uma chamada nova que esqueça o parâmetro erra para o lado
+    // de omitir, não para o de fazer o lead arquivado reaparecer.
+    where: opcoes?.incluirArquivados ? {} : { arquivadoEm: null },
     include: {
       contact: true,
       responsavel: { select: { id: true, nome: true } },
