@@ -1,7 +1,10 @@
 "use server";
 
+import { revalidatePath } from "next/cache";
+
 import { usuarioAtual } from "@/core/auth/session";
-import { criarTask, concluirTask } from "./service";
+import { ehSessaoInvalida, MENSAGEM_SESSAO_INVALIDA, type ResultadoAcao } from "@/lib/acao";
+import { criarTask, concluirTask, editarTask, excluirTask } from "./service";
 import type { Task } from "@prisma/client";
 
 /**
@@ -39,4 +42,77 @@ export async function criarMinhaTask(input: {
 export async function concluirMinhaTask(taskId: string): Promise<Task> {
   const autor = await usuarioAtual();
   return concluirTask({ taskId, autorId: autor.id });
+}
+
+/**
+ * Mensagens de domínio de tarefa, seguras de mostrar a quem preencheu o
+ * formulário. "Tarefa não encontrada" é a mesma resposta para "não existe" e
+ * "não é sua", de propósito — ver `concluirTask` (service.ts).
+ */
+const MENSAGENS_SEGURAS = [
+  /^Tarefa não encontrada/,
+  /^Título obrigatório/,
+  /^Vencimento inválido/,
+  /^Lead não encontrado:/,
+];
+
+function paraResultadoErro(erro: unknown, mensagemGenerica: string): { ok: false; erro: string } {
+  if (erro instanceof Error && MENSAGENS_SEGURAS.some((padrao) => padrao.test(erro.message))) {
+    return { ok: false, erro: erro.message };
+  }
+  if (ehSessaoInvalida(erro)) {
+    console.error("Ação sobre tarefa negada — sessão expirada ou usuário desativado.", erro);
+    return { ok: false, erro: MENSAGEM_SESSAO_INVALIDA };
+  }
+  console.error(mensagemGenerica, erro);
+  return { ok: false, erro: mensagemGenerica };
+}
+
+/**
+ * Corrige uma tarefa do usuário logado. `autorId` sempre da sessão — a regra
+ * de dono mora em `editarTask` (service.ts), e sem isso o id do dono viria do
+ * cliente, que é justamente o que a checagem existe para impedir.
+ *
+ * Devolve `ResultadoAcao` em vez de lançar, ao contrário das duas actions
+ * acima: o Next redige erro não tratado em produção, e "Vencimento inválido"
+ * e "banco fora do ar" chegariam à tela com a mesma mensagem opaca. Ver
+ * `src/lib/acao.ts`.
+ */
+export async function editarTaskAction(dados: {
+  taskId: string;
+  titulo: string;
+  descricao?: string;
+  vencimento: Date;
+  leadId?: string | null;
+}): Promise<ResultadoAcao> {
+  try {
+    const autor = await usuarioAtual();
+    await editarTask({ ...dados, autorId: autor.id });
+  } catch (erro) {
+    return paraResultadoErro(erro, "Falha ao salvar a tarefa. Tente novamente.");
+  }
+  revalidatePath("/tasks");
+  revalidatePath("/");
+  if (dados.leadId) {
+    revalidatePath(`/leads/${dados.leadId}`);
+  }
+  return { ok: true };
+}
+
+export async function excluirTaskAction(dados: {
+  taskId: string;
+  leadId?: string | null;
+}): Promise<ResultadoAcao> {
+  try {
+    const autor = await usuarioAtual();
+    await excluirTask({ taskId: dados.taskId, autorId: autor.id });
+  } catch (erro) {
+    return paraResultadoErro(erro, "Falha ao excluir a tarefa. Tente novamente.");
+  }
+  revalidatePath("/tasks");
+  revalidatePath("/");
+  if (dados.leadId) {
+    revalidatePath(`/leads/${dados.leadId}`);
+  }
+  return { ok: true };
 }

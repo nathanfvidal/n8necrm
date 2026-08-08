@@ -6,6 +6,23 @@ import { parseValorBR } from "@/lib/dinheiro";
 import type { Lead } from "@prisma/client";
 
 /**
+ * Erro de lead que é SEGURO mostrar a quem preencheu o formulário — mesmo
+ * papel de `UsuarioInvalidoError` (`core/users/service.ts`).
+ *
+ * `paraResultadoErro` (`actions.ts`) usa esta classe para separar "recusa
+ * esperada, com mensagem escrita para uma pessoa ler" de "erro inesperado,
+ * que vira mensagem genérica e vai para o log". Sem essa separação, ou toda
+ * falha vira texto genérico (e quem usa perde a informação que o faria agir
+ * diferente), ou detalhe de infraestrutura vaza para a tela.
+ */
+export class LeadInvalidoError extends Error {
+  constructor(mensagem: string) {
+    super(mensagem);
+    this.name = "LeadInvalidoError";
+  }
+}
+
+/**
  * Cria um lead a partir de entrada manual (formulário interno).
  *
  * `autorId` é explícito aqui de propósito: esta função é a camada testável
