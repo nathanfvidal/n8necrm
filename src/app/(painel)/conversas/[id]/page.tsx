@@ -2,7 +2,7 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 
 import { exigirModulo } from "@/lib/module-gate";
-import { usuarioAtual } from "@/core/auth/session";
+import { usuarioAtualOuLogin } from "@/core/auth/session";
 import { hasPermission } from "@/core/auth/permissions";
 import { buscarConversaComMensagens } from "@/modules/whatsapp/queries";
 import { lerConfigBot } from "@/modules/whatsapp/agente";
@@ -35,7 +35,7 @@ export default async function ConversaDetalhePage({
   // todo mundo, e um VENDEDOR/GESTOR que clicasse caía num redirect de volta
   // pra cá em `/conversas/agente/page.tsx` — beco sem saída, não falha de
   // segurança, mas sem motivo para expor o link a quem não pode usá-lo).
-  const usuario = await usuarioAtual();
+  const usuario = await usuarioAtualOuLogin();
   const conversa = await buscarConversaComMensagens(id);
 
   if (!conversa) {

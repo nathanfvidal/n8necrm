@@ -8,11 +8,26 @@
 // nenhum teste de status HTTP percebe. A única verificação que vale é abrir
 // cada página num navegador e ler o console.
 import { test, expect, type Page } from "@playwright/test";
+import { EMAIL_ADMIN_E2E, senhaE2e } from "./credenciais";
 
-const CREDENCIAIS = { email: "admin@exemplo.com", senha: "senha123" };
+const CREDENCIAIS = { email: EMAIL_ADMIN_E2E, senha: senhaE2e() };
 
 /** Telas que um usuário logado realmente usa. Se o CSP quebrar, quebra aqui. */
 const TELAS = ["/", "/leads", "/leads/kanban", "/tasks", "/conversas"];
+
+/**
+ * Telas de DETALHE, alcançadas pelo primeiro link da listagem — o id muda a
+ * cada banco, então não dá para escrever o caminho fixo aqui.
+ *
+ * Achado da auditoria de segurança: a lista acima só tinha telas de índice, e
+ * `/leads/[id]` — a que mais concentra componentes de cliente (formulário de
+ * edição, campo de dinheiro, notas e tarefas em linha) — nunca era aberta por
+ * este teste. Era justamente onde uma quebra de CSP passaria despercebida.
+ */
+const DETALHES = [
+  { listagem: "/leads", descricao: "detalhe do lead" },
+  { listagem: "/contatos", descricao: "detalhe do contato" },
+];
 
 /**
  * Coleta violações de CSP e erros de página.
@@ -167,6 +182,24 @@ test("nenhuma tela do painel viola o CSP", async ({ page }) => {
     expect(
       problemas,
       `violações de CSP ao abrir ${tela}:\n${problemas.join("\n")}`
+    ).toEqual([]);
+  }
+
+  for (const { listagem, descricao } of DETALHES) {
+    await page.goto(listagem);
+    await page.waitForLoadState("networkidle");
+
+    // Primeiro link que aponta para um registro daquela listagem. Falha alto
+    // se não houver nenhum: um teste que "passa" porque não achou o que
+    // testar não prova nada.
+    const primeiro = page.locator(`a[href^="${listagem}/"]`).first();
+    await expect(primeiro, `nenhum registro em ${listagem} para abrir o ${descricao}`).toBeVisible();
+
+    await primeiro.click();
+    await page.waitForLoadState("networkidle");
+    expect(
+      problemas,
+      `violações de CSP no ${descricao} (${page.url()}):\n${problemas.join("\n")}`
     ).toEqual([]);
   }
 });

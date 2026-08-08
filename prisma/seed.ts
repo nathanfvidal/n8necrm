@@ -14,12 +14,24 @@ import bcrypt from "bcryptjs";
 import { prisma } from "../src/lib/prisma";
 import { client } from "../config/client";
 import { BOT_CONFIG_ID, botConfig } from "../config/bot";
+import { ID_SISTEMA_WHATSAPP } from "../src/core/users/sistema";
 
 // Id estável e legível (não um cuid gerado) — Fatia 1 do WhatsApp
 // (AuditLog.userId é FK obrigatória para User) precisa referenciar este
 // usuário por id fixo de dentro de src/modules/whatsapp/, sem depender de
 // buscar por e-mail a cada gravação de auditoria.
-export const WHATSAPP_SYSTEM_USER_ID = "system-whatsapp-bot";
+//
+// A constante mora em `src/core/users/sistema.ts`, não aqui, desde que a tela
+// de gestão de usuários passou a existir: ela precisa saber quais linhas de
+// `User` são contas de sistema para nunca oferecê-las a um ADMIN humano. A
+// direção do import é esta e não a inversa porque este arquivo é um SCRIPT
+// com efeito colateral de topo (`dotenv/config`, e a chamada de `seed()` lá
+// embaixo) — importá-lo a partir da aplicação arrastaria tudo isso para o
+// bundle. `sistema.ts` não importa nada, então vem para cá sem custo.
+//
+// Reexportado com o nome antigo porque `tests/unit/seed.test.ts` o consome
+// daqui.
+export const WHATSAPP_SYSTEM_USER_ID = ID_SISTEMA_WHATSAPP;
 
 // Prisma 7 exige um driver adapter (ver node_modules/.prisma/client/index.d.ts:
 // "A driver adapter is **required**"). `new PrismaClient()` sem adapter não

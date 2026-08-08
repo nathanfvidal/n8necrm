@@ -6,7 +6,7 @@ import { usuarioAtual } from "@/core/auth/session";
 import { hasPermission } from "@/core/auth/permissions";
 import { restaurarConfigPadrao, salvarConfigBot } from "./agente";
 import { MAX_PERSONA_NOME, MAX_PERSONA_PAPEL, MAX_REGRA, MAX_REGRAS, MAX_FAQ } from "./agente-limites";
-import type { ResultadoAcao } from "./actions";
+import { ehSessaoInvalida, MENSAGEM_SESSAO_INVALIDA, type ResultadoAcao } from "@/lib/acao";
 
 /**
  * Mora em `src/modules/whatsapp/`, não em `src/core/whatsapp/` (onde o brief
@@ -38,28 +38,22 @@ import type { ResultadoAcao } from "./actions";
  */
 class ErroConfigAgente extends Error {}
 
-/**
- * Mesma mensagem e mesmo raciocínio de `MENSAGEM_SESSAO_INVALIDA` em
- * `actions.ts` (não exportada de lá, duplicada aqui de propósito): cobre
- * tanto sessão expirada quanto usuário desativado no meio do expediente,
- * porque `usuarioAtual()` lança a MESMA `Error("Não autenticado")` para os
- * dois casos.
- */
-const MENSAGEM_SESSAO_INVALIDA = "Sua sessão expirou. Recarregue a página e entre de novo.";
-
 const MENSAGEM_SEM_PERMISSAO = "Você não tem permissão para configurar o agente.";
 
 /**
  * Converte um erro capturado em `ResultadoAcao`. Mesmo formato de
- * `paraResultadoErro` em `actions.ts` (não exportada de lá, duplicada aqui
- * de propósito — as duas famílias de erro "seguro de mostrar" são
- * diferentes: `RespostaHumanaInvalidaError` lá, `ErroConfigAgente` aqui).
+ * `paraResultadoErro` em `actions.ts`, ainda duplicado de propósito — as duas
+ * famílias de erro "seguro de mostrar" são diferentes (`ErroConfigAgente`
+ * aqui, `RespostaHumanaInvalidaError` lá), e é só essa linha que varia.
+ * Unificar de verdade pede uma classe-marca comum, que passaria por
+ * `agente.ts`; ver a pendência registrada em
+ * `docs/superpowers/plans/2026-08-06-whatsapp-fatia-2-pendencias.md`.
  */
 function paraResultadoErro(erro: unknown, mensagemGenerica: string): { ok: false; erro: string } {
   if (erro instanceof ErroConfigAgente) {
     return { ok: false, erro: erro.message };
   }
-  if (erro instanceof Error && erro.message === "Não autenticado") {
+  if (ehSessaoInvalida(erro)) {
     console.error("Ação de configuração do agente negada — sessão expirada ou usuário desativado.", erro);
     return { ok: false, erro: MENSAGEM_SESSAO_INVALIDA };
   }

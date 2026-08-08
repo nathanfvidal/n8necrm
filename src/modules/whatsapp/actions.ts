@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 
 import { usuarioAtual } from "@/core/auth/session";
+import { ehSessaoInvalida, MENSAGEM_SESSAO_INVALIDA, type ResultadoAcao } from "@/lib/acao";
 import { pausarIa, religarIa, responderComoHumano, RespostaHumanaInvalidaError } from "./agente";
 
 /**
@@ -32,35 +33,19 @@ import { pausarIa, religarIa, responderComoHumano, RespostaHumanaInvalidaError }
  */
 
 /**
- * Resultado uniforme das três actions abaixo.
+ * `ResultadoAcao` e `MENSAGEM_SESSAO_INVALIDA` **nasceram neste arquivo** e
+ * foram promovidos para `src/lib/acao.ts` quando `core/users` passou a
+ * precisar do mesmo contrato: `src/core` não pode importar de `src/modules`
+ * (regra de ESLint), então mantê-los aqui obrigaria o núcleo a duplicá-los.
+ * O raciocínio completo de "por que devolver resultado em vez de lançar"
+ * mora lá agora — e continua valendo em dobro para este arquivo, porque é a
+ * distinção entre "não enviou" e "enviou e não gravou" que sustenta a ordem
+ * pausa→envia→grava de `responderComoHumano`.
  *
- * ## Por que devolver resultado em vez de lançar
- *
- * O Next **redige erros não tratados** que atravessam uma Server Action em
- * produção — a tela recebe uma mensagem genérica com um identificador, não o
- * `Error.message` original lançado no servidor. Se estas actions deixassem o
- * erro subir, "Mensagem vazia", "Mensagem acima do limite" e "gateway fora
- * do ar" chegariam à tela como a MESMA mensagem opaca — e é exatamente a
- * distinção que o docstring de `responderComoHumano` promete ("o humano vê o
- * erro e repete"): se ele não consegue diferenciar "não enviou" de "enviou e
- * não gravou", a premissa que torna a ordem pausa→envia→grava seguro cai.
- *
- * Por isso cada action captura o erro e devolve `ResultadoAcao` em vez de
- * lançar. Não "simplifique" isto de volta para `throw` — seria reintroduzir
- * exatamente a redação genérica que este tipo existe para evitar.
+ * Reexportado para não quebrar quem importa `ResultadoAcao` daqui
+ * (`agente-actions.ts` e os componentes da inbox).
  */
-export type ResultadoAcao = { ok: true } | { ok: false; erro: string };
-
-/**
- * Mensagem devolvida quando `usuarioAtual()` rejeita — sessão expirada OU
- * usuário desativado no meio do expediente (ver `src/core/auth/session.ts`,
- * que lança a MESMA `Error("Não autenticado")` para os dois casos, de
- * propósito). Por isso esta mensagem nunca tenta distinguir "sua sessão
- * expirou" de "sua conta foi desativada": o helper de origem já decidiu que
- * os dois merecem a mesma orientação, e inventar uma distinção aqui
- * reintroduziria exatamente o que `usuarioAtual()` evita.
- */
-const MENSAGEM_SESSAO_INVALIDA = "Sua sessão expirou. Recarregue a página e entre de novo.";
+export type { ResultadoAcao };
 
 /**
  * Converte um erro capturado em `ResultadoAcao`. Três casos, nesta ordem:
@@ -90,7 +75,7 @@ function paraResultadoErro(erro: unknown, mensagemGenerica: string): { ok: false
   if (erro instanceof RespostaHumanaInvalidaError) {
     return { ok: false, erro: erro.message };
   }
-  if (erro instanceof Error && erro.message === "Não autenticado") {
+  if (ehSessaoInvalida(erro)) {
     console.error("Ação de WhatsApp negada — sessão expirada ou usuário desativado.", erro);
     return { ok: false, erro: MENSAGEM_SESSAO_INVALIDA };
   }

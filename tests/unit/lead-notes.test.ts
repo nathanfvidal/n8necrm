@@ -74,7 +74,7 @@ describe("notas de lead", () => {
   beforeAll(async () => {
     await limparDadosDeTeste();
 
-    const usuario = await prisma.user.findFirstOrThrow({ where: { papel: "ADMIN" } });
+    const usuario = await prisma.user.findFirstOrThrow({ where: { papel: "ADMIN", ativo: true } });
     usuarioId = usuario.id;
     const lead = await criarLead({
       nome: "Teste Notas",

@@ -1,14 +1,16 @@
 import { notFound } from "next/navigation";
 
 import { prisma } from "@/lib/prisma";
-import { usuarioAtual } from "@/core/auth/session";
+import { usuarioAtualOuLogin } from "@/core/auth/session";
 import { listarNotas, TEXTO_MAX_LENGTH } from "@/core/leads/notes";
 import { listarTasksPendentesDoLead } from "@/core/tasks/queries";
-import { EmptyState } from "@/components/empty-state";
+import { listarEtapas } from "@/core/pipeline/stages";
+import { formatarValorBR } from "@/lib/dinheiro";
+import { LeadEditForm } from "@/components/leads/lead-edit-form";
 import { LeadNoteForm } from "@/components/leads/lead-note-form";
+import { LeadNoteList } from "@/components/leads/lead-note-list";
 import { TaskForm } from "@/components/tasks/task-form";
 import { TaskList, type TaskLinha } from "@/components/tasks/task-list";
-import { formatarDataHoraBR } from "@/lib/date";
 
 /**
  * Página de detalhe de um lead: dados básicos + histórico de notas.
@@ -57,7 +59,7 @@ export default async function LeadDetalhePage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const usuario = await usuarioAtual();
+  const usuario = await usuarioAtualOuLogin();
 
   // `responsavel` narrowed para só `id`/`nome` (fix round 1/5, achado do
   // revisor): `include: { responsavel: true }` carregava a linha inteira de
@@ -79,11 +81,36 @@ export default async function LeadDetalhePage({
 
   const notas = await listarNotas(id);
 
+  // A lista de usuários vai para TODO papel, sem gate — inclusive VENDEDOR.
+  //
+  // Isto diverge de `leads/page.tsx`, que só busca vendedores para quem tem
+  // `ver_dashboard_geral`, e a divergência é DELIBERADA: decisão do dono do
+  // projeto na auditoria de segurança desta branch — "os leads têm que ser
+  // vistos por todos daquela empresa". Editar um lead inclui reatribuí-lo, e
+  // `atualizarLead` honra qualquer responsável para quem tem `mover_lead`
+  // (que os três papéis têm). Esconder a lista aqui daria um `<select>` vazio
+  // numa ação que o servidor aceita.
+  //
+  // `select` explícito em `id`/`nome`, nunca a linha inteira de `User`:
+  // `senhaHash` não tem por que sair do banco para preencher um `<select>`.
+  // Só usuários ATIVOS — e `atualizarLead` recusa reatribuição para conta
+  // desativada, então a tela e o servidor concordam.
+  const [etapas, vendedores] = await Promise.all([
+    listarEtapas(),
+    prisma.user.findMany({
+      where: { ativo: true },
+      select: { id: true, nome: true },
+      orderBy: { nome: "asc" },
+    }),
+  ]);
+
   const tasksPendentes = await listarTasksPendentesDoLead(id);
   const tarefasLinhas: TaskLinha[] = tasksPendentes.map((task) => ({
     id: task.id,
     titulo: task.titulo,
     vencimento: task.vencimento,
+    descricao: task.descricao,
+    leadId: task.leadId,
     responsavelNome: task.responsavel.nome,
     souResponsavel: task.responsavelId === usuario.id,
   }));
@@ -99,34 +126,41 @@ export default async function LeadDetalhePage({
         </p>
       </div>
 
+      {/* `valorEstimado` é `Prisma.Decimal` — objeto Decimal.js, NÃO
+          serializável para Client Component. Converte para string AQUI, no
+          servidor, e nunca com `Number` (ponto flutuante é a origem clássica
+          de centavo que some). Ver `src/lib/dinheiro.ts`. */}
+      <LeadEditForm
+        lead={{
+          id: lead.id,
+          valorEstimado: lead.valorEstimado?.toString() ?? null,
+          responsavelId: lead.responsavelId,
+          stageId: lead.stageId,
+          arquivadoEm: lead.arquivadoEm,
+        }}
+        valorFormatado={formatarValorBR(lead.valorEstimado?.toString() ?? null)}
+        vendedores={vendedores}
+        etapas={etapas.map((etapa) => ({ id: etapa.id, nome: etapa.nome }))}
+      />
+
       <LeadNoteForm leadId={id} textoMaxLength={TEXTO_MAX_LENGTH} />
 
-      <div className="space-y-2">
-        {notas.length === 0 ? (
-          <EmptyState
-            title="Sem notas"
-            description="Nenhuma nota registrada para este lead."
-          />
-        ) : (
-          notas.map((nota) => (
-            <div key={nota.id} className="rounded border p-3 text-sm">
-              {/* `whitespace-pre-wrap` preserva as quebras de linha que a
-                  pessoa digitou E quebra linha automaticamente em texto
-                  longo; `break-words` garante que mesmo uma string sem
-                  nenhum espaço (ex.: um link colado, um ID colado por
-                  engano) quebre dentro do card em vez de estourar a
-                  largura do layout. React escapa `{nota.texto}` por
-                  padrão — não há `dangerouslySetInnerHTML` em lugar
-                  nenhum desta página — então texto de nota nunca é
-                  interpretado como HTML/script, só exibido como texto. */}
-              <p className="whitespace-pre-wrap break-words">{nota.texto}</p>
-              <p className="mt-1 text-xs text-muted-foreground">
-                {nota.autor.nome} · {formatarDataHoraBR(nota.criadoEm)}
-              </p>
-            </div>
-          ))
-        )}
-      </div>
+      {/* `idDoUsuarioAtual` decide quais notas mostram os botões de editar e
+          excluir — conveniência de interface, não autorização: quem recusa é
+          `editarNota`/`excluirNota` no servidor. */}
+      <LeadNoteList
+        notas={notas.map((nota) => ({
+          id: nota.id,
+          texto: nota.texto,
+          criadoEm: nota.criadoEm,
+          editadoEm: nota.editadoEm,
+          autorId: nota.autorId,
+          autorNome: nota.autor.nome,
+        }))}
+        leadId={id}
+        idDoUsuarioAtual={usuario.id}
+        textoMaxLength={TEXTO_MAX_LENGTH}
+      />
 
       <div className="space-y-2">
         <h2 className="text-lg font-semibold">Tarefas</h2>

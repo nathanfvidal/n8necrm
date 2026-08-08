@@ -1,4 +1,4 @@
-import { usuarioAtual } from "@/core/auth/session";
+import { usuarioAtualOuLogin } from "@/core/auth/session";
 import { listarTasksComLead } from "@/core/tasks/queries";
 import { TaskForm } from "@/components/tasks/task-form";
 import { TaskList, type TaskLinha } from "@/components/tasks/task-list";
@@ -14,13 +14,15 @@ import { TaskList, type TaskLinha } from "@/components/tasks/task-list";
  * responsável, decisão de negócio documentada em `leads/queries.ts`).
  */
 export default async function TasksPage() {
-  const usuario = await usuarioAtual();
+  const usuario = await usuarioAtualOuLogin();
   const tasks = await listarTasksComLead(usuario.id);
 
   const linhas: TaskLinha[] = tasks.map((t) => ({
     id: t.id,
     titulo: t.titulo,
     vencimento: t.vencimento,
+    descricao: t.descricao,
+    leadId: t.leadId,
     leadContatoNome: t.lead?.contact?.nome,
   }));
 

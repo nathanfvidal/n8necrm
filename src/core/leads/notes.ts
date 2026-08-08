@@ -1,6 +1,7 @@
 import "server-only";
 
 import { prisma } from "@/lib/prisma";
+import { registrarAuditoria } from "@/core/audit/log";
 import type { LeadNote, User } from "@prisma/client";
 
 /**
@@ -99,5 +100,79 @@ export async function listarNotas(leadId: string): Promise<LeadNoteComAutor[]> {
     where: { leadId },
     include: { autor: { select: { id: true, nome: true } } },
     orderBy: { criadoEm: "desc" },
+  });
+}
+
+/**
+ * Regra de dono, igual a `concluirTask` (`core/tasks/service.ts`): só o autor
+ * edita a própria nota.
+ *
+ * A mensagem é a MESMA para "não existe" e para "não é sua", de propósito.
+ * Diferenciá-las confirmaria, a quem está adivinhando ids, que aquele id
+ * pertence a alguém — mesmo sem revelar a quem.
+ *
+ * `editadoEm` existe para a tela poder marcar "editada". Sem isso o histórico
+ * mente por omissão: o texto muda e nada indica que mudou.
+ *
+ * Auditado (ao contrário de tarefa) porque nota vive num lead — pipeline
+ * compartilhado, que a equipe inteira lê. Ver a § 3 da spec.
+ */
+export async function editarNota(input: {
+  notaId: string;
+  texto: string;
+  autorId: string;
+}): Promise<LeadNote> {
+  const nota = await prisma.leadNote.findUnique({ where: { id: input.notaId } });
+  if (!nota || nota.autorId !== input.autorId) {
+    throw new Error("Nota não encontrada");
+  }
+
+  const texto = input.texto.trim();
+  if (!texto) {
+    throw new Error("Nota vazia: informe um texto para a nota.");
+  }
+  if (texto.length > TEXTO_MAX_LENGTH) {
+    throw new Error(
+      `Nota muito longa: o texto tem ${texto.length} caracteres, o máximo permitido é ${TEXTO_MAX_LENGTH}.`
+    );
+  }
+
+  const depois = await prisma.leadNote.update({
+    where: { id: input.notaId },
+    data: { texto, editadoEm: new Date() },
+  });
+
+  await registrarAuditoria({
+    userId: input.autorId,
+    acao: "editar_nota",
+    entidade: "LeadNote",
+    entidadeId: nota.id,
+    antes: { texto: nota.texto },
+    depois: { texto },
+  });
+
+  return depois;
+}
+
+/**
+ * Remoção real, não lógica: nota não é referenciada por nada, e uma nota
+ * "apagada" que continuasse no banco só criaria uma segunda categoria de
+ * registro invisível para manter. O texto vai para a auditoria antes de
+ * sumir — é lá que fica o rastro.
+ */
+export async function excluirNota(input: { notaId: string; autorId: string }): Promise<void> {
+  const nota = await prisma.leadNote.findUnique({ where: { id: input.notaId } });
+  if (!nota || nota.autorId !== input.autorId) {
+    throw new Error("Nota não encontrada");
+  }
+
+  await prisma.leadNote.delete({ where: { id: input.notaId } });
+
+  await registrarAuditoria({
+    userId: input.autorId,
+    acao: "excluir_nota",
+    entidade: "LeadNote",
+    entidadeId: nota.id,
+    antes: { texto: nota.texto },
   });
 }

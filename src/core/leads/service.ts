@@ -2,7 +2,25 @@ import { prisma } from "@/lib/prisma";
 import { encontrarOuCriarContact } from "./dedupe";
 import { registrarAuditoria } from "@/core/audit/log";
 import { notificarNovoLead } from "@/core/notifications/dispatch";
+import { parseValorBR } from "@/lib/dinheiro";
 import type { Lead } from "@prisma/client";
+
+/**
+ * Erro de lead que é SEGURO mostrar a quem preencheu o formulário — mesmo
+ * papel de `UsuarioInvalidoError` (`core/users/service.ts`).
+ *
+ * `paraResultadoErro` (`actions.ts`) usa esta classe para separar "recusa
+ * esperada, com mensagem escrita para uma pessoa ler" de "erro inesperado,
+ * que vira mensagem genérica e vai para o log". Sem essa separação, ou toda
+ * falha vira texto genérico (e quem usa perde a informação que o faria agir
+ * diferente), ou detalhe de infraestrutura vaza para a tela.
+ */
+export class LeadInvalidoError extends Error {
+  constructor(mensagem: string) {
+    super(mensagem);
+    this.name = "LeadInvalidoError";
+  }
+}
 
 /**
  * Cria um lead a partir de entrada manual (formulário interno).
@@ -42,6 +60,20 @@ export async function criarLead(input: {
   if (!responsavel) {
     throw new Error(
       `Responsável não encontrado: "${input.responsavelId}" não corresponde a nenhum usuário.`
+    );
+  }
+
+  // Mesma regra de `atualizarLead`, e pelo mesmo motivo: a tela só oferece
+  // usuários ativos, mas Server Action é endpoint HTTP público e aceita
+  // qualquer id. Um lead nascer com dono que não consegue entrar no sistema é
+  // um lead que ninguém atende.
+  //
+  // Aqui a recusa é incondicional, ao contrário de `atualizarLead` (que só
+  // recusa quando o responsável MUDA): não existe lead preexistente a
+  // preservar — este está nascendo agora.
+  if (!responsavel.ativo) {
+    throw new Error(
+      `Responsável desativado: "${responsavel.nome}" não está mais ativo e não pode receber leads.`
     );
   }
 
@@ -131,6 +163,174 @@ export async function moverEtapa(input: {
     entidadeId: depois.id,
     antes: { stageId: antes.stageId },
     depois: { stageId: depois.stageId },
+  });
+
+  return depois;
+}
+
+/**
+ * Corrige valor, responsável e etapa de um lead.
+ *
+ * **Não reusa `moverEtapa`** (acima) de propósito. Esta função grava uma
+ * auditoria `atualizar_lead`; o arraste do kanban continua gravando
+ * `mover_etapa`. Saber se o negócio andou por arraste no funil ou por correção
+ * no formulário é informação, não redundância.
+ *
+ * `valorEstimado` chega como TEXTO (o que o formulário mandou) e é convertido
+ * aqui, não no chamador: assim todo caminho que grave valor passa pela mesma
+ * validação estrita de `parseValorBR`. `null` limpa o campo.
+ *
+ * `responsavelId` e `stageId` vêm, em produção, de uma Server Action pública.
+ * São conferidos antes de escrever pelo mesmo motivo de `moverEtapa`: sem
+ * isso, um id inexistente vira violação de FK crua do Postgres (`P2003`) em
+ * vez de erro legível para quem preencheu.
+ *
+ * A auditoria registra SÓ os campos que mudaram de fato, e não roda quando
+ * nada mudou — uma linha "atualizou" sem diferença nenhuma é ruído que
+ * dificulta ler o histórico.
+ */
+export async function atualizarLead(input: {
+  leadId: string;
+  valorEstimado: string | null;
+  responsavelId: string;
+  stageId: string;
+  autorId: string;
+}): Promise<Lead> {
+  const valor = input.valorEstimado === null ? null : parseValorBR(input.valorEstimado);
+
+  const antes = await prisma.lead.findUniqueOrThrow({ where: { id: input.leadId } });
+
+  const responsavel = await prisma.user.findUnique({ where: { id: input.responsavelId } });
+  if (!responsavel) {
+    throw new Error(
+      `Responsável não encontrado: "${input.responsavelId}" não corresponde a nenhum usuário.`
+    );
+  }
+
+  // Achado da auditoria de segurança desta branch: a checagem acima confere
+  // EXISTÊNCIA, não situação — dava para entregar um lead a quem foi
+  // desativado e não consegue mais entrar no sistema. A tela só oferece
+  // usuários ativos, mas Server Action é endpoint HTTP público e aceita
+  // qualquer id.
+  //
+  // A recusa vale só quando o responsável MUDA, de propósito: um lead que já
+  // pertence a alguém desativado (porque a pessoa saiu depois) precisa
+  // continuar editável — inclusive para ser reatribuído a alguém ativo.
+  // Recusar sempre trancaria justamente o lead que mais precisa de conserto.
+  const responsavelMudou = antes.responsavelId !== input.responsavelId;
+  if (responsavelMudou && !responsavel.ativo) {
+    throw new Error(
+      `Responsável desativado: "${responsavel.nome}" não está mais ativo e não pode receber leads.`
+    );
+  }
+
+  const etapa = await prisma.pipelineStage.findUnique({ where: { id: input.stageId } });
+  if (!etapa) {
+    throw new Error(
+      `Etapa não encontrada: "${input.stageId}" não corresponde a nenhuma etapa do funil.`
+    );
+  }
+
+  const etapaMudou = antes.stageId !== input.stageId;
+
+  const depois = await prisma.lead.update({
+    where: { id: input.leadId },
+    data: {
+      valorEstimado: valor,
+      responsavelId: input.responsavelId,
+      stageId: input.stageId,
+      ...(etapaMudou ? { ultimaInteracaoEm: new Date() } : {}),
+    },
+  });
+
+  const mudancasAntes: Record<string, unknown> = {};
+  const mudancasDepois: Record<string, unknown> = {};
+
+  // `Decimal` não compara com `!==` (são objetos distintos com o mesmo
+  // valor); `toString()` de ambos os lados é a comparação que funciona.
+  const valorAntes = antes.valorEstimado?.toString() ?? null;
+  const valorDepois = depois.valorEstimado?.toString() ?? null;
+  if (valorAntes !== valorDepois) {
+    mudancasAntes.valorEstimado = valorAntes;
+    mudancasDepois.valorEstimado = valorDepois;
+  }
+  if (antes.responsavelId !== depois.responsavelId) {
+    mudancasAntes.responsavelId = antes.responsavelId;
+    mudancasDepois.responsavelId = depois.responsavelId;
+  }
+  if (etapaMudou) {
+    mudancasAntes.stageId = antes.stageId;
+    mudancasDepois.stageId = depois.stageId;
+  }
+
+  if (Object.keys(mudancasDepois).length > 0) {
+    await registrarAuditoria({
+      userId: input.autorId,
+      acao: "atualizar_lead",
+      entidade: "Lead",
+      entidadeId: depois.id,
+      antes: mudancasAntes,
+      depois: mudancasDepois,
+    });
+  }
+
+  return depois;
+}
+
+/**
+ * Tira o lead do funil sem apagar nada. Duplicado, engano ou negócio que
+ * nunca existiu deixa de poluir kanban, lista, painel e exportação — e
+ * continua no histórico do contato, marcado.
+ *
+ * Recusa arquivar o que já está arquivado (e vice-versa) em vez de aceitar em
+ * silêncio: sobrescrever `arquivadoEm` perderia a data original, que é o
+ * único registro de QUANDO saiu do funil.
+ */
+export async function arquivarLead(input: { leadId: string; autorId: string }): Promise<Lead> {
+  const antes = await prisma.lead.findUniqueOrThrow({ where: { id: input.leadId } });
+  if (antes.arquivadoEm) {
+    throw new Error("Este lead já está arquivado.");
+  }
+
+  const depois = await prisma.lead.update({
+    where: { id: input.leadId },
+    data: { arquivadoEm: new Date() },
+  });
+
+  await registrarAuditoria({
+    userId: input.autorId,
+    acao: "arquivar_lead",
+    entidade: "Lead",
+    entidadeId: depois.id,
+    antes: { arquivadoEm: null },
+    depois: { arquivadoEm: depois.arquivadoEm },
+  });
+
+  return depois;
+}
+
+/** Devolve o lead ao funil. Ver `arquivarLead`. */
+export async function desarquivarLead(input: {
+  leadId: string;
+  autorId: string;
+}): Promise<Lead> {
+  const antes = await prisma.lead.findUniqueOrThrow({ where: { id: input.leadId } });
+  if (!antes.arquivadoEm) {
+    throw new Error("Este lead não está arquivado.");
+  }
+
+  const depois = await prisma.lead.update({
+    where: { id: input.leadId },
+    data: { arquivadoEm: null },
+  });
+
+  await registrarAuditoria({
+    userId: input.autorId,
+    acao: "desarquivar_lead",
+    entidade: "Lead",
+    entidadeId: depois.id,
+    antes: { arquivadoEm: antes.arquivadoEm },
+    depois: { arquivadoEm: null },
   });
 
   return depois;

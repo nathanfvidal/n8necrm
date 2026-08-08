@@ -4,18 +4,38 @@ import { revalidatePath } from "next/cache";
 
 import { usuarioAtual } from "@/core/auth/session";
 import { hasPermission } from "@/core/auth/permissions";
-import { criarLead, moverEtapa } from "./service";
-import { adicionarNota } from "./notes";
+import { ehSessaoInvalida, MENSAGEM_SESSAO_INVALIDA, type ResultadoAcao } from "@/lib/acao";
+import {
+  arquivarLead,
+  atualizarLead,
+  criarLead,
+  desarquivarLead,
+  moverEtapa,
+  LeadInvalidoError,
+} from "./service";
+import { adicionarNota, editarNota, excluirNota } from "./notes";
 import type { Lead } from "@prisma/client";
 
 /**
  * Cria um lead manualmente. Server Action — endpoint HTTP público (ver
  * decisão de segurança da Task 13): `autorId` NUNCA vem do cliente, é
- * sempre derivado da sessão via `usuarioAtual()`. `responsavelId` continua
- * vindo do formulário (é escolha legítima do gestor), mas só é honrado
- * quando quem chama tem permissão para atribuir lead a outra pessoa —
- * senão o lead fica com o próprio autor, silenciosamente corrigido, em vez
- * de a action confiar cegamente no que o cliente mandou.
+ * sempre derivado da sessão via `usuarioAtual()`.
+ *
+ * `responsavelId` vem do formulário e é honrado para QUALQUER papel com
+ * `criar_lead`.
+ *
+ * **Antes não era.** Esta action clampava `responsavelId` para o próprio
+ * autor quando quem chamava não tinha `ver_dashboard_geral` — ou seja, um
+ * VENDEDOR não conseguia cadastrar lead no nome de um colega. A auditoria de
+ * segurança desta branch mostrou que a trava não travava nada: `atualizarLead`
+ * aceita qualquer responsável para quem tem `mover_lead`, que os três papéis
+ * têm, então bastava criar o lead para si e reatribuir no clique seguinte.
+ * Dava trabalho sem impedir o resultado — e, pior, o clamp era SILENCIOSO: a
+ * pessoa escolhia um colega e o sistema gravava outro sem avisar.
+ *
+ * Decisão do dono do projeto: lead é colaborativo, "os leads têm que ser
+ * vistos por todos daquela empresa". Criar e editar passam a concordar.
+ * Quem atribuiu fica registrado na auditoria dos dois lados.
  */
 export async function criarLeadManual(input: {
   nome: string;
@@ -29,18 +49,12 @@ export async function criarLeadManual(input: {
     throw new Error("Sem permissão para criar lead");
   }
 
-  // Só ADMIN e GESTOR atribuem lead a outra pessoa; VENDEDOR fica com o próprio.
-  const responsavelId =
-    input.responsavelId !== autor.id && !hasPermission(autor.papel, "ver_dashboard_geral")
-      ? autor.id
-      : input.responsavelId;
-
   try {
     const lead = await criarLead({
       nome: input.nome,
       telefone: input.telefone,
       email: input.email,
-      responsavelId,
+      responsavelId: input.responsavelId,
       autorId: autor.id,
     });
 
@@ -182,4 +196,163 @@ export async function adicionarNotaAction(
   revalidatePath(`/leads/${leadId}`);
 
   return { erro: null };
+}
+
+/* ------------------------------------------------------------------ *
+ * Edição, arquivamento e correção de nota — Server Actions que devolvem
+ * `ResultadoAcao` em vez de lançar. As três actions antigas acima lançam;
+ * uniformizá-las é dívida registrada em `src/lib/acao.ts`, não tarefa desta
+ * entrega.
+ * ------------------------------------------------------------------ */
+
+const MENSAGEM_SEM_PERMISSAO = "Você não tem permissão para editar leads.";
+
+/**
+ * Mensagens de domínio escritas para quem preencheu o formulário ler. São
+ * seguras de exibir: nenhuma cita tabela, coluna, driver ou id interno além
+ * do que a própria pessoa mandou.
+ *
+ * Reconhecer por prefixo é frágil — a mesma fragilidade que `ehSessaoInvalida`
+ * documenta em `src/lib/acao.ts`. Fica concentrada aqui, num lugar só, em vez
+ * de espalhada por sete actions.
+ */
+const MENSAGENS_SEGURAS = [
+  /^Valor inválido:/,
+  /^Responsável (não encontrado|desativado):/,
+  /^Etapa não encontrada:/,
+  /^Este lead (já está|não está) arquivado/,
+  /^Nota (não encontrada|vazia|muito longa)/,
+];
+
+function paraResultadoErro(erro: unknown, mensagemGenerica: string): { ok: false; erro: string } {
+  if (erro instanceof LeadInvalidoError) {
+    return { ok: false, erro: erro.message };
+  }
+  if (erro instanceof Error && MENSAGENS_SEGURAS.some((padrao) => padrao.test(erro.message))) {
+    return { ok: false, erro: erro.message };
+  }
+  if (ehSessaoInvalida(erro)) {
+    console.error("Ação sobre lead negada — sessão expirada ou usuário desativado.", erro);
+    return { ok: false, erro: MENSAGEM_SESSAO_INVALIDA };
+  }
+  console.error(mensagemGenerica, erro);
+  return { ok: false, erro: mensagemGenerica };
+}
+
+/**
+ * Reusa `mover_lead` em vez de criar permissão nova. Lead é colaborativo
+ * neste CRM — qualquer vendedor move o lead de qualquer colega, decisão
+ * documentada em `leads/queries.ts` — e editar valor, responsável ou etapa
+ * segue a mesma natureza. Quem mexeu fica na auditoria.
+ *
+ * Hoje os três papéis têm `mover_lead`, então este portão não recusa ninguém
+ * na prática. Existe mesmo assim porque a matriz pode ganhar um papel
+ * só-leitura, e porque Server Action é endpoint HTTP público.
+ *
+ * Roda SEMPRE dentro do `try`: fora dele, uma sessão expirada rejeita a
+ * promise sem produzir `ResultadoAcao`, e a tela não mostra nem sucesso nem
+ * erro — achado real de revisão nas actions do WhatsApp.
+ */
+async function exigirEdicaoDeLead() {
+  const usuario = await usuarioAtual();
+  if (!hasPermission(usuario.papel, "mover_lead")) {
+    throw new LeadInvalidoError(MENSAGEM_SEM_PERMISSAO);
+  }
+  return usuario;
+}
+
+/**
+ * Invalidação explícita, caminho por caminho, em vez de
+ * `revalidatePath("/", "layout")` — que a doc do Next classifica como
+ * "revalidating all data" e esconderia o que de fato depende do quê.
+ * `/` é o painel, que soma valores por etapa.
+ */
+function invalidarCaminhosDeLead(leadId: string, contactId?: string | null) {
+  revalidatePath("/leads");
+  revalidatePath("/leads/kanban");
+  revalidatePath(`/leads/${leadId}`);
+  revalidatePath("/");
+  if (contactId) {
+    revalidatePath(`/contatos/${contactId}`);
+  }
+}
+
+export async function atualizarLeadAction(dados: {
+  leadId: string;
+  valorEstimado: string | null;
+  responsavelId: string;
+  stageId: string;
+}): Promise<ResultadoAcao> {
+  let lead: Lead;
+  try {
+    const autor = await exigirEdicaoDeLead();
+    lead = await atualizarLead({ ...dados, autorId: autor.id });
+  } catch (erro) {
+    return paraResultadoErro(erro, "Falha ao salvar o lead. Tente novamente.");
+  }
+  invalidarCaminhosDeLead(dados.leadId, lead.contactId);
+  return { ok: true };
+}
+
+export async function arquivarLeadAction(dados: { leadId: string }): Promise<ResultadoAcao> {
+  let lead: Lead;
+  try {
+    const autor = await exigirEdicaoDeLead();
+    lead = await arquivarLead({ leadId: dados.leadId, autorId: autor.id });
+  } catch (erro) {
+    return paraResultadoErro(erro, "Falha ao arquivar o lead. Tente novamente.");
+  }
+  invalidarCaminhosDeLead(dados.leadId, lead.contactId);
+  return { ok: true };
+}
+
+export async function desarquivarLeadAction(dados: { leadId: string }): Promise<ResultadoAcao> {
+  let lead: Lead;
+  try {
+    const autor = await exigirEdicaoDeLead();
+    lead = await desarquivarLead({ leadId: dados.leadId, autorId: autor.id });
+  } catch (erro) {
+    return paraResultadoErro(erro, "Falha ao desarquivar o lead. Tente novamente.");
+  }
+  invalidarCaminhosDeLead(dados.leadId, lead.contactId);
+  return { ok: true };
+}
+
+/**
+ * Nota não passa pelo portão de permissão: a regra é de DONO e mora no
+ * serviço (`editarNota`/`excluirNota`, `notes.ts`), que recusa quem não é o
+ * autor com a mesma mensagem de "não existe". Um portão de papel aqui não
+ * acrescentaria nada — todo papel pode escrever nota — e daria a impressão
+ * falsa de que a autorização vive nesta camada.
+ *
+ * `leadId` vem do cliente só para invalidar o caminho certo; a autorização
+ * não depende dele.
+ */
+export async function editarNotaAction(dados: {
+  notaId: string;
+  leadId: string;
+  texto: string;
+}): Promise<ResultadoAcao> {
+  try {
+    const autor = await usuarioAtual();
+    await editarNota({ notaId: dados.notaId, texto: dados.texto, autorId: autor.id });
+  } catch (erro) {
+    return paraResultadoErro(erro, "Falha ao salvar a nota. Tente novamente.");
+  }
+  revalidatePath(`/leads/${dados.leadId}`);
+  return { ok: true };
+}
+
+export async function excluirNotaAction(dados: {
+  notaId: string;
+  leadId: string;
+}): Promise<ResultadoAcao> {
+  try {
+    const autor = await usuarioAtual();
+    await excluirNota({ notaId: dados.notaId, autorId: autor.id });
+  } catch (erro) {
+    return paraResultadoErro(erro, "Falha ao excluir a nota. Tente novamente.");
+  }
+  revalidatePath(`/leads/${dados.leadId}`);
+  return { ok: true };
 }

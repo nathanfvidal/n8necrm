@@ -19,7 +19,11 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 vi.mock("server-only", () => ({}));
 
 import { prisma } from "../../src/lib/prisma";
-import { checarRateLimit } from "../../src/core/rate-limit/limiter";
+import {
+  checarRateLimit,
+  podarRateLimitExpirado,
+  RETENCAO_RATE_LIMIT_MS,
+} from "../../src/core/rate-limit/limiter";
 
 // Todas as chaves usadas aqui começam com "teste:" — nunca usamos
 // deleteMany() sem esse filtro, porque esta suíte roda contra o Postgres
@@ -105,5 +109,78 @@ describe("checarRateLimit", () => {
 
     const registro = await prisma.rateLimit.findUniqueOrThrow({ where: { chave } });
     expect(registro.contagem).toBeGreaterThanOrEqual(limite);
+  });
+});
+
+// --- Fase 2 da auditoria de segurança -------------------------------------
+//
+// Achado: a tabela `RateLimit` nunca era podada (nenhum DELETE no código,
+// nenhum cron em `vercel.json`), e uma das chaves é ESCOLHIDA PELO ATACANTE a
+// partir de um endpoint SEM autenticação — `login:conta:<email>`
+// (`rate-limit/login.ts`) usa o e-mail digitado no POST de login. Cada e-mail
+// inédito criava uma linha permanente. O limite por IP segura o ritmo (20 por
+// 10 min por origem), então é crescimento lento, não explosivo — mas é
+// ilimitado, e escala com o número de origens. O controle antiabuso virara,
+// ele mesmo, uma pequena superfície de escrita não autenticada.
+describe("podarRateLimitExpirado", () => {
+  beforeEach(limparChavesDeTeste);
+  afterEach(limparChavesDeTeste);
+
+  it("apaga a linha cuja janela expirou há mais que a retenção", async () => {
+    const chave = "teste:poda:antiga";
+    await prisma.rateLimit.create({
+      data: {
+        chave,
+        janelaInicio: new Date(Date.now() - RETENCAO_RATE_LIMIT_MS - 60_000),
+        contagem: 7,
+      },
+    });
+
+    await podarRateLimitExpirado();
+
+    expect(await prisma.rateLimit.findUnique({ where: { chave } })).toBeNull();
+  });
+
+  it("PRESERVA linha dentro da retenção — podar um bloqueio vivo seria liberar quem está barrado", async () => {
+    const chave = "teste:poda:viva";
+    await prisma.rateLimit.create({
+      data: { chave, janelaInicio: new Date(), contagem: 99 },
+    });
+
+    await podarRateLimitExpirado();
+
+    const registro = await prisma.rateLimit.findUnique({ where: { chave } });
+    expect(registro).not.toBeNull();
+    expect(registro!.contagem).toBe(99);
+  });
+
+  // A propriedade que torna a poda segura: apagar linha expirada é INÓCUO.
+  // A janela é fixa (ver limiter.ts) — passada `janelaMs`, a próxima chamada
+  // já reescreveria `janelaInicio` e zeraria a contagem. Apagar a linha antes
+  // disso leva ao mesmo estado observável, por outro caminho. É por isso que
+  // a retenção (24h) precisa ser maior que a MAIOR janela em uso (1h, do
+  // export): dentro dessa folga não existe linha viva para a poda alcançar.
+  it("apagar linha expirada leva ao mesmo estado que a janela fixa já produziria", async () => {
+    const chave = "teste:poda:inocua";
+    await prisma.rateLimit.create({
+      data: {
+        chave,
+        janelaInicio: new Date(Date.now() - RETENCAO_RATE_LIMIT_MS - 60_000),
+        contagem: 500,
+      },
+    });
+
+    await podarRateLimitExpirado();
+
+    // Limite 1: se a contagem 500 tivesse sobrevivido à poda de forma
+    // significativa, esta chamada seria recusada.
+    expect(await checarRateLimit(chave, 1, 60_000)).toBe(true);
+    const registro = await prisma.rateLimit.findUniqueOrThrow({ where: { chave } });
+    expect(registro.contagem).toBe(1);
+  });
+
+  it("a retenção é maior que a maior janela em uso no sistema", () => {
+    const MAIOR_JANELA_EM_USO_MS = 60 * 60_000; // export de leads
+    expect(RETENCAO_RATE_LIMIT_MS).toBeGreaterThan(MAIOR_JANELA_EM_USO_MS);
   });
 });

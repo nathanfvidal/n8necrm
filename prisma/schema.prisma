@@ -86,6 +86,21 @@ model PipelineStage {
   @@unique([ordem])
 }
 
+// TRÊS COLUNAS RESERVADAS, sem código que as leia ou escreva hoje: `itemId`,
+// `sessionId` e `utm`. Não são resíduo de refatoração — nasceram na migração
+// inicial para a Fase 2 do roteiro antigo (catálogo + site mostruário), que foi
+// abandonada. Ver `docs/superpowers/specs/2026-08-07-nucleo-e-modulos-sob-demanda.md`
+// § 5.
+//
+// Ficam porque são nuláveis, sem chave estrangeira e sem índice: removê-las
+// custaria uma migração para resolver problema nenhum. Se o rastreio de origem
+// voltar, `sessionId` e `utm` servem a qualquer vertical (não só a catálogo) e
+// são a parte reaproveitável daquele plano; `itemId` só faz sentido junto com
+// um módulo `catalog` que ainda não existe.
+//
+// Antes de usar qualquer uma delas, leia a § 5 daquela spec: elas foram
+// desenhadas para um fluxo específico (visitante anônimo → evento → lead) e
+// reaproveitar sem esse contexto é como herdar significado que nunca existiu.
 model Lead {
   id                String         @id @default(cuid())
   contactId         String?
@@ -96,17 +111,28 @@ model Lead {
   responsavelId     String?
   responsavel       User?          @relation("LeadResponsavel", fields: [responsavelId], references: [id])
   canal             LeadChannel
-  valorEstimado     Decimal?
+  // `@db.Decimal(14, 2)`: sem precisão declarada, o Prisma usa o padrão do
+  // Postgres — `numeric(65, 30)`, que aceita 30 casas decimais, ou seja
+  // frações de centavo. Dinheiro tem exatamente duas.
+  valorEstimado     Decimal?       @db.Decimal(14, 2)
   sessionId         String?
   utm               Json?
   criadoEm          DateTime       @default(now())
   ultimaInteracaoEm DateTime       @default(now())
+  // `arquivadoEm` (null = ativo) em vez de `ativo Boolean`, e coluna em vez de
+  // uma etapa "Arquivado" no funil: uma etapa manteria o lead DENTRO do funil,
+  // aparecendo no kanban e somando no painel — o oposto do que arquivar serve.
+  // Guarda *quando*, seguindo `Task.concluidaEm`.
+  //
+  // TODA listagem de lead filtra por esta coluna. Ver `core/leads/queries.ts`.
+  arquivadoEm       DateTime?
   notes             LeadNote[]
   tasks             Task[]
   conversations     Conversation[]
 
   @@index([stageId, responsavelId])
   @@index([criadoEm])
+  @@index([arquivadoEm])
 }
 
 model LeadNote {
@@ -117,6 +143,9 @@ model LeadNote {
   autor    User     @relation(fields: [autorId], references: [id])
   texto    String
   criadoEm DateTime @default(now())
+  // Marca que o texto foi corrigido depois de escrito. Sem isto o histórico
+  // mente por omissão: o texto muda e nada indica que mudou.
+  editadoEm DateTime?
 }
 
 model Task {

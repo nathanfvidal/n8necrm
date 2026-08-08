@@ -8,6 +8,7 @@
 import "server-only";
 
 import { prisma } from "@/lib/prisma";
+import { registrarAuditoria } from "@/core/audit/log";
 import type { Task } from "@prisma/client";
 
 /**
@@ -111,6 +112,101 @@ export async function concluirTask(input: { taskId: string; autorId: string }): 
   return prisma.task.update({
     where: { id: input.taskId },
     data: { concluidaEm: new Date() },
+  });
+}
+
+/**
+ * Corrige uma tarefa. Regra de dono idêntica a `concluirTask` (acima) —
+ * inclusive a mensagem única para "não existe" e "não é sua".
+ *
+ * NÃO audita, de propósito: `criarTask` e `concluirTask` também não, porque
+ * tarefa é lembrete pessoal e não pipeline compartilhado. Ver a § 3 da spec
+ * e o aviso longo em `concluirTask` sobre não harmonizar as duas naturezas.
+ *
+ * `leadId` aceita `null` explicitamente para desvincular — `undefined` (campo
+ * ausente, "não mexa no vínculo") e `null` ("tire o vínculo") significam
+ * coisas diferentes aqui.
+ */
+export async function editarTask(input: {
+  taskId: string;
+  titulo: string;
+  descricao?: string;
+  vencimento: Date;
+  leadId?: string | null;
+  autorId: string;
+}): Promise<Task> {
+  const task = await prisma.task.findUnique({ where: { id: input.taskId } });
+  if (!task || task.responsavelId !== input.autorId) {
+    throw new Error("Tarefa não encontrada");
+  }
+
+  const titulo = input.titulo.trim();
+  if (!titulo) {
+    throw new Error("Título obrigatório: informe um título para a tarefa.");
+  }
+  if (Number.isNaN(input.vencimento.getTime())) {
+    throw new Error("Vencimento inválido: informe uma data válida.");
+  }
+  if (input.leadId) {
+    const lead = await prisma.lead.findUnique({ where: { id: input.leadId } });
+    if (!lead) {
+      throw new Error(`Lead não encontrado: "${input.leadId}" não corresponde a nenhum lead.`);
+    }
+  }
+
+  const descricao = input.descricao?.trim();
+
+  return prisma.task.update({
+    where: { id: input.taskId },
+    data: {
+      titulo,
+      // `null` e não `undefined`: apagar a descrição precisa GRAVAR a
+      // ausência. `undefined` faria o Prisma omitir o campo do UPDATE e a
+      // descrição antiga sobreviveria à edição que a removeu.
+      descricao: descricao || null,
+      vencimento: input.vencimento,
+      ...(input.leadId === undefined ? {} : { leadId: input.leadId }),
+    },
+  });
+}
+
+/**
+ * Remoção real. `Task` não é referenciada por nenhum modelo, então não há
+ * histórico a preservar na própria tabela — e uma tarefa "apagada" que
+ * continuasse no banco viraria lixo invisível de manter.
+ *
+ * **Audita, ao contrário de `criarTask`, `concluirTask` e `editarTask`.**
+ * Exceção deliberada à regra "tarefa é lembrete pessoal, auditar é ruído",
+ * decidida pelo dono do projeto na auditoria de segurança desta branch:
+ * excluir é a ÚNICA operação de tarefa que destrói a linha para sempre. Sem
+ * este registro, alguém que queira sabotar a empresa apaga os lembretes da
+ * equipe e não sobra nada que mostre o que existia nem quem apagou. O
+ * `antes` guarda o conteúdo destruído — é o único lugar onde ele passa a
+ * existir depois do DELETE.
+ *
+ * A auditoria vem DEPOIS do delete, de propósito: se o DELETE falhar, não
+ * fica registro de uma exclusão que não aconteceu.
+ */
+export async function excluirTask(input: { taskId: string; autorId: string }): Promise<void> {
+  const task = await prisma.task.findUnique({ where: { id: input.taskId } });
+  if (!task || task.responsavelId !== input.autorId) {
+    throw new Error("Tarefa não encontrada");
+  }
+
+  await prisma.task.delete({ where: { id: input.taskId } });
+
+  await registrarAuditoria({
+    userId: input.autorId,
+    acao: "excluir_task",
+    entidade: "Task",
+    entidadeId: task.id,
+    antes: {
+      titulo: task.titulo,
+      descricao: task.descricao,
+      vencimento: task.vencimento,
+      leadId: task.leadId,
+      concluidaEm: task.concluidaEm,
+    },
   });
 }
 

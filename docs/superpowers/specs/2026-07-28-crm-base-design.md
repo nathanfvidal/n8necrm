@@ -377,6 +377,22 @@ prospect.
 
 ## 9. Fases
 
+> **SUPERADA em 2026-08-07** por `2026-08-07-nucleo-e-modulos-sob-demanda.md`.
+>
+> O roteiro de sete fases abaixo pressupunha a Fase 2 (catálogo + site mostruário)
+> como pré-requisito das fases 3 a 6 — analytics media eventos do site, automação
+> reagia a esses eventos, campanhas anunciavam os itens. Essa demanda saiu do plano,
+> e com ela a ordem inteira.
+>
+> O modelo em vigor é **núcleo fechado + módulos sob demanda**. O que a tabela chama
+> de Fases 2 a 6 continua existindo como módulos candidatos, sem ordem entre si e sem
+> promessa até um cliente pedir. O módulo `whatsapp`, que hoje é a parte comercialmente
+> mais forte do sistema, não aparece em fase nenhuma desta tabela — foi construído por
+> demanda, o que é a evidência que motivou a troca de modelo.
+>
+> O restante desta spec (decisões estruturais, modelo de dados, fluxos, segurança)
+> **continua valendo** e não foi substituído. Só a § 9 caiu.
+
 Cada fase recebe seu próprio ciclo spec → plano → implementação.
 **Esta spec cobre Fase 0 + 1 em detalhe de implementação.** As demais estão
 registradas para que o modelo de dados nasça correto e não exija retrabalho.

@@ -4,14 +4,17 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
-import { concluirMinhaTask } from "@/core/tasks/actions";
+import { Input } from "@/components/ui/input";
+import { concluirMinhaTask, editarTaskAction, excluirTaskAction } from "@/core/tasks/actions";
 import { EmptyState } from "@/components/empty-state";
-import { formatarDataCivilBR } from "@/lib/date";
+import { formatarDataCivilBR, parseDataCivil } from "@/lib/date";
 
 export type TaskLinha = {
   id: string;
   titulo: string;
   vencimento: Date;
+  descricao?: string | null;
+  leadId?: string | null;
   leadContatoNome?: string;
   // Presentes só quando a lista pode conter tarefa de outra pessoa (seção
   // "Tarefas" de `/leads/[id]`, fix round 1/5 — ver `listarTasksPendentesDoLead`,
@@ -103,8 +106,71 @@ export function TaskList({ tasks: tasksIniciais }: { tasks: TaskLinha[] }) {
   const router = useRouter();
   const { tasks, erro, handleConcluir, limparErro } = useTaskList(tasksIniciais);
 
+  // Edição em linha no padrão de `user-table.tsx`: um estado com o id da
+  // linha em edição, e só ela troca de forma.
+  const [editando, setEditando] = useState<string | null>(null);
+  const [rascunho, setRascunho] = useState({ titulo: "", descricao: "", vencimento: "" });
+  const [erroEdicao, setErroEdicao] = useState<string | null>(null);
+  const [salvando, setSalvando] = useState(false);
+
   async function concluirEAtualizar(id: string) {
     await handleConcluir(id);
+    router.refresh();
+  }
+
+  function comecarEdicao(task: TaskLinha) {
+    setErroEdicao(null);
+    setEditando(task.id);
+    setRascunho({
+      titulo: task.titulo,
+      descricao: task.descricao ?? "",
+      // `vencimento` está ancorado em meia-noite UTC (ver `parseDataCivil`,
+      // `src/lib/date.ts`), então os componentes UTC são o dia que a pessoa
+      // digitou. Usar o fuso local aqui devolveria o dia anterior.
+      vencimento: task.vencimento.toISOString().slice(0, 10),
+    });
+  }
+
+  async function salvarEdicao(task: TaskLinha) {
+    setErroEdicao(null);
+
+    let vencimento: Date;
+    try {
+      vencimento = parseDataCivil(rascunho.vencimento);
+    } catch (erroData) {
+      setErroEdicao(erroData instanceof Error ? erroData.message : "Data inválida.");
+      return;
+    }
+
+    setSalvando(true);
+    const resultado = await editarTaskAction({
+      taskId: task.id,
+      titulo: rascunho.titulo,
+      descricao: rascunho.descricao,
+      vencimento,
+      // `undefined` mantém o vínculo como está — esta tela não oferece
+      // trocar o lead de uma tarefa, então nunca manda `null`.
+      leadId: undefined,
+    });
+    setSalvando(false);
+
+    if (!resultado.ok) {
+      setErroEdicao(resultado.erro);
+      return;
+    }
+    setEditando(null);
+    router.refresh();
+  }
+
+  async function excluir(task: TaskLinha) {
+    if (!window.confirm("Excluir esta tarefa? Isso não pode ser desfeito.")) return;
+
+    setErroEdicao(null);
+    const resultado = await excluirTaskAction({ taskId: task.id, leadId: task.leadId });
+    if (!resultado.ok) {
+      setErroEdicao(resultado.erro);
+      return;
+    }
     router.refresh();
   }
 
@@ -119,12 +185,59 @@ export function TaskList({ tasks: tasksIniciais }: { tasks: TaskLinha[] }) {
         </p>
       )}
 
+      {erroEdicao && (
+        <p role="alert" className="rounded-md bg-red-50 p-2 text-sm text-red-600">
+          {erroEdicao}
+        </p>
+      )}
+
       {tasks.length === 0 ? (
         <EmptyState title="Nenhuma tarefa pendente" description="Você está em dia." />
       ) : (
         <ul className="space-y-2">
           {tasks.map((task) => {
             const podeConcluir = task.souResponsavel !== false;
+
+            // Editar e excluir seguem a MESMA regra de dono de "Concluir":
+            // quem recusa é `editarTask`/`excluirTask` no servidor; aqui a
+            // interface só não oferece uma ação que iria falhar.
+            if (editando === task.id) {
+              return (
+                <li key={task.id} className="space-y-2 rounded border p-3">
+                  <Input
+                    aria-label="Título da tarefa"
+                    value={rascunho.titulo}
+                    onChange={(evento) =>
+                      setRascunho((atual) => ({ ...atual, titulo: evento.target.value }))
+                    }
+                  />
+                  <Input
+                    aria-label="Descrição da tarefa"
+                    value={rascunho.descricao}
+                    onChange={(evento) =>
+                      setRascunho((atual) => ({ ...atual, descricao: evento.target.value }))
+                    }
+                  />
+                  <Input
+                    aria-label="Vencimento da tarefa"
+                    type="date"
+                    value={rascunho.vencimento}
+                    onChange={(evento) =>
+                      setRascunho((atual) => ({ ...atual, vencimento: evento.target.value }))
+                    }
+                  />
+                  <div className="flex gap-2">
+                    <Button size="sm" onClick={() => salvarEdicao(task)} disabled={salvando}>
+                      {salvando ? "Salvando..." : "Salvar"}
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={() => setEditando(null)}>
+                      Cancelar
+                    </Button>
+                  </div>
+                </li>
+              );
+            }
+
             // "Você"/nome do dono aparece UMA vez por linha — no subtítulo,
             // nunca de novo no lugar do botão — para não repetir a mesma
             // informação em dois pontos da mesma linha.
@@ -144,9 +257,25 @@ export function TaskList({ tasks: tasksIniciais }: { tasks: TaskLinha[] }) {
                   </p>
                 </div>
                 {podeConcluir ? (
-                  <Button size="sm" variant="outline" onClick={() => concluirEAtualizar(task.id)}>
-                    Concluir
-                  </Button>
+                  <div className="flex items-center gap-2">
+                    <Button size="sm" variant="outline" onClick={() => concluirEAtualizar(task.id)}>
+                      Concluir
+                    </Button>
+                    <button
+                      type="button"
+                      className="text-xs underline"
+                      onClick={() => comecarEdicao(task)}
+                    >
+                      Editar
+                    </button>
+                    <button
+                      type="button"
+                      className="text-xs text-red-600 underline"
+                      onClick={() => excluir(task)}
+                    >
+                      Excluir
+                    </button>
+                  </div>
                 ) : (
                   // Nenhum botão aqui — nem "desabilitado" (que ainda sugere
                   // uma ação bloqueada por ora), nem um "Concluir" que

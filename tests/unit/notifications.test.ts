@@ -83,9 +83,9 @@ describe("notificações", () => {
   beforeAll(async () => {
     await limparDadosDeTeste();
 
-    const admin = await prisma.user.findFirstOrThrow({ where: { papel: "ADMIN" } });
+    const admin = await prisma.user.findFirstOrThrow({ where: { papel: "ADMIN", ativo: true } });
     adminId = admin.id;
-    const vendedor = await prisma.user.findFirstOrThrow({ where: { papel: "VENDEDOR" } });
+    const vendedor = await prisma.user.findFirstOrThrow({ where: { papel: "VENDEDOR", ativo: true } });
     vendedorId = vendedor.id;
 
     // `criarLead` (leads/service.ts) já chama `notificarNovoLead` internamente
