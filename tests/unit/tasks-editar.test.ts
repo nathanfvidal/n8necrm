@@ -4,15 +4,23 @@ const prismaMock = vi.hoisted(() => ({
   task: { findUnique: vi.fn(), update: vi.fn(), delete: vi.fn() },
   lead: { findUnique: vi.fn() },
 }));
+const auditoriaMock = vi.hoisted(() => vi.fn());
 
 // `tasks/service.ts` tem `import "server-only"`, que lança fora do pipeline
 // de build do Next. Mesmo no-op dos outros testes deste diretório.
 vi.mock("server-only", () => ({}));
 vi.mock("@/lib/prisma", () => ({ prisma: prismaMock }));
+vi.mock("@/core/audit/log", () => ({ registrarAuditoria: auditoriaMock }));
 
 import { editarTask, excluirTask } from "../../src/core/tasks/service";
 
-const TASK = { id: "task-1", responsavelId: "user-1", titulo: "original", leadId: null };
+const TASK = {
+  id: "task-1",
+  responsavelId: "user-1",
+  titulo: "original",
+  leadId: null,
+  vencimento: new Date(Date.UTC(2026, 7, 20)),
+};
 const VENCIMENTO = new Date(Date.UTC(2026, 7, 20));
 
 beforeEach(() => {
@@ -91,6 +99,40 @@ describe("excluirTask", () => {
   it("apaga a propria tarefa", async () => {
     await excluirTask({ taskId: "task-1", autorId: "user-1" });
     expect(prismaMock.task.delete).toHaveBeenCalledWith({ where: { id: "task-1" } });
+  });
+
+  // Decisão do dono do projeto, tomada na auditoria de segurança desta
+  // branch: excluir é a única operação de tarefa que destrói a linha para
+  // sempre. Sem rastro, alguém que queira sabotar a empresa apaga os
+  // lembretes da equipe e não sobra nada que mostre o que existia.
+  // `editarTask` continua SEM auditoria — só a exclusão mudou de regra.
+  it("audita a exclusao guardando o que foi destruido", async () => {
+    await excluirTask({ taskId: "task-1", autorId: "user-1" });
+
+    expect(auditoriaMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: "user-1",
+        acao: "excluir_task",
+        entidade: "Task",
+        entidadeId: "task-1",
+        antes: expect.objectContaining({ titulo: "original" }),
+      })
+    );
+  });
+
+  it("nao audita quando a exclusao e recusada", async () => {
+    await expect(excluirTask({ taskId: "task-1", autorId: "user-2" })).rejects.toThrow();
+    expect(auditoriaMock).not.toHaveBeenCalled();
+  });
+
+  it("NAO audita edicao — so exclusao mudou de regra", async () => {
+    await editarTask({
+      taskId: "task-1",
+      titulo: "corrigido",
+      vencimento: VENCIMENTO,
+      autorId: "user-1",
+    });
+    expect(auditoriaMock).not.toHaveBeenCalled();
   });
 
   it("recusa a tarefa de outra pessoa", async () => {

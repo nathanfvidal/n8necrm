@@ -81,6 +81,20 @@ export default async function LeadDetalhePage({
 
   const notas = await listarNotas(id);
 
+  // A lista de usuários vai para TODO papel, sem gate — inclusive VENDEDOR.
+  //
+  // Isto diverge de `leads/page.tsx`, que só busca vendedores para quem tem
+  // `ver_dashboard_geral`, e a divergência é DELIBERADA: decisão do dono do
+  // projeto na auditoria de segurança desta branch — "os leads têm que ser
+  // vistos por todos daquela empresa". Editar um lead inclui reatribuí-lo, e
+  // `atualizarLead` honra qualquer responsável para quem tem `mover_lead`
+  // (que os três papéis têm). Esconder a lista aqui daria um `<select>` vazio
+  // numa ação que o servidor aceita.
+  //
+  // `select` explícito em `id`/`nome`, nunca a linha inteira de `User`:
+  // `senhaHash` não tem por que sair do banco para preencher um `<select>`.
+  // Só usuários ATIVOS — e `atualizarLead` recusa reatribuição para conta
+  // desativada, então a tela e o servidor concordam.
   const [etapas, vendedores] = await Promise.all([
     listarEtapas(),
     prisma.user.findMany({

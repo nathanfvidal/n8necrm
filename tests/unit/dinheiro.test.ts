@@ -37,6 +37,19 @@ describe("parseValorBR", () => {
     expect(() => parseValorBR("")).toThrow(/Valor inválido/);
     expect(() => parseValorBR("-100")).toThrow(/Valor inválido/);
   });
+
+  // Achado da auditoria de segurança: Server Action é endpoint HTTP público
+  // e nada limitava o tamanho da string. 400 mil dígitos entravam e viravam
+  // Decimal em 2ms — quem recusava era o Postgres, no fim da pilha.
+  it("recusa entrada longa demais ANTES de qualquer processamento", () => {
+    expect(() => parseValorBR("9".repeat(1000))).toThrow(/muito longo/);
+  });
+
+  // O teto não pode cortar valor legítimo: 999.999.999.999,99 é o maior que
+  // `Decimal(14,2)` aceita, e tem 18 caracteres com separadores.
+  it("aceita o maior valor que a coluna comporta", () => {
+    expect(parseValorBR("999.999.999.999,99").toString()).toBe("999999999999.99");
+  });
 });
 
 describe("mascararValorBR", () => {
@@ -55,6 +68,22 @@ describe("mascararValorBR", () => {
 
   it("ignora tudo que não é algarismo", () => {
     expect(mascararValorBR("R$ 1.500,50")).toBe("1.500,50");
+  });
+
+  // Achado da auditoria: a versão anterior usava
+  // `replace(/\B(?=(\d{3})+(?!\d))/g, ".")`, que é QUADRÁTICA — medido
+  // 5k→16ms, 20k→317ms, 60k→2.560ms. Com 200 mil dígitos passaria de meio
+  // minuto; a implementação linear resolve em milissegundos.
+  //
+  // O limite de 2s é o guarda: se alguém reintroduzir a expressão regular de
+  // lookahead, este teste estoura em vez de a lentidão passar despercebida.
+  it("separa milhar em tempo linear, não quadrático", { timeout: 2000 }, () => {
+    const digitos = "9".repeat(200_000);
+    const saida = mascararValorBR(digitos);
+
+    // 199.998 dígitos inteiros → 66.666 pontos; mais a vírgula e 2 centavos.
+    expect(saida.endsWith(",99")).toBe(true);
+    expect((saida.match(/\./g) ?? []).length).toBe(66_665);
   });
 });
 

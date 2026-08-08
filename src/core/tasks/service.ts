@@ -8,6 +8,7 @@
 import "server-only";
 
 import { prisma } from "@/lib/prisma";
+import { registrarAuditoria } from "@/core/audit/log";
 import type { Task } from "@prisma/client";
 
 /**
@@ -171,8 +172,20 @@ export async function editarTask(input: {
 
 /**
  * Remoção real. `Task` não é referenciada por nenhum modelo, então não há
- * histórico a preservar — e uma tarefa "apagada" que continuasse no banco
- * viraria lixo invisível de manter.
+ * histórico a preservar na própria tabela — e uma tarefa "apagada" que
+ * continuasse no banco viraria lixo invisível de manter.
+ *
+ * **Audita, ao contrário de `criarTask`, `concluirTask` e `editarTask`.**
+ * Exceção deliberada à regra "tarefa é lembrete pessoal, auditar é ruído",
+ * decidida pelo dono do projeto na auditoria de segurança desta branch:
+ * excluir é a ÚNICA operação de tarefa que destrói a linha para sempre. Sem
+ * este registro, alguém que queira sabotar a empresa apaga os lembretes da
+ * equipe e não sobra nada que mostre o que existia nem quem apagou. O
+ * `antes` guarda o conteúdo destruído — é o único lugar onde ele passa a
+ * existir depois do DELETE.
+ *
+ * A auditoria vem DEPOIS do delete, de propósito: se o DELETE falhar, não
+ * fica registro de uma exclusão que não aconteceu.
  */
 export async function excluirTask(input: { taskId: string; autorId: string }): Promise<void> {
   const task = await prisma.task.findUnique({ where: { id: input.taskId } });
@@ -181,6 +194,20 @@ export async function excluirTask(input: { taskId: string; autorId: string }): P
   }
 
   await prisma.task.delete({ where: { id: input.taskId } });
+
+  await registrarAuditoria({
+    userId: input.autorId,
+    acao: "excluir_task",
+    entidade: "Task",
+    entidadeId: task.id,
+    antes: {
+      titulo: task.titulo,
+      descricao: task.descricao,
+      vencimento: task.vencimento,
+      leadId: task.leadId,
+      concluidaEm: task.concluidaEm,
+    },
+  });
 }
 
 /**

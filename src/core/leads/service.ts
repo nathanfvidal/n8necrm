@@ -193,6 +193,23 @@ export async function atualizarLead(input: {
     );
   }
 
+  // Achado da auditoria de segurança desta branch: a checagem acima confere
+  // EXISTÊNCIA, não situação — dava para entregar um lead a quem foi
+  // desativado e não consegue mais entrar no sistema. A tela só oferece
+  // usuários ativos, mas Server Action é endpoint HTTP público e aceita
+  // qualquer id.
+  //
+  // A recusa vale só quando o responsável MUDA, de propósito: um lead que já
+  // pertence a alguém desativado (porque a pessoa saiu depois) precisa
+  // continuar editável — inclusive para ser reatribuído a alguém ativo.
+  // Recusar sempre trancaria justamente o lead que mais precisa de conserto.
+  const responsavelMudou = antes.responsavelId !== input.responsavelId;
+  if (responsavelMudou && !responsavel.ativo) {
+    throw new Error(
+      `Responsável desativado: "${responsavel.nome}" não está mais ativo e não pode receber leads.`
+    );
+  }
+
   const etapa = await prisma.pipelineStage.findUnique({ where: { id: input.stageId } });
   if (!etapa) {
     throw new Error(

@@ -23,7 +23,7 @@ const LEAD_ANTES = {
 beforeEach(() => {
   vi.clearAllMocks();
   prismaMock.lead.findUniqueOrThrow.mockResolvedValue(LEAD_ANTES);
-  prismaMock.user.findUnique.mockResolvedValue({ id: "user-2" });
+  prismaMock.user.findUnique.mockResolvedValue({ id: "user-2", ativo: true });
   prismaMock.pipelineStage.findUnique.mockResolvedValue({ id: "etapa-2" });
   prismaMock.lead.update.mockImplementation(({ data }) => ({ ...LEAD_ANTES, ...data }));
 });
@@ -81,6 +81,40 @@ describe("atualizarLead", () => {
       })
     ).rejects.toThrow(/Responsável não encontrado/);
     expect(prismaMock.lead.update).not.toHaveBeenCalled();
+  });
+
+  // Achado da auditoria: a checagem conferia existência, não situação — dava
+  // para entregar um lead a quem não consegue mais entrar no sistema. A tela
+  // só lista usuários ativos, mas Server Action é endpoint HTTP público.
+  it("recusa atribuir o lead a usuario desativado", async () => {
+    prismaMock.user.findUnique.mockResolvedValue({ id: "user-2", ativo: false });
+
+    await expect(
+      atualizarLead({
+        leadId: "lead-1",
+        valorEstimado: null,
+        responsavelId: "user-2",
+        stageId: "etapa-1",
+        autorId: "user-1",
+      })
+    ).rejects.toThrow(/desativado/);
+    expect(prismaMock.lead.update).not.toHaveBeenCalled();
+  });
+
+  // O contrário disto trancaria a edição: um lead que já pertence a alguém
+  // desativado ficaria impossível de corrigir, inclusive para reatribuir.
+  it("permite salvar sem trocar o responsavel, mesmo que ele esteja desativado", async () => {
+    prismaMock.user.findUnique.mockResolvedValue({ id: "user-1", ativo: false });
+
+    await atualizarLead({
+      leadId: "lead-1",
+      valorEstimado: "100",
+      responsavelId: "user-1",
+      stageId: "etapa-1",
+      autorId: "user-1",
+    });
+
+    expect(prismaMock.lead.update).toHaveBeenCalled();
   });
 
   it("recusa etapa inexistente", async () => {

@@ -212,7 +212,7 @@ const MENSAGEM_SEM_PERMISSAO = "Você não tem permissão para editar leads.";
  */
 const MENSAGENS_SEGURAS = [
   /^Valor inválido:/,
-  /^Responsável não encontrado:/,
+  /^Responsável (não encontrado|desativado):/,
   /^Etapa não encontrada:/,
   /^Este lead (já está|não está) arquivado/,
   /^Nota (não encontrada|vazia|muito longa)/,

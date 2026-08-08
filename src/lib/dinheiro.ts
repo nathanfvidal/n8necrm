@@ -33,7 +33,29 @@ import { Prisma } from "@prisma/client";
  */
 const PADRAO_BR = /^(\d{1,3}(?:\.\d{3})*|\d+)(?:,(\d{1,2}))?$/;
 
+/**
+ * Teto de tamanho, checado ANTES de qualquer processamento.
+ *
+ * Achado da auditoria de segurança desta branch: `parseValorBR` é alcançável
+ * por Server Action — endpoint HTTP público — e nada limitava o tamanho da
+ * string. Uma entrada de 400 mil dígitos era aceita pela expressão regular e
+ * virava `Decimal` em 2ms; quem recusava era o Postgres, no fim da pilha,
+ * depois de a carga ter atravessado a aplicação inteira. Sem limite de taxa
+ * nas Server Actions (também registrado na auditoria), isso é amplificação
+ * barata.
+ *
+ * 32 é folgado: o maior valor que `Decimal(14, 2)` comporta é
+ * 999.999.999.999,99 — 18 caracteres com separadores, 21 com "R$ ".
+ */
+const TAMANHO_MAX = 32;
+
 export function parseValorBR(texto: string): Prisma.Decimal {
+  if (texto.length > TAMANHO_MAX) {
+    throw new Error(
+      `Valor inválido: texto muito longo (${texto.length} caracteres, máximo ${TAMANHO_MAX}).`
+    );
+  }
+
   const limpo = texto.trim().replace(/^R\$\s*/, "");
 
   const match = PADRAO_BR.exec(limpo);
@@ -66,7 +88,36 @@ export function mascararValorBR(digitos: string): string {
   const inteiro = preenchido.slice(0, -2);
   const centavos = preenchido.slice(-2);
 
-  return `${inteiro.replace(/\B(?=(\d{3})+(?!\d))/g, ".")},${centavos}`;
+  return `${separarMilhar(inteiro)},${centavos}`;
+}
+
+/**
+ * Insere o ponto de milhar em tempo LINEAR.
+ *
+ * A versão anterior era `inteiro.replace(/\B(?=(\d{3})+(?!\d))/g, ".")` — o
+ * idioma mais comum para isto, e quadrático: o lookahead `(\d{3})+` é
+ * reavaliado do zero em cada uma das n posições. Medido na auditoria de
+ * segurança desta branch: 5k dígitos → 16ms, 20k → 317ms, 60k → 2.560ms,
+ * 200k → mais de 30 segundos.
+ *
+ * Não era alcançável pelo servidor com entrada livre (o único caminho é
+ * `formatarValorBR`, que recebe valor vindo de uma coluna `Decimal(14, 2)`,
+ * no máximo 14 dígitos) — mas travava a aba de quem colasse um texto enorme
+ * no campo, e viraria negação de serviço no servidor no dia em que alguém
+ * formatasse string de origem livre. `tests/unit/dinheiro.test.ts` guarda a
+ * linearidade com um limite de tempo.
+ *
+ * Fatia em blocos de três da direita para a esquerda, empilha e junta:
+ * `push` + `reverse` + `join` percorrem cada caractere uma vez só —
+ * `unshift` ou concatenação acumulada trariam o custo quadrático de volta
+ * por outro caminho.
+ */
+function separarMilhar(inteiro: string): string {
+  const partes: string[] = [];
+  for (let fim = inteiro.length; fim > 0; fim -= 3) {
+    partes.push(inteiro.slice(Math.max(0, fim - 3), fim));
+  }
+  return partes.reverse().join(".");
 }
 
 /**
