@@ -115,6 +115,75 @@ export async function concluirTask(input: { taskId: string; autorId: string }): 
 }
 
 /**
+ * Corrige uma tarefa. Regra de dono idêntica a `concluirTask` (acima) —
+ * inclusive a mensagem única para "não existe" e "não é sua".
+ *
+ * NÃO audita, de propósito: `criarTask` e `concluirTask` também não, porque
+ * tarefa é lembrete pessoal e não pipeline compartilhado. Ver a § 3 da spec
+ * e o aviso longo em `concluirTask` sobre não harmonizar as duas naturezas.
+ *
+ * `leadId` aceita `null` explicitamente para desvincular — `undefined` (campo
+ * ausente, "não mexa no vínculo") e `null` ("tire o vínculo") significam
+ * coisas diferentes aqui.
+ */
+export async function editarTask(input: {
+  taskId: string;
+  titulo: string;
+  descricao?: string;
+  vencimento: Date;
+  leadId?: string | null;
+  autorId: string;
+}): Promise<Task> {
+  const task = await prisma.task.findUnique({ where: { id: input.taskId } });
+  if (!task || task.responsavelId !== input.autorId) {
+    throw new Error("Tarefa não encontrada");
+  }
+
+  const titulo = input.titulo.trim();
+  if (!titulo) {
+    throw new Error("Título obrigatório: informe um título para a tarefa.");
+  }
+  if (Number.isNaN(input.vencimento.getTime())) {
+    throw new Error("Vencimento inválido: informe uma data válida.");
+  }
+  if (input.leadId) {
+    const lead = await prisma.lead.findUnique({ where: { id: input.leadId } });
+    if (!lead) {
+      throw new Error(`Lead não encontrado: "${input.leadId}" não corresponde a nenhum lead.`);
+    }
+  }
+
+  const descricao = input.descricao?.trim();
+
+  return prisma.task.update({
+    where: { id: input.taskId },
+    data: {
+      titulo,
+      // `null` e não `undefined`: apagar a descrição precisa GRAVAR a
+      // ausência. `undefined` faria o Prisma omitir o campo do UPDATE e a
+      // descrição antiga sobreviveria à edição que a removeu.
+      descricao: descricao || null,
+      vencimento: input.vencimento,
+      ...(input.leadId === undefined ? {} : { leadId: input.leadId }),
+    },
+  });
+}
+
+/**
+ * Remoção real. `Task` não é referenciada por nenhum modelo, então não há
+ * histórico a preservar — e uma tarefa "apagada" que continuasse no banco
+ * viraria lixo invisível de manter.
+ */
+export async function excluirTask(input: { taskId: string; autorId: string }): Promise<void> {
+  const task = await prisma.task.findUnique({ where: { id: input.taskId } });
+  if (!task || task.responsavelId !== input.autorId) {
+    throw new Error("Tarefa não encontrada");
+  }
+
+  await prisma.task.delete({ where: { id: input.taskId } });
+}
+
+/**
  * Lista tarefas pendentes (`concluidaEm: null`), ordenadas por vencimento
  * (a mais urgente primeiro). `responsavelId` opcional: sem ele, lista TODA
  * tarefa pendente de TODO usuário — uso interno/utilitário (ex.: um script
