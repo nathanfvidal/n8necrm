@@ -21,6 +21,8 @@ export default async function TasksPage() {
     id: t.id,
     titulo: t.titulo,
     vencimento: t.vencimento,
+    descricao: t.descricao,
+    leadId: t.leadId,
     leadContatoNome: t.lead?.contact?.nome,
   }));
 
