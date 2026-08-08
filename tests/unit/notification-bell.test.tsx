@@ -2,13 +2,15 @@
 //
 // Cobre só a lógica de ramificação do client component (mesma instrução das
 // Tasks 15/16/18 para os outros testes de componente): marcar como lida
-// remove a notificação da lista (otimista) e atualiza a contagem do sino;
+// remove a notificação da lista (otimista) e atualiza a contagem do sino, e
 // rollback + mensagem de erro quando o servidor rejeita (checagem de dono em
-// `marcarComoLida`, `notifications/dispatch.ts`, Task 19); e o fallback
-// defensivo quando `payload` não tem o formato esperado de "NOVO_LEAD"
-// (`extrairPayloadNovoLead`, `notifications/types.ts`) — o caso de um lead
-// apagado depois da notificação (payload malformado/nulo) ou de um `tipo`
-// futuro com outro formato de payload.
+// `marcarComoLida`, `notifications/dispatch.ts`).
+//
+// A tradução de `Notification` (tipo + payload cru) para o que se vê na tela
+// saiu daqui: mora em `app/(painel)/apresentar-notificacoes.ts` e tem teste
+// próprio (`apresentar-notificacoes.test.ts`). Este componente agora recebe
+// texto e link já prontos e não conhece tipo nenhum — foi assim que o
+// acoplamento com `modules/whatsapp` saiu do sino.
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
 
@@ -25,18 +27,8 @@ vi.mock("next/navigation", () => ({
 const { NotificationBell } = await import("../../src/components/notifications/notification-bell");
 
 const NOTIFICACOES_TESTE = [
-  {
-    id: "notif-1",
-    tipo: "NOVO_LEAD",
-    payload: { leadId: "lead-1", contatoNome: "Carlos Silva" },
-    criadoEm: new Date("2026-08-01T10:00:00.000Z"),
-  },
-  {
-    id: "notif-2",
-    tipo: "NOVO_LEAD",
-    payload: { leadId: "lead-2", contatoNome: "Fernanda Lima" },
-    criadoEm: new Date("2026-08-01T11:00:00.000Z"),
-  },
+  { id: "notif-1", titulo: "Novo lead: Carlos Silva", href: "/leads/lead-1", textoLink: "Ver lead" },
+  { id: "notif-2", titulo: "Novo lead: Fernanda Lima", href: "/leads/lead-2", textoLink: "Ver lead" },
 ];
 
 afterEach(() => {
@@ -100,27 +92,40 @@ describe("NotificationBell", () => {
     }
   );
 
-  it(
-    "payload sem o formato esperado de NOVO_LEAD (lead apagado desde a criação da notificação, " +
-      "payload nulo, ou tipo futuro desconhecido): mostra fallback 'Notificação' em vez de quebrar",
-    () => {
-      render(
-        <NotificationBell
-          notificacoes={[
-            { id: "notif-3", tipo: "NOVO_LEAD", payload: null, criadoEm: new Date("2026-08-01T00:00:00.000Z") },
-            {
-              id: "notif-4",
-              tipo: "OUTRO_TIPO_FUTURO",
-              payload: { leadId: "lead-9", contatoNome: "Alguém" },
-              criadoEm: new Date("2026-08-01T00:00:00.000Z"),
-            },
-          ]}
-        />
-      );
-      fireEvent.click(screen.getByRole("button", { name: "Notificações" }));
-      expect(screen.getAllByText("Notificação")).toHaveLength(2);
-    }
-  );
+  // Sem `href`/`textoLink` — o caso que `apresentarNotificacoes` produz para
+  // payload malformado ou tipo desconhecido — nenhum link é desenhado, e o
+  // componente não quebra tentando montar uma rota a partir de `undefined`.
+  it("notificacao sem link renderiza so o titulo, sem <a>", () => {
+    render(<NotificationBell notificacoes={[{ id: "notif-3", titulo: "Notificação" }]} />);
+    fireEvent.click(screen.getByRole("button", { name: "Notificações" }));
+
+    expect(screen.getByText("Notificação")).toBeTruthy();
+    expect(screen.queryByRole("link")).toBeNull();
+  });
+
+  // Detalhe e destaque só existem para o alerta de atividade — o único aviso
+  // que pede atenção imediata em vez de sinalizar trabalho de rotina.
+  it("notificacao com detalhe e destaque mostra as duas linhas", () => {
+    render(
+      <NotificationBell
+        notificacoes={[
+          {
+            id: "notif-6",
+            titulo: "Atividade incomum",
+            detalhe: "Fulano fez 12 ações destrutivas em 5 minutos.",
+            href: "/",
+            textoLink: "Ver atividade recente",
+            destaque: true,
+          },
+        ]}
+      />
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Notificações" }));
+
+    expect(screen.getByText("Atividade incomum")).toBeTruthy();
+    expect(screen.getByText("Fulano fez 12 ações destrutivas em 5 minutos.")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Ver atividade recente" })).toBeTruthy();
+  });
 
   it(
     "ressincroniza com a lista quando o servidor manda uma PROP nova (router.refresh() após criar " +
@@ -134,9 +139,9 @@ describe("NotificationBell", () => {
         ...NOTIFICACOES_TESTE,
         {
           id: "notif-5",
-          tipo: "NOVO_LEAD",
-          payload: { leadId: "lead-5", contatoNome: "Lead Novíssimo" },
-          criadoEm: new Date("2026-08-01T12:00:00.000Z"),
+          titulo: "Novo lead: Lead Novíssimo",
+          href: "/leads/lead-5",
+          textoLink: "Ver lead",
         },
       ];
       rerender(<NotificationBell notificacoes={comMaisUma} />);

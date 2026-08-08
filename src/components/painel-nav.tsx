@@ -2,7 +2,7 @@ import Link from "next/link";
 
 import { moduloAtivo } from "@/lib/module-gate";
 import { hasPermission } from "@/core/auth/permissions";
-import { NotificationBell, type NotificacaoNaoLida } from "@/components/notifications/notification-bell";
+import { NotificationBell, type NotificacaoApresentada } from "@/components/notifications/notification-bell";
 import { sairAction } from "@/core/auth/actions";
 import type { Role } from "@prisma/client";
 
@@ -46,7 +46,7 @@ export function PainelNav({
   nomeUsuario,
   papelUsuario,
 }: {
-  notificacoesNaoLidas?: NotificacaoNaoLida[];
+  notificacoesNaoLidas?: NotificacaoApresentada[];
   nomeUsuario?: string;
   papelUsuario?: Role;
 } = {}) {

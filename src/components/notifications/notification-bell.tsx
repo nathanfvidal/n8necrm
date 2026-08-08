@@ -6,21 +6,30 @@ import Link from "next/link";
 import { Bell } from "lucide-react";
 
 import { marcarNotificacaoComoLidaAction } from "@/core/notifications/actions";
-import {
-  extrairPayloadNovoLead,
-  extrairPayloadAlertaAtividade,
-  TIPO_ALERTA_ATIVIDADE,
-} from "@/core/notifications/types";
-import {
-  TIPO_CONVERSA_AGUARDANDO,
-  extrairPayloadConversaAguardando,
-} from "@/modules/whatsapp/notificacao-tipos";
 
-export type NotificacaoNaoLida = {
+/**
+ * O que o sino precisa para desenhar uma linha — e nada além disso.
+ *
+ * Este componente NÃO conhece tipo de notificação. Antes conhecia: importava
+ * `core/notifications/types` E `modules/whatsapp/notificacao-tipos`, e assim um
+ * componente presente em toda tela do painel dependia de um módulo OPCIONAL do
+ * produto (risco registrado na auditoria). A tradução de `Notification` para
+ * esta forma mora em `app/(painel)/apresentar-notificacoes.ts`, a raiz de
+ * composição — leia o comentário de lá para o raciocínio completo.
+ *
+ * O ganho prático: tipo novo de notificação não abre este arquivo, e um fork
+ * que remova o módulo de WhatsApp também não.
+ */
+export type NotificacaoApresentada = {
   id: string;
-  tipo: string;
-  payload: unknown;
-  criadoEm: Date;
+  titulo: string;
+  /** Segunda linha, opcional. Hoje só o alerta de atividade usa. */
+  detalhe?: string;
+  href?: string;
+  /** Rótulo do link. Sem ele (ou sem `href`), nenhum link é renderizado. */
+  textoLink?: string;
+  /** Aviso que pede atenção imediata, não trabalho de rotina. */
+  destaque?: boolean;
 };
 
 /**
@@ -70,7 +79,7 @@ function mensagemDeErroMarcarLida(erro: unknown): string {
  * de um Effect — `react-hooks/set-state-in-effect` é erro de lint neste
  * projeto) e, se mudou, sincroniza ali mesmo.
  */
-export function NotificationBell({ notificacoes: iniciais }: { notificacoes: NotificacaoNaoLida[] }) {
+export function NotificationBell({ notificacoes: iniciais }: { notificacoes: NotificacaoApresentada[] }) {
   const router = useRouter();
   const [notificacoes, setNotificacoes] = useState(iniciais);
   const [iniciaisProcessadas, setIniciaisProcessadas] = useState(iniciais);
@@ -134,73 +143,24 @@ export function NotificationBell({ notificacoes: iniciais }: { notificacoes: Not
           ) : (
             <ul className="space-y-1">
               {notificacoes.map((notificacao) => {
-                // `extrairPayloadNovoLead` devolve `null` tanto para um
-                // payload malformado quanto para um lead que já foi apagado
-                // desde a criação da notificação (o payload é uma cópia
-                // congelada de `contatoNome`, então isso raramente acontece
-                // — mas o link "Ver lead" abaixo pode dar 404 se o lead foi
-                // removido depois; ver comentário em `notifications/types.ts`).
-                const dadosNovoLead =
-                  notificacao.tipo === "NOVO_LEAD" ? extrairPayloadNovoLead(notificacao.payload) : null;
-                const dadosConversa =
-                  notificacao.tipo === TIPO_CONVERSA_AGUARDANDO
-                    ? extrairPayloadConversaAguardando(notificacao.payload)
-                    : null;
-
-                // Alerta de rajada destrutiva (`core/audit/alerta.ts`). Sem
-                // este ramo ele cairia no fallback "Notificação" abaixo — um
-                // aviso de possível sabotagem indistinguível de qualquer
-                // outra coisa é o mesmo que não avisar.
-                const dadosAlerta =
-                  notificacao.tipo === TIPO_ALERTA_ATIVIDADE
-                    ? extrairPayloadAlertaAtividade(notificacao.payload)
-                    : null;
-
                 return (
                   <li
                     key={notificacao.id}
                     className="flex items-start justify-between gap-2 rounded p-2 text-sm hover:bg-muted"
                   >
                     <div>
-                      {dadosNovoLead ? (
-                        <>
-                          <p>Novo lead: {dadosNovoLead.contatoNome}</p>
-                          <Link
-                            href={`/leads/${dadosNovoLead.leadId}`}
-                            className="text-xs text-primary underline"
-                            onClick={() => setAberto(false)}
-                          >
-                            Ver lead
-                          </Link>
-                        </>
-                      ) : dadosConversa ? (
-                        <>
-                          <p>Conversa aguardando: {dadosConversa.nomeExibicao}</p>
-                          <Link
-                            href={`/conversas/${dadosConversa.conversationId}`}
-                            className="text-xs text-primary underline"
-                            onClick={() => setAberto(false)}
-                          >
-                            Ver conversa
-                          </Link>
-                        </>
-                      ) : dadosAlerta ? (
-                        <>
-                          <p className="font-medium text-red-600">Atividade incomum</p>
-                          <p>
-                            {dadosAlerta.autorNome} fez {dadosAlerta.total} ações destrutivas em{" "}
-                            {dadosAlerta.janelaMinutos} minutos.
-                          </p>
-                          <Link
-                            href="/"
-                            className="text-xs text-primary underline"
-                            onClick={() => setAberto(false)}
-                          >
-                            Ver atividade recente
-                          </Link>
-                        </>
-                      ) : (
-                        <p>Notificação</p>
+                      <p className={notificacao.destaque ? "font-medium text-red-600" : undefined}>
+                        {notificacao.titulo}
+                      </p>
+                      {notificacao.detalhe && <p>{notificacao.detalhe}</p>}
+                      {notificacao.href && notificacao.textoLink && (
+                        <Link
+                          href={notificacao.href}
+                          className="text-xs text-primary underline"
+                          onClick={() => setAberto(false)}
+                        >
+                          {notificacao.textoLink}
+                        </Link>
                       )}
                     </div>
                     <button

@@ -5,6 +5,32 @@ import { prisma } from "@/lib/prisma";
 import { TIPO_CONVERSA_AGUARDANDO, type ConversaAguardandoPayload } from "./notificacao-tipos";
 
 /**
+ * Rótulo de última instância para uma conversa sem nome nenhum: os quatro
+ * últimos dígitos, e só.
+ *
+ * Risco corrigido (auditoria da fatia): a cadeia de rótulo terminava em
+ * `conversa.telefone ?? conversa.waId`, então uma conversa nova — sem contato
+ * cadastrado e sem push name, que é o caso comum da PRIMEIRA mensagem de um
+ * cliente — copiava o telefone COMPLETO para uma linha de `Notification` por
+ * usuário ativo. Numa equipe de dez pessoas, dez cópias do número; e como a
+ * tabela não é limpa, cópias permanentes.
+ *
+ * Quatro dígitos bastam para o que o aviso precisa fazer: distinguir uma
+ * conversa da outra no sino. Quem realmente vai atender clica e chega em
+ * `/conversas/[id]`, onde o número aparece inteiro — atrás de autenticação,
+ * em UMA linha, e não replicado por toda a equipe. Menor privilégio aplicado
+ * ao conteúdo da notificação, não só ao acesso.
+ *
+ * Sem quatro dígitos disponíveis (identificador atípico), não inventa: devolve
+ * um rótulo neutro em vez de vazar o que sobrou.
+ */
+function rotuloMascarado(identificador: string): string {
+  const digitos = identificador.replace(/\D/g, "");
+  if (digitos.length < 4) return "Cliente sem nome";
+  return `Cliente ···${digitos.slice(-4)}`;
+}
+
+/**
  * Marca a conversa como aguardando atendimento humano e, **só quando esta
  * chamada foi quem fez a transição**, notifica toda a equipe.
  *
@@ -37,10 +63,13 @@ export async function marcarAguardandoHumano(conversationId: string): Promise<bo
     include: { contact: { select: { nome: true } } },
   });
 
-  // Cadeia igual à da tela de detalhe. Nunca nulo: um aviso dizendo
-  // "conversa sem nome" não ajuda ninguém a decidir se atende.
+  // Nunca nulo: um aviso sem rótulo nenhum não ajuda ninguém a decidir se
+  // atende. Mas quando não há nome, o que entra é o número MASCARADO — ver
+  // `rotuloMascarado` abaixo.
   const nomeExibicao =
-    conversa.contact?.nome ?? conversa.nomeExibicao ?? conversa.telefone ?? conversa.waId;
+    conversa.contact?.nome ??
+    conversa.nomeExibicao ??
+    rotuloMascarado(conversa.telefone ?? conversa.waId);
 
   const payload: ConversaAguardandoPayload = { conversationId, nomeExibicao };
 

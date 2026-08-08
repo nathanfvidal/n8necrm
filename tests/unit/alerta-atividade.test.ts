@@ -138,10 +138,27 @@ async function registrarRajada(quantas: number, acao: string = ACOES_SENSIVEIS[0
   }
 }
 
+/**
+ * Alertas recebidos pelos admins deste teste **sobre o suspeito deste teste**.
+ *
+ * O filtro por `autorNome` não é zelo: os dois admins criados aqui são ADMIN
+ * ATIVO de verdade, então enquanto este arquivo roda eles são destinatários
+ * elegíveis de qualquer alerta disparado por OUTRO arquivo da suíte — e a
+ * suíte roda em paralelo. `users-service.test.ts` sozinho produz 7 ações
+ * sensíveis; somadas às de outros arquivos com o mesmo autor do seed, cruzam
+ * o gatilho de 10 em 5 minutos e o alerta pousa aqui.
+ *
+ * Foi exatamente isso: uma falha em três execuções da suíte completa, verde
+ * quando rodado isolado. Contar por `tipo` sozinho fazia este teste depender
+ * do que os vizinhos estavam fazendo.
+ */
 async function alertasRecebidos(): Promise<number> {
-  return prisma.notification.count({
+  const todos = await prisma.notification.findMany({
     where: { userId: { in: [idAdminA, idAdminB] }, tipo: TIPO_ALERTA_ATIVIDADE },
   });
+  return todos.filter((n) =>
+    String((n.payload as { autorNome?: string } | null)?.autorNome ?? "").includes(MARCA)
+  ).length;
 }
 
 describe("alerta de atividade destrutiva em rajada", () => {
@@ -177,11 +194,17 @@ describe("alerta de atividade destrutiva em rajada", () => {
 
       await avaliarAtividadeSuspeita({ userId: idSuspeito, acao: ACOES_SENSIVEIS[0] });
 
-      expect(
-        await prisma.notification.count({
-          where: { userId: idSuspeito, tipo: TIPO_ALERTA_ATIVIDADE },
-        })
-      ).toBe(0);
+      // Mesmo escopo por `autorNome` de `alertasRecebidos`, e pela mesma
+      // razão: aqui o suspeito está temporariamente ADMIN e ATIVO, então ele
+      // também é destinatário elegível de alerta disparado por outro arquivo
+      // da suíte rodando em paralelo.
+      const doSuspeito = await prisma.notification.findMany({
+        where: { userId: idSuspeito, tipo: TIPO_ALERTA_ATIVIDADE },
+      });
+      const sobreEleMesmo = doSuspeito.filter((n) =>
+        String((n.payload as { autorNome?: string } | null)?.autorNome ?? "").includes(MARCA)
+      );
+      expect(sobreEleMesmo).toHaveLength(0);
       expect(await alertasRecebidos()).toBe(2);
     } finally {
       await prisma.user.update({ where: { id: idSuspeito }, data: { papel: "VENDEDOR" } });

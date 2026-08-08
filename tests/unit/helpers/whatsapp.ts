@@ -39,13 +39,24 @@ export async function idsDeUsuariosSemeados() {
 }
 
 export async function criarConversation(
-  overrides: Partial<{ waId: string; bufferSeq: number; iaAtiva: boolean }> = {}
+  overrides: Partial<{
+    waId: string;
+    bufferSeq: number;
+    iaAtiva: boolean;
+    // Acrescentados para os testes de redação de PII no aviso de conversa
+    // aguardando: o rótulo que vai para a notificação depende justamente de
+    // quais destes campos existem (ver `marcarAguardandoHumano`).
+    telefone: string | null;
+    nomeExibicao: string | null;
+  }> = {}
 ) {
   return prisma.conversation.create({
     data: {
       waId: overrides.waId ?? `${PREFIXO}${crypto.randomUUID()}`,
       bufferSeq: overrides.bufferSeq ?? 1,
       iaAtiva: overrides.iaAtiva ?? true,
+      telefone: overrides.telefone ?? null,
+      nomeExibicao: overrides.nomeExibicao ?? null,
     },
   });
 }

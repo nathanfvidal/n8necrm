@@ -100,10 +100,91 @@ export async function notificarNovoLead(leadId: string): Promise<void> {
  * um id arbitrário vindo do cliente.
  */
 export async function listarNotificacoesNaoLidas(userId: string): Promise<Notification[]> {
-  return prisma.notification.findMany({
+  const naoLidas = await prisma.notification.findMany({
     where: { userId, lidaEm: null },
     orderBy: { criadoEm: "desc" },
   });
+
+  // Higiene DEPOIS da leitura, nunca antes: a poda não pode atrasar nem
+  // influenciar o que o sino mostra.
+  await podarDeVezEmQuando();
+
+  return naoLidas;
+}
+
+/**
+ * Por quanto tempo uma notificação LIDA é mantida.
+ *
+ * Já cumpriu a função — alguém viu. Trinta dias deixam margem para alguém
+ * querer reler algo recente sem manter histórico que ninguém consulta.
+ */
+export const RETENCAO_LIDA_MS = 30 * 24 * 60 * 60_000;
+
+/**
+ * Teto absoluto, independente de leitura.
+ *
+ * Existe por causa de quem nunca abre o sino: sem ele, a proteção de "não
+ * apagar o que não foi lido" reabriria o crescimento sem teto que esta poda
+ * veio fechar. Um aviso de meio ano que ninguém abriu não é trabalho
+ * pendente, é entulho.
+ */
+export const RETENCAO_ABSOLUTA_MS = 180 * 24 * 60 * 60_000;
+
+/**
+ * Apaga notificações que já não servem a ninguém. Devolve quantas saíram.
+ *
+ * Risco corrigido (auditoria): nada nunca apagava linha desta tabela. Cada
+ * lead novo gera uma para o responsável; cada conversa que passa a aguardar
+ * humano gera UMA POR USUÁRIO ATIVO (`modules/whatsapp/notificacoes.ts`); e o
+ * alerta de rajada destrutiva (`core/audit/alerta.ts`) soma outra por ADMIN.
+ * O crescimento é proporcional ao tamanho da equipe e não parava nunca.
+ *
+ * Duas janelas, e a distinção entre elas é a regra que protege o usuário:
+ * aviso NÃO LIDO é trabalho pendente e sobrevive à primeira janela por mais
+ * velho que esteja — apagá-lo por idade seria a limpeza escondendo justamente
+ * o que o sino existe para mostrar. A segunda janela é o limite dessa
+ * proteção.
+ */
+export async function podarNotificacoes(opcoes?: {
+  retencaoLidaMs?: number;
+  retencaoAbsolutaMs?: number;
+}): Promise<number> {
+  const agora = Date.now();
+  const corteLida = new Date(agora - (opcoes?.retencaoLidaMs ?? RETENCAO_LIDA_MS));
+  const corteAbsoluto = new Date(agora - (opcoes?.retencaoAbsolutaMs ?? RETENCAO_ABSOLUTA_MS));
+
+  const { count } = await prisma.notification.deleteMany({
+    where: {
+      OR: [
+        { lidaEm: { not: null }, criadoEm: { lt: corteLida } },
+        { criadoEm: { lt: corteAbsoluto } },
+      ],
+    },
+  });
+  return count;
+}
+
+/**
+ * Mesma poda probabilística do limitador de taxa
+ * (`core/rate-limit/limiter.ts`), pelo mesmo motivo: cron exigiria rota nova,
+ * segredo próprio e configuração no painel da Vercel, e correção que depende
+ * de configuração pode nunca entrar em vigor. Aqui vale sozinha.
+ *
+ * O gancho é a listagem porque ela roda a cada navegação sob o layout do
+ * painel — é o caminho frequente. 1% mantém a tabela sob controle deixando 99
+ * de cada 100 navegações sem custo extra.
+ */
+const CHANCE_DE_PODA = 0.01;
+
+async function podarDeVezEmQuando(): Promise<void> {
+  if (Math.random() >= CHANCE_DE_PODA) return;
+  try {
+    await podarNotificacoes();
+  } catch (erro) {
+    // Limpeza é higiene, não decisão de produto: falhar aqui nunca pode
+    // impedir alguém de ver as próprias notificações.
+    console.error("Falha ao podar notificações antigas:", erro);
+  }
 }
 
 /**

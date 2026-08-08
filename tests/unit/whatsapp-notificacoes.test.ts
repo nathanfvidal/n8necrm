@@ -75,6 +75,68 @@ describe("aviso de conversa aguardando humano", () => {
     await limparConversasDeTeste();
   });
 
+  // --- Redação de PII no aviso (risco registrado na auditoria da branch) ---
+  //
+  // O aviso é copiado para UMA LINHA POR USUÁRIO ATIVO, numa tabela sem
+  // limpeza. A cadeia de rótulo terminava em `conversa.telefone ?? conversa.waId`
+  // — ou seja, cliente novo (sem contato e sem push name, o caso comum de
+  // primeira mensagem) tinha o telefone COMPLETO replicado para a equipe
+  // inteira, e ele ficava lá para sempre.
+  //
+  // A notificação não precisa do número: ela carrega `conversationId` e leva
+  // para a conversa, onde quem tem acesso vê o telefone. O rótulo só precisa
+  // distinguir uma conversa da outra.
+  describe("rotulo do aviso nao replica telefone do cliente", () => {
+    it("sem contato e sem nome: mascara, mantendo so os 4 ultimos digitos", async () => {
+      const conversa = await criarConversaDeTeste({ telefone: "11987654321" });
+
+      await marcarAguardandoHumano(conversa.id);
+
+      const [aviso] = await notificacoesDaConversa(conversa.id);
+      const rotulo = (aviso.payload as { nomeExibicao: string }).nomeExibicao;
+
+      expect(rotulo).not.toContain("11987654321");
+      expect(rotulo).not.toContain("1198765");
+      expect(rotulo).toContain("4321");
+    });
+
+    it("waId tambem e' mascarado quando nao ha telefone normalizado", async () => {
+      // O `waId` PRECISA começar com o prefixo que `limparConversasDeTeste`
+      // usa ("teste-turno-"). A primeira versão deste teste usava prefixo
+      // próprio, a limpeza não alcançava a linha, e a segunda execução batia
+      // em violação de unicidade de `waId` — num banco compartilhado com
+      // produção, teste que não limpa o que cria quebra a PRÓXIMA execução.
+      const conversa = await criarConversaDeTeste({
+        waId: "teste-turno-5511912345678",
+        telefone: null,
+      });
+
+      await marcarAguardandoHumano(conversa.id);
+
+      const [aviso] = await notificacoesDaConversa(conversa.id);
+      const rotulo = (aviso.payload as { nomeExibicao: string }).nomeExibicao;
+
+      expect(rotulo).not.toContain("5511912345678");
+      expect(rotulo).toContain("5678");
+    });
+
+    // O outro lado: quando HÁ nome, ele continua indo — a redação não pode
+    // custar a utilidade do aviso, que existe para alguém decidir se atende.
+    it("com nome de exibicao, o nome vai no aviso e nenhum digito aparece", async () => {
+      const conversa = await criarConversaDeTeste({
+        telefone: "11987654321",
+        nomeExibicao: "Joana Cliente",
+      });
+
+      await marcarAguardandoHumano(conversa.id);
+
+      const [aviso] = await notificacoesDaConversa(conversa.id);
+      const rotulo = (aviso.payload as { nomeExibicao: string }).nomeExibicao;
+
+      expect(rotulo).toBe("Joana Cliente");
+    });
+  });
+
   it("marca a conversa e notifica todos os usuários ativos", async () => {
     const conversa = await criarConversaDeTeste();
     const ganhou = await marcarAguardandoHumano(conversa.id);

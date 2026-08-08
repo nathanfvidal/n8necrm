@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { PainelNav } from "@/components/painel-nav";
 import { usuarioAtual } from "@/core/auth/session";
 import { listarNotificacoesNaoLidas } from "@/core/notifications/dispatch";
+import { apresentarNotificacoes } from "./apresentar-notificacoes";
 
 /**
  * Força renderização dinâmica em TODA página sob este layout — segment
@@ -77,7 +78,13 @@ export default async function PainelLayout({ children }: { children: React.React
     redirect("/login");
   }
 
-  const notificacoesNaoLidas = await listarNotificacoesNaoLidas(usuario.id);
+  // Traduzido AQUI, não dentro do sino: `apresentarNotificacoes` é o único
+  // ponto do código que conhece os tipos de notificação de todos os módulos,
+  // e ele mora na raiz de composição de propósito — ver o comentário em
+  // `apresentar-notificacoes.ts` sobre o acoplamento que isso desfaz.
+  const notificacoesNaoLidas = apresentarNotificacoes(
+    await listarNotificacoesNaoLidas(usuario.id)
+  );
 
   return (
     <div className="min-h-screen">
