@@ -32,14 +32,6 @@ export default async function LeadsPage({
   // que é compartilhável e sobrevive a um recarregamento.
   const mostrarArquivados = (await searchParams).arquivados === "1";
 
-  // Só ADMIN e GESTOR (ação `ver_dashboard_geral`) conseguem atribuir um
-  // lead a outra pessoa — `criarLeadManual` clampa `responsavelId` no
-  // servidor para o próprio autor quando quem chama não tem essa permissão
-  // (ver actions.ts, Task 13). Por isso um VENDEDOR nem recebe a lista de
-  // outros usuários aqui: oferecer no formulário uma escolha que o servidor
-  // vai descartar em silêncio seria enganoso, e buscar dados de outras
-  // contas que a pessoa não pode usar não tem propósito.
-  const podeAtribuirOutraPessoa = hasPermission(usuario.papel, "ver_dashboard_geral");
 
   // `GET /export/leads` (Task 21) já checa `exportar_leads` no servidor
   // independente do que acontece aqui — este flag só decide se o botão
@@ -48,13 +40,17 @@ export default async function LeadsPage({
   // que sempre resolve em 403 — pior que não oferecer a ação.
   const podeExportar = hasPermission(usuario.papel, "exportar_leads");
 
-  const vendedores = podeAtribuirOutraPessoa
-    ? await prisma.user.findMany({
-        where: { ativo: true },
-        select: { id: true, nome: true },
-        orderBy: { nome: "asc" },
-      })
-    : [];
+  // Lista para TODO papel, sem gate — mesma consulta e mesmo motivo de
+  // `leads/[id]/page.tsx`. Lead é colaborativo: qualquer vendedor atende o
+  // cliente de qualquer colega, e agora também cadastra em nome dele. Só
+  // usuários ATIVOS, e `criarLead` recusa responsável desativado — tela e
+  // servidor concordam. `select` explícito para `senhaHash` nunca sair do
+  // banco só para preencher um `<select>`.
+  const vendedores = await prisma.user.findMany({
+    where: { ativo: true },
+    select: { id: true, nome: true },
+    orderBy: { nome: "asc" },
+  });
 
   // Fix round 1/5: a versão original desta página restringia `listarLeads`
   // por `responsavelId` para quem não tem `ver_dashboard_geral` (VENDEDOR).
@@ -121,12 +117,7 @@ export default async function LeadsPage({
           )}
         </div>
       </div>
-      <LeadForm
-        responsavelPadraoId={usuario.id}
-        nomeUsuario={usuario.nome}
-        vendedores={vendedores}
-        podeAtribuirOutraPessoa={podeAtribuirOutraPessoa}
-      />
+      <LeadForm responsavelPadraoId={usuario.id} vendedores={vendedores} />
       {linhas.length === 0 ? (
         <EmptyState
           title="Nenhum lead ainda"

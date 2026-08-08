@@ -41,14 +41,14 @@ describe("tarefas", () => {
   beforeAll(async () => {
     await limparDadosDeTeste();
 
-    const usuario = await prisma.user.findFirstOrThrow({ where: { papel: "ADMIN" } });
+    const usuario = await prisma.user.findFirstOrThrow({ where: { papel: "ADMIN", ativo: true } });
     usuarioId = usuario.id;
 
     // Segundo usuário real (papel diferente) para o teste de checagem de
     // dono abaixo — precisa ser outro `id` de usuário existente, não um
     // valor forjado, para provar que a rejeição é sobre PROPRIEDADE da
     // tarefa, não sobre o usuário não existir.
-    const outroUsuario = await prisma.user.findFirstOrThrow({ where: { papel: "VENDEDOR" } });
+    const outroUsuario = await prisma.user.findFirstOrThrow({ where: { papel: "VENDEDOR", ativo: true } });
     outroUsuarioId = outroUsuario.id;
 
     // Lead real do seed (Task 9: 4 leads) para o teste de vínculo — não

@@ -19,11 +19,23 @@ import type { Lead } from "@prisma/client";
 /**
  * Cria um lead manualmente. Server Action — endpoint HTTP público (ver
  * decisão de segurança da Task 13): `autorId` NUNCA vem do cliente, é
- * sempre derivado da sessão via `usuarioAtual()`. `responsavelId` continua
- * vindo do formulário (é escolha legítima do gestor), mas só é honrado
- * quando quem chama tem permissão para atribuir lead a outra pessoa —
- * senão o lead fica com o próprio autor, silenciosamente corrigido, em vez
- * de a action confiar cegamente no que o cliente mandou.
+ * sempre derivado da sessão via `usuarioAtual()`.
+ *
+ * `responsavelId` vem do formulário e é honrado para QUALQUER papel com
+ * `criar_lead`.
+ *
+ * **Antes não era.** Esta action clampava `responsavelId` para o próprio
+ * autor quando quem chamava não tinha `ver_dashboard_geral` — ou seja, um
+ * VENDEDOR não conseguia cadastrar lead no nome de um colega. A auditoria de
+ * segurança desta branch mostrou que a trava não travava nada: `atualizarLead`
+ * aceita qualquer responsável para quem tem `mover_lead`, que os três papéis
+ * têm, então bastava criar o lead para si e reatribuir no clique seguinte.
+ * Dava trabalho sem impedir o resultado — e, pior, o clamp era SILENCIOSO: a
+ * pessoa escolhia um colega e o sistema gravava outro sem avisar.
+ *
+ * Decisão do dono do projeto: lead é colaborativo, "os leads têm que ser
+ * vistos por todos daquela empresa". Criar e editar passam a concordar.
+ * Quem atribuiu fica registrado na auditoria dos dois lados.
  */
 export async function criarLeadManual(input: {
   nome: string;
@@ -37,18 +49,12 @@ export async function criarLeadManual(input: {
     throw new Error("Sem permissão para criar lead");
   }
 
-  // Só ADMIN e GESTOR atribuem lead a outra pessoa; VENDEDOR fica com o próprio.
-  const responsavelId =
-    input.responsavelId !== autor.id && !hasPermission(autor.papel, "ver_dashboard_geral")
-      ? autor.id
-      : input.responsavelId;
-
   try {
     const lead = await criarLead({
       nome: input.nome,
       telefone: input.telefone,
       email: input.email,
-      responsavelId,
+      responsavelId: input.responsavelId,
       autorId: autor.id,
     });
 

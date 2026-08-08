@@ -19,6 +19,7 @@ import { PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
 
 import { editarNota, excluirNota } from "../../src/core/leads/notes";
+import { criarLead } from "../../src/core/leads/service";
 import { editarTask, excluirTask } from "../../src/core/tasks/service";
 
 const prisma = new PrismaClient({
@@ -162,6 +163,27 @@ describe("regra de dono contra o banco real", () => {
     const depois = await prisma.leadNote.findUniqueOrThrow({ where: { id: idNota } });
     expect(depois.texto).toBe("corrigido pelo dono");
     expect(depois.editadoEm).toBeInstanceOf(Date);
+  });
+
+  // Criar e editar passaram a concordar na auditoria: os dois recusam entregar
+  // um lead a quem não consegue mais entrar no sistema. `idDono` é criado com
+  // `ativo: false` neste arquivo, então serve de cobaia.
+  //
+  // A recusa acontece ANTES de `encontrarOuCriarContact`, então nem contato
+  // nem lead chegam a ser gravados — é o que o `count` abaixo confirma.
+  it("criarLead recusa responsavel desativado sem gravar nada", async () => {
+    const telefoneNovo = "11966664002";
+
+    await expect(
+      criarLead({
+        nome: `Recusado ${MARCA}`,
+        telefone: telefoneNovo,
+        responsavelId: idDono,
+        autorId: idIntruso,
+      })
+    ).rejects.toThrow(/Responsável desativado/);
+
+    expect(await prisma.contact.count({ where: { telefone: telefoneNovo } })).toBe(0);
   });
 
   // Decisão do dono do projeto na auditoria: exclusão de tarefa deixa rastro,

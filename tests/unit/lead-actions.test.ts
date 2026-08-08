@@ -117,13 +117,21 @@ describe("criarLeadManual", () => {
     expect(criarLeadMock).not.toHaveBeenCalled();
   });
 
+  // Este teste afirmava o CONTRÁRIO até a auditoria de segurança desta
+  // branch: o VENDEDOR tinha o `responsavelId` trocado em silêncio pelo
+  // próprio id. A trava foi removida porque não travava nada — `atualizarLead`
+  // aceita qualquer responsável para quem tem `mover_lead`, que os três papéis
+  // têm, então bastava criar para si e reatribuir no clique seguinte. Decisão
+  // do dono: lead é colaborativo, criar e editar concordam.
+  //
+  // O `autorId` continua vindo da sessão — é isso que o teste guarda agora:
+  // quem atribui muda, quem AGE não.
   it(
-    "VENDEDOR (papel real, matriz real de permissions.ts) NÃO CONSEGUE atribuir o lead a outra pessoa: " +
-      "o responsavelId enviado ao service é o do próprio autor, não o do formulário",
+    "VENDEDOR atribui o lead a outra pessoa, e o autorId continua sendo o da sessão",
     async () => {
       const vendedor = usuarioFake({ id: "vendedor-1", papel: "VENDEDOR" });
       usuarioAtualMock.mockResolvedValue(vendedor);
-      criarLeadMock.mockResolvedValue(leadFake({ responsavelId: vendedor.id }));
+      criarLeadMock.mockResolvedValue(leadFake({ responsavelId: "outra-pessoa-id" }));
 
       await criarLeadManual({
         nome: "X",
@@ -132,11 +140,11 @@ describe("criarLeadManual", () => {
       });
 
       expect(criarLeadMock).toHaveBeenCalledWith(
-        expect.objectContaining({ responsavelId: "vendedor-1", autorId: "vendedor-1" })
+        expect.objectContaining({ responsavelId: "outra-pessoa-id", autorId: "vendedor-1" })
       );
-      // prova que a decisão realmente passou pela matriz real: VENDEDOR não
-      // tem ver_dashboard_geral.
-      expect(hasPermission("VENDEDOR", "ver_dashboard_geral")).toBe(false);
+      // A decisão passa pela matriz real, e é `criar_lead` que manda agora —
+      // `ver_dashboard_geral` deixou de participar desta action.
+      expect(hasPermission("VENDEDOR", "criar_lead")).toBe(true);
     }
   );
 

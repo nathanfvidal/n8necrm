@@ -63,6 +63,20 @@ export async function criarLead(input: {
     );
   }
 
+  // Mesma regra de `atualizarLead`, e pelo mesmo motivo: a tela só oferece
+  // usuários ativos, mas Server Action é endpoint HTTP público e aceita
+  // qualquer id. Um lead nascer com dono que não consegue entrar no sistema é
+  // um lead que ninguém atende.
+  //
+  // Aqui a recusa é incondicional, ao contrário de `atualizarLead` (que só
+  // recusa quando o responsável MUDA): não existe lead preexistente a
+  // preservar — este está nascendo agora.
+  if (!responsavel.ativo) {
+    throw new Error(
+      `Responsável desativado: "${responsavel.nome}" não está mais ativo e não pode receber leads.`
+    );
+  }
+
   const contact = await encontrarOuCriarContact({
     nome: input.nome,
     telefone: input.telefone,

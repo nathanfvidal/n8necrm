@@ -71,16 +71,23 @@ function mensagemDeErro(erro: unknown): string {
   return "Não foi possível criar o lead. Tente novamente em instantes.";
 }
 
+/**
+ * Formulário de criação de lead.
+ *
+ * Já teve uma prop `podeAtribuirOutraPessoa` que, para VENDEDOR, trocava o
+ * `<select>` de responsável por um campo desabilitado com o próprio nome —
+ * porque `criarLeadManual` clampava a escolha no servidor. A auditoria de
+ * segurança mostrou que aquele clamp não impedia nada (bastava criar e
+ * reatribuir) e que criar e editar discordavam. Com a regra unificada — lead
+ * é colaborativo, todo papel atribui —, a prop deixou de ter sentido e saiu,
+ * junto com o campo desabilitado.
+ */
 export function LeadForm({
   responsavelPadraoId,
-  nomeUsuario,
   vendedores,
-  podeAtribuirOutraPessoa,
 }: {
   responsavelPadraoId: string;
-  nomeUsuario: string;
   vendedores: Vendedor[];
-  podeAtribuirOutraPessoa: boolean;
 }) {
   const router = useRouter();
   const [erroEnvio, setErroEnvio] = useState<string | null>(null);
@@ -150,47 +157,17 @@ export function LeadForm({
 
       <div className="space-y-1">
         <Label htmlFor="responsavelId">Responsável</Label>
-        {podeAtribuirOutraPessoa ? (
-          <select
-            id="responsavelId"
-            {...register("responsavelId")}
-            className="h-8 rounded-lg border border-input bg-transparent px-2.5 text-sm"
-          >
-            {vendedores.map((vendedor) => (
-              <option key={vendedor.id} value={vendedor.id}>
-                {vendedor.nome}
-              </option>
-            ))}
-          </select>
-        ) : (
-          // VENDEDOR nunca consegue atribuir lead a outra pessoa —
-          // `criarLeadManual` clampa `responsavelId` no servidor para o
-          // próprio autor sempre que quem chama não tem `ver_dashboard_geral`
-          // (ver actions.ts). Oferecer aqui um <select> com outros nomes
-          // prometeria uma escolha que seria descartada em silêncio; em vez
-          // disso mostramos só o próprio nome, sem opção de troca.
-          //
-          // Dois elementos, de propósito, não um só: `<input type="hidden">`
-          // não é "labelable" pela spec de HTML (a lista de elementos que um
-          // `<label for>` pode apontar exclui explicitamente
-          // `input[type=hidden]`), então associar o Label acima a ele seria
-          // uma associação tão inválida quanto a anterior (que apontava para
-          // um `<p>`, também não-labelable). Em vez disso: um `<input>`
-          // visível, desabilitado, só para exibição — esse SIM é labelable,
-          // é o que `id="responsavelId"` recebe — e um `<input type="hidden">`
-          // à parte, sem id/label (não precisa: nunca é percebido nem
-          // interagido), carregando o valor de verdade via `register`.
-          <>
-            <Input
-              id="responsavelId"
-              value={`Você (${nomeUsuario})`}
-              disabled
-              readOnly
-              aria-readonly="true"
-            />
-            <input type="hidden" {...register("responsavelId")} />
-          </>
-        )}
+        <select
+          id="responsavelId"
+          {...register("responsavelId")}
+          className="h-8 rounded-lg border border-input bg-transparent px-2.5 text-sm"
+        >
+          {vendedores.map((vendedor) => (
+            <option key={vendedor.id} value={vendedor.id}>
+              {vendedor.nome}
+            </option>
+          ))}
+        </select>
         {errors.responsavelId && (
           <p className="text-xs text-red-600">{errors.responsavelId.message}</p>
         )}
