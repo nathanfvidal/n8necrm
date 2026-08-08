@@ -3,8 +3,11 @@ import type { LeadChannel } from "@prisma/client";
 
 import { usuarioAtual } from "@/core/auth/session";
 import { hasPermission } from "@/core/auth/permissions";
+import { registrarAuditoria } from "@/core/audit/log";
 import { listarLeads } from "@/core/leads/queries";
+import { checarLimiteExportLeads } from "@/core/rate-limit/export-leads";
 import { formatarDataHoraBR } from "@/lib/date";
+import { obterIpDaRequisicao } from "@/lib/ip";
 
 // Mesma rotulagem de canal do card do kanban (kanban-card.tsx, Task 15) e da
 // tabela (lead-table.tsx, Task 16) — mantida em sincronia de propósito para
@@ -153,6 +156,10 @@ function linhaCsv(campos: string[]): string {
  * `exportar_leads` (ADMIN e GESTOR — ver matriz em `core/auth/permissions.ts`;
  * VENDEDOR não tem).
  *
+ * A ordem dos quatro portões é deliberada e está justificada em cada um deles,
+ * abaixo: sessão (401) → permissão (403) → cota (429) → auditoria (500 se o
+ * log não gravar). Só depois dos quatro o CSV é montado.
+ *
  * Esta rota mora sob o route group `(painel)`, mas `(painel)/layout.tsx` só
  * envolve *páginas* — um Route Handler é atingido direto pelo navegador
  * (download de arquivo), sem passar pelo layout, então não herda a checagem
@@ -173,7 +180,7 @@ function linhaCsv(campos: string[]): string {
  * inconsistência (dado "protegido" na exportação mas livre num clique de
  * distância na tabela) que motivou a reversão original.
  */
-export async function GET() {
+export async function GET(request: Request) {
   let usuario;
   try {
     usuario = await usuarioAtual();
@@ -183,6 +190,23 @@ export async function GET() {
 
   if (!hasPermission(usuario.papel, "exportar_leads")) {
     return NextResponse.json({ erro: "Sem permissão" }, { status: 403 });
+  }
+
+  // Cota DEPOIS da autorização e ANTES da consulta, nessa ordem exata:
+  //
+  // - depois, porque quem não pode exportar não deve nem consumir cota — do
+  //   contrário bastaria martelar esta rota com um papel sem permissão para
+  //   queimar o orçamento de quem tem (o mesmo raciocínio que faz o limite de
+  //   login checar IP antes de conta, em `rate-limit/login.ts`);
+  // - antes, porque uma requisição barrada não pode custar a leitura da base
+  //   inteira. Limite em código de aplicação contém ESTRAGO, não custo: a
+  //   requisição bloqueada ainda paga invocação e conexão de banco. Colocá-lo
+  //   depois da consulta faria o controle antiabuso pagar o preço do abuso.
+  if (!(await checarLimiteExportLeads(usuario.id))) {
+    return NextResponse.json(
+      { erro: "Muitas exportações seguidas. Tente novamente daqui a pouco." },
+      { status: 429 }
+    );
   }
 
   // Fix round 1/5 — teto de escala, registrado de propósito (achado do
@@ -215,6 +239,45 @@ export async function GET() {
   // sem sinal real do volume que vai bater esse teto, é a escolha
   // deliberada — não uma omissão.
   const leads = await listarLeads();
+
+  // Registro da extração em massa (Fase 2 da auditoria de segurança).
+  //
+  // Esta é a única rota do sistema desenhada para tirar a base inteira de
+  // clientes — nome e telefone de todo lead — num arquivo só, e até aqui ela
+  // não deixava rastro. `hasPermission` acima responde QUEM pode; nada
+  // respondia O QUE saiu. Uma sessão de gestor roubada, ou alguém de saída da
+  // empresa, levava a base completa sem produzir uma linha para investigar
+  // depois. Dado pessoal saindo em bloco é justamente o evento que mais
+  // importa conseguir reconstituir.
+  //
+  // `entidadeId: "todos"` é sentinela deliberada: a ação não incide sobre uma
+  // linha, e um cuid falso ali faria a exportação aparecer no histórico de um
+  // lead que ela não tocou. `depois` guarda QUANTOS registros saíram — não há
+  // estado "antes"/"depois" numa leitura, e o tamanho do que atravessou a
+  // porta é o que um investigador precisa saber.
+  //
+  // Fail-closed de propósito: se o log não grava, o CSV não sai (o `catch`
+  // abaixo). Servir mesmo assim reabriria exatamente o buraco que este
+  // controle veio fechar; e se a gravação falha, o banco de onde os leads
+  // acabaram de ser lidos já está em apuros. O log é gravado ANTES do envio,
+  // então uma resposta que se perca na rede deixa um registro de exportação
+  // que não chegou — erra para o lado de registrar demais, que é o lado certo
+  // para um log de auditoria.
+  try {
+    await registrarAuditoria({
+      userId: usuario.id,
+      acao: "exportar_leads",
+      entidade: "Lead",
+      entidadeId: "todos",
+      depois: { totalLeads: leads.length },
+      ip: obterIpDaRequisicao(request),
+    });
+  } catch {
+    return NextResponse.json(
+      { erro: "Não foi possível concluir a exportação." },
+      { status: 500 }
+    );
+  }
 
   const cabecalho = ["Contato", "Telefone", "Etapa", "Responsável", "Canal", "Criado em"];
   const linhas = leads.map((lead) =>

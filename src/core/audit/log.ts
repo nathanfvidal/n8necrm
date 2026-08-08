@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { avaliarAtividadeSuspeita } from "./alerta";
 
 /**
  * Registra uma entrada no audit log: quem fez o quê, em qual entidade, com
@@ -41,4 +42,24 @@ export async function registrarAuditoria(params: {
       ip: params.ip,
     },
   });
+
+  // Detecção de rajada destrutiva, avaliada AQUI e não em cada service.
+  //
+  // Este é o único funil por onde toda ação auditável do sistema passa.
+  // Espalhar a chamada pelos services deixaria a regra sujeita à armadilha
+  // clássica desta auditoria — "regra numa tela, esquecida na outra": bastaria
+  // um caminho de exclusão futuro esquecer de chamar, e ele seria justamente
+  // o caminho por onde ninguém veria a sabotagem passar.
+  //
+  // Falha aqui é ENGOLIDA, ao contrário do fail-closed da exportação de leads
+  // (`app/(painel)/export/leads/route.ts`), e a diferença tem razão: lá o log
+  // ERA o registro, então sem ele a operação não podia acontecer. Aqui o
+  // registro já está gravado acima — o alerta é um extra em cima dele.
+  // Derrubar a exclusão de uma tarefa porque um aviso não pôde ser enviado
+  // transformaria um problema de notificação em perda de trabalho do usuário.
+  try {
+    await avaliarAtividadeSuspeita({ userId: params.userId, acao: params.acao });
+  } catch (erro) {
+    console.error("Falha ao avaliar atividade suspeita (auditoria já gravada):", erro);
+  }
 }

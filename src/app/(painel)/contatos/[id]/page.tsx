@@ -77,6 +77,13 @@ export default async function ContatoPage({ params }: { params: Promise<{ id: st
                     <Link href={`/leads/${lead.id}`} className="text-primary underline">
                       {lead.etapaNome}
                     </Link>
+                    {/* Sem esta marca a pessoa vê um lead que não existe mais
+                        no funil e não entende por quê. */}
+                    {lead.arquivado && (
+                      <span className="ml-2 rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
+                        Arquivado
+                      </span>
+                    )}
                   </td>
                   <td className="py-2">{lead.responsavelNome}</td>
                   <td className="py-2 text-muted-foreground">{lead.canal}</td>

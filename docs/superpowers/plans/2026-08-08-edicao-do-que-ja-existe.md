@@ -310,18 +310,34 @@ Acrescentar acima de `arquivadoEm` o comentário:
   // TODA listagem de lead filtra por esta coluna. Ver `core/leads/queries.ts`.
 ```
 
-- [ ] **Passo 2: gerar a migração**
+- [ ] **Passo 2: conferir que a redução de precisão não perde dado**
 
-Rodar: `npx prisma migrate dev --name edicao_arquivar_valor`
-
-Esperado: cria a pasta em `prisma/migrations/` e aplica no banco. A alteração de precisão
-de `valorEstimado` é segura porque a coluna está inteiramente nula — confirme com:
+O banco é compartilhado com produção. `valorEstimado` **tem** valores gravados
+(`prisma/seed-demo.ts` os escreve — a primeira versão desta spec afirmava que a coluna
+estava vazia, e estava errada). Reduzir de `(65,30)` para `(14,2)` arredonda o que tiver
+mais de duas casas e falha no que passar de 999.999.999.999,99.
 
 ```bash
-node -e "require('dotenv').config();const {Client}=require('pg');const c=new Client({connectionString:process.env.DATABASE_URL});c.connect().then(()=>c.query('SELECT count(*) FROM \"Lead\" WHERE \"valorEstimado\" IS NOT NULL')).then(r=>console.log('valores nao nulos:',r.rows[0].count)).finally(()=>c.end())"
+node -e "require('dotenv').config();const {Client}=require('pg');const c=new Client({connectionString:process.env.DATABASE_URL});c.connect().then(()=>c.query('SELECT count(*) FILTER (WHERE \"valorEstimado\" <> round(\"valorEstimado\",2)) AS perderiam, count(*) FILTER (WHERE abs(\"valorEstimado\") >= 1e12) AS estourariam FROM \"Lead\" WHERE \"valorEstimado\" IS NOT NULL')).then(r=>console.log(r.rows[0])).finally(()=>c.end())"
 ```
 
-Esperado: `valores nao nulos: 0`.
+Esperado: `perderiam: '0'`, `estourariam: '0'`. **Se qualquer um for maior que zero, pare
+e pergunte** — a migração perderia dado real.
+
+- [ ] **Passo 3: gerar a migração SEM aplicar**
+
+Rodar: `npx prisma migrate dev --create-only --name edicao_arquivar_valor`
+
+`--create-only` é obrigatório aqui. `migrate dev` sozinho, contra um banco com histórico
+divergente, pode oferecer **resetar o banco** — que apagaria a produção. Gere, leia o SQL
+gerado, e só então aplique.
+
+- [ ] **Passo 4: aplicar**
+
+Rodar: `npx prisma migrate deploy`
+
+`migrate deploy` é o comando feito para produção: aplica migrações pendentes e nunca
+oferece reset.
 
 - [ ] **Passo 3: conferir que o client foi regenerado**
 

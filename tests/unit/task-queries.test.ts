@@ -31,9 +31,9 @@ describe("listarTasksPendentesDoLead", () => {
   beforeAll(async () => {
     await limparDadosDeTeste();
 
-    const admin = await prisma.user.findFirstOrThrow({ where: { papel: "ADMIN" } });
+    const admin = await prisma.user.findFirstOrThrow({ where: { papel: "ADMIN", ativo: true } });
     adminId = admin.id;
-    const vendedor = await prisma.user.findFirstOrThrow({ where: { papel: "VENDEDOR" } });
+    const vendedor = await prisma.user.findFirstOrThrow({ where: { papel: "VENDEDOR", ativo: true } });
     vendedorId = vendedor.id;
 
     // Lead real do seed — não criamos um lead novo aqui pelo mesmo motivo

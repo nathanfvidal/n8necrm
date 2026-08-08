@@ -87,6 +87,7 @@ export type ContatoComHistorico = {
     criadoEm: Date;
     etapaNome: string;
     responsavelNome: string;
+    arquivado: boolean;
   }>;
 };
 
@@ -104,11 +105,16 @@ export async function buscarContatoComHistorico(id: string): Promise<ContatoComH
       email: true,
       criadoEm: true,
       leads: {
+        // Lead arquivado APARECE aqui de propósito — é a exceção da § 8 da
+        // spec. "O que aconteceu com esta pessoa" precisa ser completo; é o
+        // FUNIL que precisa ser limpo. NÃO acrescente `arquivadoEm: null` a
+        // esta consulta: as quatro listagens do funil filtram, esta não.
         orderBy: { criadoEm: "desc" },
         select: {
           id: true,
           canal: true,
           criadoEm: true,
+          arquivadoEm: true,
           stage: { select: { nome: true } },
           // `select` explícito no responsável, NUNCA `include: { responsavel: true }`:
           // aquilo traria a linha inteira de `User`, com `senhaHash`, para
@@ -130,6 +136,7 @@ export async function buscarContatoComHistorico(id: string): Promise<ContatoComH
       criadoEm: lead.criadoEm,
       etapaNome: lead.stage.nome,
       responsavelNome: lead.responsavel?.nome ?? "Sem responsável",
+      arquivado: lead.arquivadoEm !== null,
     })),
   };
 }

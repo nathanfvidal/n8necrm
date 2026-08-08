@@ -86,7 +86,7 @@ describe("criarLead — resiliência a falha do módulo de notificação (spec s
 
   beforeAll(async () => {
     await limparDadosDeTeste();
-    const admin = await prisma.user.findFirstOrThrow({ where: { papel: "ADMIN" } });
+    const admin = await prisma.user.findFirstOrThrow({ where: { papel: "ADMIN", ativo: true } });
     autorId = admin.id;
   });
 

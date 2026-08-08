@@ -42,13 +42,11 @@ describe("LeadForm", () => {
     cleanup();
   });
 
-  it("quem pode atribuir a outra pessoa vê o select com a lista de vendedores", () => {
+  it("todo papel vê o select com a lista de vendedores", () => {
     render(
       <LeadForm
         responsavelPadraoId="user-1"
-        nomeUsuario="Ana Gestora"
         vendedores={vendedores}
-        podeAtribuirOutraPessoa
       />
     );
 
@@ -58,21 +56,21 @@ describe("LeadForm", () => {
     expect(screen.getByRole("option", { name: "Bruno Vendedor" })).toBeTruthy();
   });
 
-  it("quem NÃO pode atribuir a outra pessoa não vê select nem nomes de outras pessoas", () => {
-    render(
-      <LeadForm
-        responsavelPadraoId="user-2"
-        nomeUsuario="Bruno Vendedor"
-        vendedores={[]}
-        podeAtribuirOutraPessoa={false}
-      />
-    );
+  // Esta ramificação foi REMOVIDA, e o teste antigo dizia o contrário do que o
+  // sistema faz hoje: até a auditoria de segurança desta branch, um VENDEDOR
+  // via um campo desabilitado com o próprio nome, porque `criarLeadManual`
+  // clampava a escolha no servidor. O clamp não impedia nada — bastava criar
+  // o lead e reatribuir no clique seguinte, já que `atualizarLead` aceita
+  // qualquer responsável para quem tem `mover_lead`. Decisão do dono: lead é
+  // colaborativo, criar e editar concordam, todo papel escolhe.
+  it("o vendedor escolhe outro responsavel — nao ha mais campo travado", () => {
+    render(<LeadForm responsavelPadraoId="user-2" vendedores={vendedores} />);
 
-    expect(screen.queryByRole("combobox")).toBeNull();
-    // O texto "Você (nome)" mora no `value` de um <input> desabilitado (não
-    // em texto solto de <p>) — é o que torna o Label htmlFor="responsavelId"
-    // uma associação label/control válida nesta ramificação (fix round 1/5).
-    expect(screen.getByDisplayValue("Você (Bruno Vendedor)")).toBeTruthy();
+    const select = screen.getByLabelText("Responsável") as HTMLSelectElement;
+    expect(select.tagName).toBe("SELECT");
+    expect(select.disabled).toBe(false);
+    expect(select.value).toBe("user-2");
+    expect(screen.getByRole("option", { name: "Ana Gestora" })).toBeTruthy();
   });
 
   it("submete sem enviar nenhum identificador de autor e usa o responsavelId escolhido", async () => {
@@ -80,9 +78,7 @@ describe("LeadForm", () => {
     render(
       <LeadForm
         responsavelPadraoId="user-1"
-        nomeUsuario="Ana Gestora"
         vendedores={vendedores}
-        podeAtribuirOutraPessoa
       />
     );
 
@@ -100,20 +96,11 @@ describe("LeadForm", () => {
   });
 
   it(
-    "VENDEDOR (podeAtribuirOutraPessoa=false): a submissão real envia " +
-      "responsavelId === responsavelPadraoId via o input escondido, não um valor " +
-      "digitável — esta é a ramificação que o clamp do servidor (Task 13) existe " +
-      "para proteger, e até agora só tinha cobertura manual em browser",
+    "sem tocar no select, a submissão envia responsavelId === responsavelPadraoId — " +
+      "quem não quer mudar o responsável não precisa fazer nada",
     async () => {
       criarLeadManualMock.mockResolvedValue({ id: "lead-1" });
-      render(
-        <LeadForm
-          responsavelPadraoId="user-2"
-          nomeUsuario="Bruno Vendedor"
-          vendedores={[]}
-          podeAtribuirOutraPessoa={false}
-        />
-      );
+      render(<LeadForm responsavelPadraoId="user-2" vendedores={vendedores} />);
 
       await preencher();
       fireEvent.click(screen.getByRole("button", { name: "Adicionar lead" }));
@@ -130,9 +117,7 @@ describe("LeadForm", () => {
     render(
       <LeadForm
         responsavelPadraoId="user-1"
-        nomeUsuario="Ana Gestora"
         vendedores={vendedores}
-        podeAtribuirOutraPessoa
       />
     );
 
@@ -152,9 +137,7 @@ describe("LeadForm", () => {
     render(
       <LeadForm
         responsavelPadraoId="user-1"
-        nomeUsuario="Ana Gestora"
         vendedores={vendedores}
-        podeAtribuirOutraPessoa
       />
     );
 
@@ -178,9 +161,7 @@ describe("LeadForm", () => {
     render(
       <LeadForm
         responsavelPadraoId="user-1"
-        nomeUsuario="Ana Gestora"
         vendedores={vendedores}
-        podeAtribuirOutraPessoa
       />
     );
 
@@ -201,9 +182,7 @@ describe("LeadForm", () => {
     render(
       <LeadForm
         responsavelPadraoId="user-1"
-        nomeUsuario="Ana Gestora"
         vendedores={vendedores}
-        podeAtribuirOutraPessoa
       />
     );
 

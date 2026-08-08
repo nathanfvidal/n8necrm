@@ -33,6 +33,8 @@ export type LeadLinha = {
   canal: LeadChannel;
   criadoEm: string;
   criadoEmISO: string;
+  /** Só vem preenchido quando a lista está mostrando arquivados (`?arquivados=1`). */
+  arquivado?: boolean;
 };
 
 const columnHelper = createColumnHelper<LeadLinha>();
@@ -43,9 +45,18 @@ const columns = [
     // `/leads/[id]` existe a partir da Task 17 — o nome do contato é o link
     // de entrada para a página de detalhe (dados do lead + notas).
     cell: (info) => (
-      <Link href={`/leads/${info.row.original.id}`} className="font-medium hover:underline">
-        {info.getValue()}
-      </Link>
+      <span className="flex items-center gap-2">
+        <Link href={`/leads/${info.row.original.id}`} className="font-medium hover:underline">
+          {info.getValue()}
+        </Link>
+        {/* Sem esta marca, com `?arquivados=1` ligado a lista mistura lead
+            ativo e arquivado sem nenhuma diferença visível. */}
+        {info.row.original.arquivado && (
+          <span className="rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
+            Arquivado
+          </span>
+        )}
+      </span>
     ),
   }),
   columnHelper.accessor("telefone", {
