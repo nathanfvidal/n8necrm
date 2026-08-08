@@ -15,7 +15,40 @@ vi.mock("@/core/auth/session", () => ({ usuarioAtual: () => usuarioAtualMock() }
 const listarLeadsMock = vi.fn();
 vi.mock("@/core/leads/queries", () => ({ listarLeads: () => listarLeadsMock() }));
 
+// Auditoria e rate limit chegaram na Fase 2 da auditoria de segurança. Os dois
+// são mockados pelo mesmo motivo dos de cima: `@/core/audit/log` importa
+// `@/lib/prisma` (que tem `import "server-only"`), e este arquivo testa a
+// rota, não o banco.
+const registrarAuditoriaMock = vi.fn();
+vi.mock("@/core/audit/log", () => ({
+  registrarAuditoria: (...args: unknown[]) => registrarAuditoriaMock(...args),
+}));
+
+const checarRateLimitMock = vi.fn();
+vi.mock("@/core/rate-limit/limiter", () => ({
+  checarRateLimit: (...args: unknown[]) => checarRateLimitMock(...args),
+}));
+
 const { GET } = await import("../../src/app/(painel)/export/leads/route");
+
+// Política (limite/janela) importada de verdade, não repetida como número
+// solto aqui: se alguém afrouxar a cota no módulo, o teste acompanha em vez
+// de virar um literal desatualizado guardando um valor que não existe mais.
+const { LIMITE_EXPORT_POR_CONTA, JANELA_EXPORT_MS } = await import(
+  "../../src/core/rate-limit/export-leads"
+);
+
+/**
+ * A rota passou a receber a `Request` (antes era `GET()` sem argumento) porque
+ * precisa do IP de origem para a auditoria — `obterIpDaRequisicao` lê header.
+ * `x-vercel-forwarded-for` é o header que a própria borda da Vercel define e
+ * que o cliente não consegue forjar (ver `src/lib/ip.ts`).
+ */
+function requisicaoFake(ip = "203.0.113.7"): Request {
+  return new Request("http://localhost/export/leads", {
+    headers: { "x-vercel-forwarded-for": ip },
+  });
+}
 
 function usuarioFake(overrides: Partial<User>): User {
   return {
@@ -82,13 +115,18 @@ function leadFake(overrides: Partial<LeadFake> = {}): LeadFake {
 beforeEach(() => {
   usuarioAtualMock.mockReset();
   listarLeadsMock.mockReset();
+  // Padrão "caminho feliz" para os dois controles novos, para que os testes
+  // que existiam antes da Fase 2 continuem exercitando o que exercitavam:
+  // dentro da cota, e com a auditoria gravando sem erro.
+  checarRateLimitMock.mockReset().mockResolvedValue(true);
+  registrarAuditoriaMock.mockReset().mockResolvedValue(undefined);
 });
 
 describe("GET /export/leads — autorização", () => {
   it("devolve 401 quando usuarioAtual rejeita (sem sessão OU usuário desativado) e não chama listarLeads", async () => {
     usuarioAtualMock.mockRejectedValue(new Error("Não autenticado"));
 
-    const resposta = await GET();
+    const resposta = await GET(requisicaoFake());
 
     expect(resposta.status).toBe(401);
     expect(await resposta.json()).toEqual({ erro: "Não autenticado" });
@@ -98,7 +136,7 @@ describe("GET /export/leads — autorização", () => {
   it("devolve 403 para VENDEDOR (papel real, sem exportar_leads na matriz) e não chama listarLeads", async () => {
     usuarioAtualMock.mockResolvedValue(usuarioFake({ papel: "VENDEDOR" }));
 
-    const resposta = await GET();
+    const resposta = await GET(requisicaoFake());
 
     expect(resposta.status).toBe(403);
     expect(await resposta.json()).toEqual({ erro: "Sem permissão" });
@@ -109,7 +147,7 @@ describe("GET /export/leads — autorização", () => {
     usuarioAtualMock.mockResolvedValue(usuarioFake({ papel: "ADMIN" }));
     listarLeadsMock.mockResolvedValue([leadFake()]);
 
-    const resposta = await GET();
+    const resposta = await GET(requisicaoFake());
 
     expect(resposta.status).toBe(200);
   });
@@ -118,7 +156,7 @@ describe("GET /export/leads — autorização", () => {
     usuarioAtualMock.mockResolvedValue(usuarioFake({ papel: "GESTOR" }));
     listarLeadsMock.mockResolvedValue([leadFake()]);
 
-    const resposta = await GET();
+    const resposta = await GET(requisicaoFake());
 
     expect(resposta.status).toBe(200);
   });
@@ -129,7 +167,7 @@ describe("GET /export/leads — cabeçalhos do CSV", () => {
     usuarioAtualMock.mockResolvedValue(usuarioFake({ papel: "ADMIN" }));
     listarLeadsMock.mockResolvedValue([leadFake()]);
 
-    const resposta = await GET();
+    const resposta = await GET(requisicaoFake());
 
     expect(resposta.headers.get("Content-Type")).toBe("text/csv; charset=utf-8");
     expect(resposta.headers.get("Content-Disposition")).toBe("attachment; filename=leads.csv");
@@ -147,7 +185,7 @@ describe("GET /export/leads — formato Excel pt-BR", () => {
       usuarioAtualMock.mockResolvedValue(usuarioFake({ papel: "ADMIN" }));
       listarLeadsMock.mockResolvedValue([leadFake()]);
 
-      const resposta = await GET();
+      const resposta = await GET(requisicaoFake());
       const bytes = new Uint8Array(await resposta.arrayBuffer());
 
       expect([bytes[0], bytes[1], bytes[2]]).toEqual([0xef, 0xbb, 0xbf]);
@@ -158,7 +196,7 @@ describe("GET /export/leads — formato Excel pt-BR", () => {
     usuarioAtualMock.mockResolvedValue(usuarioFake({ papel: "ADMIN" }));
     listarLeadsMock.mockResolvedValue([leadFake()]);
 
-    const resposta = await GET();
+    const resposta = await GET(requisicaoFake());
     const corpo = await resposta.text();
     const [cabecalho] = corpo.split("\r\n");
 
@@ -171,7 +209,7 @@ describe("GET /export/leads — formato Excel pt-BR", () => {
       leadFake({ contact: contactFake({ nome: "João Conceição — São Paulo" }) }),
     ]);
 
-    const resposta = await GET();
+    const resposta = await GET(requisicaoFake());
     const corpo = await resposta.text();
 
     expect(corpo).toContain("João Conceição — São Paulo");
@@ -183,7 +221,7 @@ describe("GET /export/leads — formato Excel pt-BR", () => {
       leadFake({ contact: contactFake({ telefone: "11999990000" }) }),
     ]);
 
-    const resposta = await GET();
+    const resposta = await GET(requisicaoFake());
     const corpo = await resposta.text();
 
     expect(corpo).toContain("(11) 99999-0000");
@@ -196,7 +234,7 @@ describe("GET /export/leads — formato Excel pt-BR", () => {
       leadFake({ contact: contactFake({ telefone: "1133330000" }) }),
     ]);
 
-    const resposta = await GET();
+    const resposta = await GET(requisicaoFake());
     const corpo = await resposta.text();
 
     expect(corpo).toContain("(11) 3333-0000");
@@ -206,7 +244,7 @@ describe("GET /export/leads — formato Excel pt-BR", () => {
     usuarioAtualMock.mockResolvedValue(usuarioFake({ papel: "ADMIN" }));
     listarLeadsMock.mockResolvedValue([leadFake({ contact: null })]);
 
-    const resposta = await GET();
+    const resposta = await GET(requisicaoFake());
     const corpo = await resposta.text();
     const [, linha] = corpo.split("\r\n");
 
@@ -218,7 +256,7 @@ describe("GET /export/leads — formato Excel pt-BR", () => {
     usuarioAtualMock.mockResolvedValue(usuarioFake({ papel: "ADMIN" }));
     listarLeadsMock.mockResolvedValue([leadFake({ responsavel: null })]);
 
-    const resposta = await GET();
+    const resposta = await GET(requisicaoFake());
     const corpo = await resposta.text();
     const [, linha] = corpo.split("\r\n");
 
@@ -229,7 +267,7 @@ describe("GET /export/leads — formato Excel pt-BR", () => {
     usuarioAtualMock.mockResolvedValue(usuarioFake({ papel: "ADMIN" }));
     listarLeadsMock.mockResolvedValue([leadFake({ canal: "WHATSAPP", contact: null })]);
 
-    const resposta = await GET();
+    const resposta = await GET(requisicaoFake());
     const corpo = await resposta.text();
 
     expect(corpo).toContain("WhatsApp");
@@ -242,7 +280,7 @@ describe("GET /export/leads — formato Excel pt-BR", () => {
       leadFake({ criadoEm: new Date("2026-08-02T12:34:00.000Z") }),
     ]);
 
-    const resposta = await GET();
+    const resposta = await GET(requisicaoFake());
     const corpo = await resposta.text();
 
     expect(corpo).toContain("02/08/2026 09:34");
@@ -260,7 +298,7 @@ describe("GET /export/leads — injeção de fórmula CSV (CSV injection)", () =
         leadFake({ contact: contactFake({ nome: '=cmd|"/c calc"!A1' }) }),
       ]);
 
-      const resposta = await GET();
+      const resposta = await GET(requisicaoFake());
       const corpo = await resposta.text();
       const [, linhaDoLead] = corpo.split("\r\n");
 
@@ -278,7 +316,7 @@ describe("GET /export/leads — injeção de fórmula CSV (CSV injection)", () =
     usuarioAtualMock.mockResolvedValue(usuarioFake({ papel: "ADMIN" }));
     listarLeadsMock.mockResolvedValue([leadFake({ contact: contactFake({ nome: "+1+1" }) })]);
 
-    const resposta = await GET();
+    const resposta = await GET(requisicaoFake());
     const corpo = await resposta.text();
 
     expect(corpo).toContain("'+1+1");
@@ -289,7 +327,7 @@ describe("GET /export/leads — injeção de fórmula CSV (CSV injection)", () =
     usuarioAtualMock.mockResolvedValue(usuarioFake({ papel: "ADMIN" }));
     listarLeadsMock.mockResolvedValue([leadFake({ contact: contactFake({ nome: "-1+1" }) })]);
 
-    const resposta = await GET();
+    const resposta = await GET(requisicaoFake());
     const corpo = await resposta.text();
 
     expect(corpo).toContain("'-1+1");
@@ -301,7 +339,7 @@ describe("GET /export/leads — injeção de fórmula CSV (CSV injection)", () =
       leadFake({ contact: contactFake({ nome: "@SUM(1,1)" }) }),
     ]);
 
-    const resposta = await GET();
+    const resposta = await GET(requisicaoFake());
     const corpo = await resposta.text();
 
     expect(corpo).toContain("'@SUM(1,1)");
@@ -313,7 +351,7 @@ describe("GET /export/leads — injeção de fórmula CSV (CSV injection)", () =
       leadFake({ contact: contactFake({ nome: "Carlos = Silva" }) }),
     ]);
 
-    const resposta = await GET();
+    const resposta = await GET(requisicaoFake());
     const corpo = await resposta.text();
 
     expect(corpo).toContain("Carlos = Silva");
@@ -327,7 +365,7 @@ describe("GET /export/leads — injeção de fórmula CSV (CSV injection)", () =
       usuarioAtualMock.mockResolvedValue(usuarioFake({ papel: "ADMIN" }));
       listarLeadsMock.mockResolvedValue([leadFake({ contact: contactFake({ nome: " =1+1" }) })]);
 
-      const resposta = await GET();
+      const resposta = await GET(requisicaoFake());
       const corpo = await resposta.text();
       const [, linhaDoLead] = corpo.split("\r\n");
 
@@ -344,7 +382,7 @@ describe("GET /export/leads — injeção de fórmula CSV (CSV injection)", () =
     usuarioAtualMock.mockResolvedValue(usuarioFake({ papel: "ADMIN" }));
     listarLeadsMock.mockResolvedValue([leadFake({ contact: contactFake({ nome: " Ana Paula" }) })]);
 
-    const resposta = await GET();
+    const resposta = await GET(requisicaoFake());
     const corpo = await resposta.text();
     const [, linhaDoLead] = corpo.split("\r\n");
 
@@ -357,7 +395,7 @@ describe("GET /export/leads — injeção de fórmula CSV (CSV injection)", () =
       leadFake({ contact: contactFake({ nome: "\tCarlos" }) }),
     ]);
 
-    const resposta = await GET();
+    const resposta = await GET(requisicaoFake());
     const corpo = await resposta.text();
     const [, linhaDoLead] = corpo.split("\r\n");
 
@@ -370,7 +408,7 @@ describe("GET /export/leads — injeção de fórmula CSV (CSV injection)", () =
       leadFake({ contact: contactFake({ nome: "\rCarlos" }) }),
     ]);
 
-    const resposta = await GET();
+    const resposta = await GET(requisicaoFake());
     const corpo = await resposta.text();
 
     // O valor contém \r, então também cai na regra de quoting (item 4 da
@@ -387,7 +425,7 @@ describe("GET /export/leads — escapaCampoCsv (aspas, ';', quebra de linha)", (
       leadFake({ contact: contactFake({ nome: "Silva; Sobrenome" }) }),
     ]);
 
-    const resposta = await GET();
+    const resposta = await GET(requisicaoFake());
     const corpo = await resposta.text();
 
     expect(corpo).toContain('"Silva; Sobrenome"');
@@ -399,7 +437,7 @@ describe("GET /export/leads — escapaCampoCsv (aspas, ';', quebra de linha)", (
       leadFake({ contact: contactFake({ nome: 'Nome "Apelido" Sobrenome' }) }),
     ]);
 
-    const resposta = await GET();
+    const resposta = await GET(requisicaoFake());
     const corpo = await resposta.text();
 
     expect(corpo).toContain('"Nome ""Apelido"" Sobrenome"');
@@ -411,7 +449,7 @@ describe("GET /export/leads — escapaCampoCsv (aspas, ';', quebra de linha)", (
       leadFake({ contact: contactFake({ nome: "Linha1\nLinha2" }) }),
     ]);
 
-    const resposta = await GET();
+    const resposta = await GET(requisicaoFake());
     const corpo = await resposta.text();
 
     expect(corpo).toContain('"Linha1\nLinha2"');
@@ -423,10 +461,121 @@ describe("GET /export/leads — escapaCampoCsv (aspas, ';', quebra de linha)", (
       leadFake({ contact: contactFake({ nome: "Silva, Sobrenome" }) }),
     ]);
 
-    const resposta = await GET();
+    const resposta = await GET(requisicaoFake());
     const corpo = await resposta.text();
 
     expect(corpo).toContain("Silva, Sobrenome;(11) 99999-0000");
+  });
+});
+
+// --- Fase 2 da auditoria de segurança -------------------------------------
+//
+// Achado: esta rota é o ÚNICO caminho do sistema desenhado para extrair a base
+// inteira de clientes (nome + telefone de todo lead) num arquivo só, e não
+// deixava rastro nenhum. A permissão (`exportar_leads`, ADMIN/GESTOR) diz QUEM
+// pode; nada dizia QUE aconteceu. Uma sessão roubada de gestor, ou um insider
+// de saída, levava a base completa sem produzir uma linha sequer para alguém
+// investigar depois — e é justamente a extração em massa de dado pessoal que
+// mais importa poder reconstituir.
+//
+// Auditoria e limite atacam coisas diferentes, de propósito: o log torna a
+// extração VISÍVEL (é o controle que responde à sabotagem), o limite bota
+// TETO no volume. Nenhum dos dois substitui o outro.
+describe("GET /export/leads — auditoria da extração em massa", () => {
+  it("exportação bem-sucedida grava quem exportou, de qual IP e QUANTOS registros saíram", async () => {
+    usuarioAtualMock.mockResolvedValue(usuarioFake({ id: "gestor-7", papel: "GESTOR" }));
+    listarLeadsMock.mockResolvedValue([leadFake({ id: "lead-1" }), leadFake({ id: "lead-2" })]);
+
+    const resposta = await GET(requisicaoFake("198.51.100.20"));
+
+    expect(resposta.status).toBe(200);
+    expect(registrarAuditoriaMock).toHaveBeenCalledTimes(1);
+    expect(registrarAuditoriaMock).toHaveBeenCalledWith({
+      userId: "gestor-7",
+      acao: "exportar_leads",
+      entidade: "Lead",
+      entidadeId: "todos",
+      depois: { totalLeads: 2 },
+      ip: "198.51.100.20",
+    });
+  });
+
+  it("401 (sem sessão) não grava auditoria nem consome cota — não houve exportação para registrar", async () => {
+    usuarioAtualMock.mockRejectedValue(new Error("Não autenticado"));
+
+    const resposta = await GET(requisicaoFake());
+
+    expect(resposta.status).toBe(401);
+    expect(registrarAuditoriaMock).not.toHaveBeenCalled();
+    expect(checarRateLimitMock).not.toHaveBeenCalled();
+  });
+
+  it("403 (VENDEDOR, sem exportar_leads) não grava auditoria nem consome cota", async () => {
+    usuarioAtualMock.mockResolvedValue(usuarioFake({ papel: "VENDEDOR" }));
+
+    const resposta = await GET(requisicaoFake());
+
+    expect(resposta.status).toBe(403);
+    expect(registrarAuditoriaMock).not.toHaveBeenCalled();
+    expect(checarRateLimitMock).not.toHaveBeenCalled();
+  });
+
+  // Fail-closed, e é uma decisão, não um descuido: o controle existe para que
+  // nenhuma extração em massa de dado pessoal saia sem rastro. Entregar o CSV
+  // quando a gravação do log falhou reabriria exatamente o buraco que ele veio
+  // fechar — e, na prática, se o log não grava é porque o banco de onde os
+  // leads acabaram de ser lidos está em apuros de qualquer jeito.
+  it("auditoria que falha derruba a exportação: 500, e nenhum dado de cliente no corpo", async () => {
+    usuarioAtualMock.mockResolvedValue(usuarioFake({ papel: "ADMIN" }));
+    listarLeadsMock.mockResolvedValue([
+      leadFake({ contact: contactFake({ nome: "Maria Sigilosa" }) }),
+    ]);
+    registrarAuditoriaMock.mockRejectedValue(new Error("banco indisponível"));
+
+    const resposta = await GET(requisicaoFake());
+
+    expect(resposta.status).toBe(500);
+    expect(await resposta.text()).not.toContain("Maria Sigilosa");
+  });
+});
+
+describe("GET /export/leads — limite de taxa por conta", () => {
+  it("a chave da cota carrega o id do usuário, com o limite e a janela da política", async () => {
+    usuarioAtualMock.mockResolvedValue(usuarioFake({ id: "admin-9", papel: "ADMIN" }));
+    listarLeadsMock.mockResolvedValue([leadFake()]);
+
+    await GET(requisicaoFake());
+
+    expect(checarRateLimitMock).toHaveBeenCalledWith(
+      "export:leads:admin-9",
+      LIMITE_EXPORT_POR_CONTA,
+      JANELA_EXPORT_MS
+    );
+  });
+
+  it("cota estourada: 429, sem ler lead nenhum do banco e sem gravar auditoria", async () => {
+    usuarioAtualMock.mockResolvedValue(usuarioFake({ papel: "ADMIN" }));
+    checarRateLimitMock.mockResolvedValue(false);
+
+    const resposta = await GET(requisicaoFake());
+
+    expect(resposta.status).toBe(429);
+    expect(listarLeadsMock).not.toHaveBeenCalled();
+    expect(registrarAuditoriaMock).not.toHaveBeenCalled();
+  });
+
+  // O limite roda DEPOIS da autorização (provado pelos dois testes de 401/403
+  // acima, que exigem `checarRateLimit` não chamado) e ANTES da consulta: uma
+  // requisição barrada não pode custar a leitura da base inteira, senão o
+  // controle que existe para conter abuso paga o preço do abuso.
+  it("dentro da cota, a consulta acontece e o CSV é entregue", async () => {
+    usuarioAtualMock.mockResolvedValue(usuarioFake({ papel: "ADMIN" }));
+    listarLeadsMock.mockResolvedValue([leadFake()]);
+
+    const resposta = await GET(requisicaoFake());
+
+    expect(resposta.status).toBe(200);
+    expect(listarLeadsMock).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -438,7 +587,7 @@ describe("GET /export/leads — múltiplos leads", () => {
       leadFake({ id: "lead-2", contact: contactFake({ nome: "Segundo" }) }),
     ]);
 
-    const resposta = await GET();
+    const resposta = await GET(requisicaoFake());
     const corpo = await resposta.text();
     const linhas = corpo.split("\r\n");
 
