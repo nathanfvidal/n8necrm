@@ -31,6 +31,44 @@ export type NovoLeadPayload = { leadId: string; contatoNome: string };
  *    decide o fallback (ver `notification-bell.tsx`), em vez de o app
  *    quebrar ao tentar ler um campo que não existe.
  */
+/**
+ * Tipo e formato do alerta de rajada destrutiva (`core/audit/alerta.ts`).
+ *
+ * Moram AQUI, e não junto da detecção, pela mesma razão que `NovoLeadPayload`
+ * mora aqui: `alerta.ts` tem `import "server-only"`, e o sino
+ * (`notification-bell.tsx`) é Client Component — importar de lá quebraria o
+ * build. Este arquivo é a fronteira comum: sem Prisma, sem segredo, sem
+ * `server-only`.
+ */
+export const TIPO_ALERTA_ATIVIDADE = "ALERTA_ATIVIDADE";
+
+/**
+ * Só o NOME de quem agiu, quantas ações e em que janela. Nada de e-mail ou id
+ * de entidade: este payload é copiado para uma linha por ADMIN e fica legível
+ * no sino de cada um — espalhar identificação além do necessário é o padrão
+ * que a auditoria já marcou como risco em outra notificação deste projeto.
+ */
+export type AlertaAtividadePayload = {
+  autorNome: string;
+  total: number;
+  janelaMinutos: number;
+};
+
+/** Contraparte de `extrairPayloadNovoLead` para o alerta de atividade. */
+export function extrairPayloadAlertaAtividade(payload: unknown): AlertaAtividadePayload | null {
+  if (
+    payload !== null &&
+    typeof payload === "object" &&
+    !Array.isArray(payload) &&
+    typeof (payload as Record<string, unknown>).autorNome === "string" &&
+    typeof (payload as Record<string, unknown>).total === "number" &&
+    typeof (payload as Record<string, unknown>).janelaMinutos === "number"
+  ) {
+    return payload as AlertaAtividadePayload;
+  }
+  return null;
+}
+
 export function extrairPayloadNovoLead(payload: unknown): NovoLeadPayload | null {
   if (
     payload !== null &&

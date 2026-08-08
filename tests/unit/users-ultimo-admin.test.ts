@@ -1,5 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
+// `registrarAuditoria` (`core/audit/log.ts`) passou a importar
+// `core/audit/alerta.ts` para a detecção de rajada destrutiva, e aquele
+// módulo tem `import "server-only"` — que sempre lança fora do pipeline de
+// build do Next (ver `tests/unit/storage.test.ts`, onde este mock foi
+// documentado pela primeira vez). O `users/service.ts` testado aqui chama
+// `registrarAuditoria`, então sem este mock o arquivo inteiro quebra na
+// importação, não por causa da regra testada.
+vi.mock("server-only", () => ({}));
+
 /**
  * Proteção do último administrador ativo — o único estrago desta tela que não
  * tem volta pela interface: sem nenhum ADMIN ativo, ninguém consegue promover

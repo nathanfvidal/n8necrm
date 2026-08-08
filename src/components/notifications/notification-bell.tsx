@@ -6,7 +6,11 @@ import Link from "next/link";
 import { Bell } from "lucide-react";
 
 import { marcarNotificacaoComoLidaAction } from "@/core/notifications/actions";
-import { extrairPayloadNovoLead } from "@/core/notifications/types";
+import {
+  extrairPayloadNovoLead,
+  extrairPayloadAlertaAtividade,
+  TIPO_ALERTA_ATIVIDADE,
+} from "@/core/notifications/types";
 
 export type NotificacaoNaoLida = {
   id: string;
@@ -135,6 +139,15 @@ export function NotificationBell({ notificacoes: iniciais }: { notificacoes: Not
                 const dadosNovoLead =
                   notificacao.tipo === "NOVO_LEAD" ? extrairPayloadNovoLead(notificacao.payload) : null;
 
+                // Alerta de rajada destrutiva (`core/audit/alerta.ts`). Sem
+                // este ramo ele cairia no fallback "Notificação" abaixo — um
+                // aviso de possível sabotagem indistinguível de qualquer
+                // outra coisa é o mesmo que não avisar.
+                const dadosAlerta =
+                  notificacao.tipo === TIPO_ALERTA_ATIVIDADE
+                    ? extrairPayloadAlertaAtividade(notificacao.payload)
+                    : null;
+
                 return (
                   <li
                     key={notificacao.id}
@@ -150,6 +163,21 @@ export function NotificationBell({ notificacoes: iniciais }: { notificacoes: Not
                             onClick={() => setAberto(false)}
                           >
                             Ver lead
+                          </Link>
+                        </>
+                      ) : dadosAlerta ? (
+                        <>
+                          <p className="font-medium text-red-600">Atividade incomum</p>
+                          <p>
+                            {dadosAlerta.autorNome} fez {dadosAlerta.total} ações destrutivas em{" "}
+                            {dadosAlerta.janelaMinutos} minutos.
+                          </p>
+                          <Link
+                            href="/"
+                            className="text-xs text-primary underline"
+                            onClick={() => setAberto(false)}
+                          >
+                            Ver atividade recente
                           </Link>
                         </>
                       ) : (
