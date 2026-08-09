@@ -13,6 +13,12 @@ import { render, screen, cleanup } from "@testing-library/react";
 // outro desligado. Com um único módulo de verdade (`whatsapp`), provar o caso
 // "não aparece" exige trocar a lista entre um teste e outro; um mock fixo só
 // conseguiria testar metade.
+//
+// `nome`/`marca` entraram junto com a reforma da barra lateral: `PainelNav`
+// agora renderiza `<Marca />` (Task 5) duas vezes (aside e gaveta), e o
+// componente lê `client.nome`/`client.marca.logo` — sem esses dois campos
+// aqui, o render quebra com "Cannot read properties of undefined". Mesmo
+// formato de `marca.test.tsx`, sem `logo` para cair no caminho de texto.
 const mocks = vi.hoisted(() => ({ modulos: ["whatsapp"] as string[] }));
 
 vi.mock("../../config/client", () => ({
@@ -20,6 +26,8 @@ vi.mock("../../config/client", () => ({
     get modulos() {
       return mocks.modulos;
     },
+    nome: "AutoCenter",
+    marca: { nome: "AutoCenter", corPrimaria: "#0F62FE", fonte: "Geist" },
   },
 }));
 
@@ -37,6 +45,7 @@ vi.mock("@/core/notifications/actions", () => ({
 }));
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: vi.fn() }),
+  usePathname: () => "/",
 }));
 
 // O botão "Sair" usa uma Server Action de `@/core/auth/actions`, que importa
@@ -130,5 +139,23 @@ describe("PainelNav", () => {
   it("não quebra quando o nome não é informado", () => {
     render(<PainelNav />);
     expect(screen.queryByTestId("usuario-logado")).toBeNull();
+  });
+
+  it("mostra o nome do usuario no rodape da barra", () => {
+    render(<PainelNav nomeUsuario="Rodrigo" papelUsuario="ADMIN" />);
+    expect(screen.getByTestId("usuario-logado").textContent).toContain("Rodrigo");
+  });
+
+  it("mantem o logout como form, nunca como link", () => {
+    const { container } = render(<PainelNav nomeUsuario="Rodrigo" papelUsuario="ADMIN" />);
+    // GET que desloga e disparavel por <img src> de qualquer site.
+    expect(container.querySelector("form")).toBeTruthy();
+    expect(screen.queryByRole("link", { name: /Sair/ })).toBeNull();
+  });
+
+  it("nao renderiza regua para VENDEDOR com o modulo desligado", () => {
+    mocks.modulos = [];
+    const { container } = render(<PainelNav nomeUsuario="Ana" papelUsuario="VENDEDOR" />);
+    expect(container.querySelectorAll("hr")).toHaveLength(0);
   });
 });

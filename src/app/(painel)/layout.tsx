@@ -87,7 +87,7 @@ export default async function PainelLayout({ children }: { children: React.React
   );
 
   return (
-    <div className="min-h-screen">
+    <div className="flex min-h-screen flex-col lg:flex-row">
       {/* `papelUsuario` alimenta o link de "Equipe", que só ADMIN vê.
           `PainelNav` é síncrona e não tem acesso à sessão — o papel vem daqui,
           do `usuario` que `usuarioAtual()` já resolveu, sem consulta nova. */}
@@ -96,7 +96,7 @@ export default async function PainelLayout({ children }: { children: React.React
         nomeUsuario={usuario.nome}
         papelUsuario={usuario.papel}
       />
-      <main>{children}</main>
+      <main className="flex-1">{children}</main>
     </div>
   );
 }
