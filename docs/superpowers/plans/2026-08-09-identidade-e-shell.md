@@ -1230,10 +1230,12 @@ vi.mock("next/navigation", () => ({ usePathname: () => mocks.caminho }));
 // artefato de teste no código de produção.
 const linksRenderizados = vi.hoisted(() => [] as { href: string; prefetch: unknown }[]);
 vi.mock("next/link", () => ({
-  default: ({ href, prefetch, children, ...resto }: never) => {
-    const props = { href, prefetch } as { href: string; prefetch: unknown };
-    linksRenderizados.push(props);
-    return <a href={props.href} {...(resto as object)}>{children as React.ReactNode}</a>;
+  // `Record<string, unknown>` e não `never`: rest só pode ser criado a partir
+  // de tipo de objeto, e `never` faz o `tsc` recusar com TS2700 — apesar de o
+  // Vitest passar, porque o esbuild descarta tipos sem checar.
+  default: ({ href, prefetch, children, ...resto }: Record<string, unknown>) => {
+    linksRenderizados.push({ href: href as string, prefetch });
+    return <a href={href as string} {...resto}>{children as React.ReactNode}</a>;
   },
 }));
 
