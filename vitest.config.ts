@@ -28,6 +28,5 @@ export default defineConfig({
     // arquivos em sequência elimina a corrida; a suíte inteira ainda é
     // pequena o bastante pra isso não custar nada perceptível.
     fileParallelism: false,
-    setupFiles: ["tests/vitest.setup.ts"],
   },
 });
