@@ -1004,6 +1004,14 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
       className={`${fonte.variable} ${geistMono.variable} h-full antialiased`}
     >
       <head>
+        {/*
+          `dangerouslySetInnerHTML` é a única forma de emitir CSS inline em
+          React, e aqui não há superfície de injeção: `tema` é constante de
+          build derivada de `config/client.ts` — arquivo versionado, não
+          entrada de usuário — e todo valor passa por `formatarOklch`, que
+          emite exclusivamente números. Nenhum texto do config chega a este
+          string.
+        */}
         <style dangerouslySetInnerHTML={{ __html: tema }} />
       </head>
       <body className="min-h-full flex flex-col">{children}</body>
@@ -1209,6 +1217,19 @@ import { LayoutDashboard, Target, Columns3 } from "lucide-react";
 const mocks = vi.hoisted(() => ({ caminho: "/" }));
 vi.mock("next/navigation", () => ({ usePathname: () => mocks.caminho }));
 
+// `next/link` mockado para INSPECIONAR as props. `prefetch` não vira atributo
+// no DOM, então sem isto não há como provar que a proteção está em todos os
+// links — e a alternativa (um atributo espelho `data-prefetch`) colocaria
+// artefato de teste no código de produção.
+const linksRenderizados = vi.hoisted(() => [] as { href: string; prefetch: unknown }[]);
+vi.mock("next/link", () => ({
+  default: ({ href, prefetch, children, ...resto }: never) => {
+    const props = { href, prefetch } as { href: string; prefetch: unknown };
+    linksRenderizados.push(props);
+    return <a href={props.href} {...(resto as object)}>{children as React.ReactNode}</a>;
+  },
+}));
+
 import { NavLinks } from "@/components/nav-links";
 
 const GRUPO_A = [
@@ -1220,6 +1241,7 @@ const GRUPO_A = [
 afterEach(() => {
   cleanup();
   mocks.caminho = "/";
+  linksRenderizados.length = 0;
 });
 
 describe("NavLinks", () => {
@@ -1248,8 +1270,9 @@ describe("NavLinks", () => {
   // protegida, a resposta chega depois do logout e o Auth.js reemite o cookie.
   it("põe prefetch=false em TODOS os links", () => {
     render(<NavLinks grupos={[GRUPO_A]} />);
-    for (const link of screen.getAllByRole("link")) {
-      expect(link).toHaveAttribute("data-prefetch", "false");
+    expect(linksRenderizados).toHaveLength(3);
+    for (const link of linksRenderizados) {
+      expect(link.prefetch).toBe(false);
     }
   });
 
@@ -1320,7 +1343,6 @@ export function NavLinks({ grupos }: { grupos: LinkDoPainel[][] }) {
               key={href}
               href={href}
               prefetch={false}
-              data-prefetch="false"
               aria-current={href === ativo ? "page" : undefined}
               className={
                 href === ativo
@@ -1339,9 +1361,9 @@ export function NavLinks({ grupos }: { grupos: LinkDoPainel[][] }) {
 }
 ```
 
-> `data-prefetch="false"` existe **só para o teste**: `prefetch` não vira atributo no DOM,
-> então sem esse espelho não há como provar que a proteção está em todos os links. É barato
-> e é o que trava a regressão do logout.
+> Nada de atributo espelho no código de produção. `prefetch` não aparece no DOM, e a prova
+> de que ele está em todos os links vem do mock de `next/link` no teste, que inspeciona as
+> props diretamente. É esse teste que trava a regressão do logout.
 
 - [ ] **Passo 4: rodar e confirmar que passa**
 
