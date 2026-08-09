@@ -30,6 +30,28 @@ navegação passa a comportar o crescimento por módulo e a tela pequena.
 **White-label por cliente.** Cada fork veste a marca do cliente. `config/client.marca` é a
 fonte, e passa a ser lida de verdade.
 
+### 2.1 A referência visual ✅
+
+**O painel da Vercel.** Ela define coisas que nenhuma regra de token define sozinha:
+
+| Traço da referência | Consequência aqui |
+|---|---|
+| Tipografia **Geist** | já é a fonte carregada em `layout.tsx` — custo zero |
+| Ícone monocromático + rótulo por item | `lucide-react` já é dependência e já é usada |
+| Ativo = preenchimento **neutro** arredondado | não é barra colorida nem cor de marca |
+| Grupos separados por régua fina | os 7 links deixam de ser uma lista plana |
+| Usuário, tema e sino no **rodapé da barra** | some a barra superior no desktop |
+| **Superfícies quase sem cor** | ver o aviso abaixo |
+
+> ⚠️ **Isto contradiz a § 5.4 da primeira versão desta spec.** Lá eu defendi croma
+> perceptível nas superfícies como o que separa white-label de "trocamos a cor do botão".
+> A referência escolhida diz o contrário: a contenção **é** o design, e o cinza é cinza.
+>
+> A § 5.4 foi reescrita para a resolução que mantém os dois valores: **a marca vive na
+> ação** — botão, foco, gráfico — e as superfícies ficam praticamente neutras, com um
+> sussurro de croma que o olho lê como temperatura sem ler como cor. Os multiplicadores da
+> § 5.3 caíram de 3 a 5 vezes.
+
 ## 3. Restrições medidas ✅
 
 Do `src/proxy.ts:123-131`, não de suposição:
@@ -135,21 +157,20 @@ invariante da § 9**, não estes números.
 
 **Claro**
 
-| Token | L | C | H |
-|---|---|---|---|
-| `--background` | 0.99 | `min(C×0.03, 0.006)` | H |
-| `--foreground` | 0.15 | `min(C×0.10, 0.02)` | H |
-| `--card`, `--popover` | 1.00 | 0 | — |
-| `--primary` | ajustado (§ 5.2) | C | H |
-| `--primary-foreground` | calculado (§ 5.2) | 0 | — |
-| `--secondary`, `--muted` | 0.96 | `C×0.05` | H |
-| `--muted-foreground` | 0.55 | `C×0.10` | H |
-| `--accent` | 0.94 | `C×0.15` | H |
-| `--border`, `--input` | 0.90 | `C×0.08` | H |
-| `--ring` | = `--primary` | | |
-| `--sidebar` | 0.97 | `C×0.06` | H |
-| `--sidebar-accent` | 0.93 | `C×0.14` | H |
-| `--destructive` | 0.58 | **0.22** | **27** |
+| Token | L | C |
+|---|---|---|
+| `--background`, `--card`, `--popover` | 1.00 | **0** |
+| `--foreground` | 0.15 | `min(C×0.04, 0.008)` |
+| `--primary` | ajustado (§ 5.2) | **C** (cheio) |
+| `--primary-foreground` | calculado (§ 5.2) | 0 |
+| `--ring` | = `--primary` | |
+| `--secondary`, `--muted` | 0.97 | `min(C×0.03, 0.006)` |
+| `--muted-foreground` | 0.55 | `min(C×0.05, 0.010)` |
+| `--accent` | 0.95 | `min(C×0.06, 0.012)` |
+| `--border`, `--input` | 0.92 | `min(C×0.04, 0.008)` |
+| `--sidebar` | 0.985 | `min(C×0.03, 0.006)` |
+| `--sidebar-accent` | 0.95 | `min(C×0.05, 0.010)` |
+| `--destructive` | 0.58 | **0.22** (H 27) |
 
 **Escuro** — tabela própria, **não** espelhamento de `L`. Espelhar 0.99 em torno de 0.5
 daria fundo 0.01, ou seja, preto absoluto: superfícies deixam de se distinguir umas das
@@ -157,16 +178,17 @@ outras e o contorno some.
 
 | Token | L | C |
 |---|---|---|
-| `--background` | 0.15 | `min(C×0.03, 0.008)` |
-| `--foreground` | 0.97 | `min(C×0.06, 0.015)` |
-| `--card`, `--popover` | 0.19 | `C×0.03` |
-| `--secondary`, `--muted` | 0.25 | `C×0.06` |
-| `--muted-foreground` | 0.68 | `C×0.08` |
-| `--accent` | 0.29 | `C×0.14` |
-| `--border`, `--input` | 0.31 | `C×0.08` |
-| `--sidebar` | 0.17 | `C×0.05` |
-| `--sidebar-accent` | 0.27 | `C×0.13` |
+| `--background`, `--sidebar` | 0.13 | **0** |
+| `--card`, `--popover` | 0.16 | `min(C×0.03, 0.006)` |
+| `--foreground` | 0.97 | `min(C×0.03, 0.006)` |
+| `--secondary`, `--muted` | 0.22 | `min(C×0.04, 0.008)` |
+| `--muted-foreground` | 0.70 | `min(C×0.04, 0.008)` |
+| `--accent`, `--sidebar-accent` | 0.26 | `min(C×0.06, 0.012)` |
+| `--border`, `--input` | 0.28 | `min(C×0.05, 0.010)` |
 | `--destructive` | 0.62 | **0.20** (H 27) |
+
+O tema **escuro é o principal** — é o da referência. Barra e conteúdo compartilham o mesmo
+fundo (`L 0.13`), e a separação entre eles vem da régua, não de dois tons.
 
 `--primary` roda **o mesmo laço da § 5.2 outra vez**, agora contra o fundo escuro — não
 reaproveita o resultado do tema claro. Na prática ela sai mais clara, porque acento escuro
@@ -187,46 +209,110 @@ Duas defesas:
 > acompanha — matiz sozinho falha para daltônicos, e cinco matizes num arco de 160° falham
 > mais.
 
-### 5.4 Croma baixo nas superfícies, e o vermelho fora ✅
+### 5.4 Onde a marca aparece, e onde não ✅
 
-**Por que `secondary`, `muted`, `border` e `background` recebem croma:** é o que separa
-white-label de verdade de "trocamos a cor do botão". Fundo, cartão e hover ficam levemente
-tingidos, e a ferramenta inteira parece do cliente.
+*(Reescrita depois da referência da § 2.1.)*
+
+**A marca vive na ação, não na superfície.** Ela aparece com força em três lugares —
+`--primary` (botão, link), `--ring` (foco) e os cinco tokens de gráfico. Fundo, cartão,
+barra lateral e borda ficam praticamente neutros.
+
+**O sussurro de croma nas superfícies não é meio-termo covarde.** Os tetos absolutos
+(`0.006` a `0.012`) estão abaixo do limiar em que o olho nomeia uma cor, mas acima do
+limiar em que ele percebe **temperatura**. Numa tela inteira, uma marca fria e uma marca
+quente produzem ambientes distintos sem que nada pareça colorido — que é exatamente o
+efeito da referência. Croma zero em tudo entregaria o mesmo cinza para todo cliente, e a
+premissa do white-label morreria de um jeito difícil de perceber e fácil de justificar.
 
 **Por que `--destructive` é fixo:** num cliente de marca vermelha, derivar destruição da
 marca deixaria "Excluir" visualmente idêntico a "Salvar". É segurança de interface, não
-preferência.
+preferência — e a contenção da referência torna isso **mais** importante, porque num
+ambiente quase sem cor o vermelho é praticamente o único sinal de perigo que sobra.
 
 ## 6. Fonte e logo ✅
 
-### 6.1 Fonte
+### 6.1 Fonte ✅
 
-`marca.fonte` vira `z.enum(["Inter", "Geist", "Manrope", "IBM Plex Sans"])` 🟡 — a lista é
+**`Geist` é o padrão** — é a fonte da referência (§ 2.1) e **já é a que `layout.tsx`
+carrega**. O trabalho aqui é ligar o valor do config à variável CSS, não trocar de
+tipografia.
+
+`marca.fonte` vira `z.enum(["Geist", "Inter", "Manrope", "IBM Plex Sans"])` 🟡 — a lista é
 ajustável, o mecanismo não. Fork que escreva um nome fora dela falha no build.
 
 Todas as fontes da lista entram no bundle e só a escolhida é aplicada via variável CSS.
 Para quatro fontes isso é irrelevante e evita um passo de geração de código. Se a lista
 crescer muito, aí vale reconsiderar.
 
-### 6.2 Logo
+`--font-mono` continua Geist Mono, sem entrar no config: nenhuma tela mostra código, e o
+único uso é herdado do `create-next-app`.
 
-`public/logo.svg` passa a existir — hoje o caminho declarado aponta para o vazio.
+### 6.2 Logo — adiado ✅
 
-Componente `<Marca>`: `<img src={client.marca.logo} alt={client.nome}>`. Sem
-`next/image` (SVG não se beneficia do otimizador) e sem `onError` (exigiria componente de
-cliente). **Fork sem logo mostra o nome do cliente como texto**, porque é o que o navegador
-faz com `alt` de imagem quebrada — degradação de graça.
+**`marca.logo` passa a ser opcional** (`z.string().optional()`), e nenhum arquivo de logo
+entra agora.
+
+Componente `<Marca>`, com dois caminhos:
+
+- **Com logo:** `<img src={client.marca.logo} alt={client.nome}>`. Sem `next/image` (SVG
+  não se beneficia do otimizador) e sem `onError` (exigiria componente de cliente).
+- **Sem logo (o caso de hoje):** renderiza `client.nome` como texto, na fonte da marca,
+  com peso semibold — não é remendo, é o estado normal enquanto não houver arquivo.
+
+O caminho de texto é o mesmo que o navegador já usaria com `alt` de imagem quebrada, então
+acrescentar o SVG depois não muda mais nada além de trocar o `undefined` por um caminho.
 
 ## 7. Shell do painel ✅
 
 ### 7.1 Estrutura
 
+```
+┌──────────────┬────────────────────────────┐
+│ ▧ Marca      │                            │
+│              │                            │
+│ ▤ Dashboard  │                            │
+│ ◎ Leads      │                            │
+│ ▥ Funil      │        conteúdo            │
+│ ⚇ Contatos   │                            │
+│ ☑ Tarefas    │                            │
+│ ──────────── │                            │
+│ ▭ Conversas  │                            │
+│ ⚙ Equipe     │                            │
+│              │                            │
+│ ⋯⋯⋯⋯⋯⋯⋯⋯⋯⋯⋯ │                            │
+│ ◍ Rodrigo    │                            │
+│   ☾  🔔  ⇥   │                            │
+└──────────────┴────────────────────────────┘
+```
+
 | Largura | Comportamento |
 |---|---|
-| ≥ 1024px | coluna lateral fixa de 240px |
-| < 1024px | gaveta, aberta por botão no cabeçalho |
+| ≥ 1024px | coluna lateral fixa de **248px** 🟡, **sem barra superior** |
+| < 1024px | gaveta; barra superior fina com o botão, `<Marca>` e nada mais |
 
-Cabeçalho carrega `<Marca>`, o sino, o nome do usuário, o alternador de tema e "Sair".
+**Sem barra superior no desktop** é o que mais aproxima a tela da referência: usuário, tema,
+sino e "Sair" descem para o rodapé da barra lateral, onde a referência os coloca.
+
+**Grupos separados por régua, sem título.** É o que a referência faz, e evita o problema de
+grupo de um item só. São dois:
+
+1. Dashboard · Leads · Funil · Contatos · Tarefas
+2. Conversas (módulo) · Equipe (papel)
+
+> ⚠️ A régua **não renderiza quando o segundo grupo fica vazio** — módulo desligado num
+> fork **e** usuário sem permissão de equipe. Separador pendurado sobre o nada é o defeito
+> clássico desse padrão, e ele só aparece na combinação que ninguém testa.
+
+**Ícones** de `lucide-react` (já é dependência), 16px, herdando `currentColor` — ícone com
+cor própria brigaria com o estado ativo. Mapeamento 🟡: `LayoutDashboard`, `Target`,
+`Columns3`, `Users`, `ListChecks`, `MessageSquare`, `UserCog`.
+
+**Estado ativo:** preenchimento neutro (`--sidebar-accent`) com cantos arredondados, **mais
+`aria-current="page"`**. O `aria-current` não é enfeite: sem ele o estado ativo é só cor, e
+cor sozinha não chega a quem usa leitor de tela.
+
+**Rodapé:** `ui/avatar.tsx` (já existe) · nome com `data-testid="usuario-logado"` ·
+alternador de tema · sino · "Sair".
 
 A gaveta usa `ui/sheet.tsx` do shadcn, que **precisa ser acrescentado** (hoje há `dialog`,
 não há `sheet`). Radix cuida de foco preso e `Escape`.
@@ -234,6 +320,11 @@ não há `sheet`). Radix cuida de foco preso e `Escape`.
 > A gaveta **fecha ao navegar**. Sem isso, tocar num link deixa o painel aberto por cima da
 > página nova — é o defeito mais comum de menu móvel e não aparece em teste de componente,
 > só em uso.
+
+**O sino tem um único ponto de montagem**, no rodapé da barra. No celular ele fica dentro da
+gaveta, então o botão que abre a gaveta ganha **um ponto quando há não lida** — o aviso não
+se perde atrás de um toque, e não existe um segundo `<NotificationBell>` para o e2e
+confundir com o primeiro.
 
 ### 7.2 O que precisa sobreviver intacto
 
@@ -276,6 +367,21 @@ kanban.
 `ThemeProvider` do `next-themes` (já é dependência, já é esperado por `ui/sonner.tsx`) no
 layout **do painel**, com `attribute="class"` — casando o `@custom-variant dark
 (&:is(.dark *))` que `globals.css` já define.
+
+**Dois temas, sem "sistema"** ✅:
+
+```tsx
+<ThemeProvider attribute="class" themes={["light", "dark"]}
+               enableSystem={false} defaultTheme="dark" nonce={nonce}>
+```
+
+`enableSystem={false}` é o que torna o alternador um interruptor de dois estados em vez de
+um menu de três. Com "sistema" no meio, o botão precisa de três ícones e de um rótulo para
+explicar em qual estado está — custo de interface que só se paga quando alguém realmente
+alterna com o horário do sistema operacional.
+
+`defaultTheme="dark"` 🟡 segue a referência da § 2.1. Primeira visita cai no escuro; a
+partir daí vale a escolha guardada.
 
 **Por que no painel e não na raiz:** `(painel)/layout.tsx` já é `force-dynamic` e já é
 `async`, então `await headers()` para ler o nonce não custa nada ali. Na raiz, tornaria
@@ -329,6 +435,8 @@ Regra do projeto: **todo teste novo é sabotado antes de aceito.**
 | 7 | Ativo é o `href` mais longo que casa | usar `startsWith` simples |
 | 8 | `PainelNav` renderiza sem mock de banco | tornar a função assíncrona |
 | 9 | Link de Equipe some para VENDEDOR; link de módulo some com módulo desligado | remover os gates |
+| 10 | **VENDEDOR com módulo desligado não renderiza a régua** | renderizar o separador sempre |
+| 11 | Item ativo carrega `aria-current="page"` | marcar o ativo só por classe |
 
 O **#1 é o invariante central** e se testa sobre uma grade, não sobre um caso:
 `H` de 0 a 345 de 15 em 15, `C` de 0.04 a 0.37 de 0.03 em 0.03, `L` de 0.1 a 0.9 de 0.1 em
@@ -349,10 +457,18 @@ dashboard mostrando nome técnico de ação (`log.acao` direto da auditoria), tr
 consistente de formulário. É a spec seguinte, e depende desta — tokens primeiro, telas
 depois.
 
-## 12. Em aberto ❓
+## 12. Em aberto
 
-| # | Assunto |
+**Nada bloqueia o plano.** As três perguntas da primeira versão foram respondidas:
+
+| Era | Resposta |
 |---|---|
-| 1 | Quais fontes entram na lista fechada (§ 6.1) |
-| 2 | O `logo.svg` padrão é a marca da Nateksoft ou um genérico neutro |
-| 3 | O alternador de tema é claro/escuro/sistema, ou só claro/escuro |
+| Quais fontes na lista fechada | **Geist** é o padrão e já está carregada (§ 6.1) |
+| Qual `logo.svg` padrão | **nenhum** — adiado, `marca.logo` vira opcional (§ 6.2) |
+| Alternador de três ou dois estados | **dois**, sem "sistema" (§ 8) |
+
+Sobram só ajustes marcados 🟡, todos de uma linha e decidíveis durante a execução:
+
+- largura da barra (248px) e mapeamento de ícones (§ 7.1)
+- `defaultTheme="dark"` (§ 8)
+- as três fontes além da Geist na lista (§ 6.1)
