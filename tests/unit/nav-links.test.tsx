@@ -1,0 +1,78 @@
+// @vitest-environment jsdom
+import { describe, it, expect, vi, afterEach } from "vitest";
+import { render, screen, cleanup } from "@testing-library/react";
+import { LayoutDashboard, Target, Columns3 } from "lucide-react";
+
+const mocks = vi.hoisted(() => ({ caminho: "/" }));
+vi.mock("next/navigation", () => ({ usePathname: () => mocks.caminho }));
+
+// `next/link` mockado para INSPECIONAR as props. `prefetch` não vira atributo
+// no DOM, então sem isto não há como provar que a proteção está em todos os
+// links — e a alternativa (um atributo espelho `data-prefetch`) colocaria
+// artefato de teste no código de produção.
+const linksRenderizados = vi.hoisted(() => [] as { href: string; prefetch: unknown }[]);
+vi.mock("next/link", () => ({
+  default: ({ href, prefetch, children, ...resto }: Record<string, unknown>) => {
+    const props = { href, prefetch } as { href: string; prefetch: unknown };
+    linksRenderizados.push(props);
+    return <a href={props.href} {...(resto as object)}>{children as React.ReactNode}</a>;
+  },
+}));
+
+import { NavLinks } from "@/components/nav-links";
+
+const GRUPO_A = [
+  { href: "/", label: "Dashboard", icone: LayoutDashboard },
+  { href: "/leads", label: "Leads", icone: Target },
+  { href: "/leads/kanban", label: "Funil", icone: Columns3 },
+];
+
+afterEach(() => {
+  cleanup();
+  mocks.caminho = "/";
+  linksRenderizados.length = 0;
+});
+
+describe("NavLinks", () => {
+  it("marca o item ativo com aria-current", () => {
+    mocks.caminho = "/leads";
+    render(<NavLinks grupos={[GRUPO_A]} />);
+    expect(screen.getByRole("link", { name: /Leads/ }).getAttribute("aria-current")).toBe("page");
+  });
+
+  // A regra do href MAIS LONGO. Com `startsWith` simples, /leads e
+  // /leads/kanban acendem os dois na página do kanban.
+  it("acende só o href mais longo que casa", () => {
+    mocks.caminho = "/leads/kanban";
+    render(<NavLinks grupos={[GRUPO_A]} />);
+    expect(screen.getByRole("link", { name: /Funil/ }).getAttribute("aria-current")).toBe("page");
+    expect(screen.getByRole("link", { name: /Leads/ }).getAttribute("aria-current")).toBeNull();
+  });
+
+  it("não deixa a raiz acender em toda rota", () => {
+    mocks.caminho = "/contatos";
+    render(<NavLinks grupos={[GRUPO_A]} />);
+    expect(screen.getByRole("link", { name: /Dashboard/ }).getAttribute("aria-current")).toBeNull();
+  });
+
+  // Sem isto, "Sair" deixa de revogar sessão: o Next pré-carrega a rota
+  // protegida, a resposta chega depois do logout e o Auth.js reemite o cookie.
+  it("põe prefetch=false em TODOS os links", () => {
+    render(<NavLinks grupos={[GRUPO_A]} />);
+    expect(linksRenderizados).toHaveLength(3);
+    for (const link of linksRenderizados) {
+      expect(link.prefetch).toBe(false);
+    }
+  });
+
+  it("não renderiza régua quando só há um grupo com conteúdo", () => {
+    const { container } = render(<NavLinks grupos={[GRUPO_A, []]} />);
+    expect(container.querySelectorAll("hr")).toHaveLength(0);
+  });
+
+  it("renderiza régua entre dois grupos com conteúdo", () => {
+    const grupoB = [{ href: "/usuarios", label: "Equipe", icone: Target }];
+    const { container } = render(<NavLinks grupos={[GRUPO_A, grupoB]} />);
+    expect(container.querySelectorAll("hr")).toHaveLength(1);
+  });
+});
