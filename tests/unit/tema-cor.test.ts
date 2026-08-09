@@ -59,6 +59,12 @@ describe("luminancia e contraste", () => {
     const y = luminancia(hexParaOklch("#0F62FE"));
     expect(contraste(y, y)).toBeCloseTo(1, 6);
   });
+
+  it("pesa o verde mais que o vermelho, como o WCAG manda", () => {
+    const yVerde = luminancia(hexParaOklch("#00FF00"));
+    const yVermelho = luminancia(hexParaOklch("#FF0000"));
+    expect(yVerde).toBeGreaterThan(yVermelho * 3);
+  });
 });
 
 describe("oklchParaRgbLinear", () => {
