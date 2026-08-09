@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { aplicarTeto, LIMITE_LISTAGEM, type Listagem } from "@/core/listagem";
 
 /**
  * Consultas da agenda de contatos.
@@ -43,11 +44,21 @@ export type ContatoListado = {
  * `mode: "insensitive"` no nome e no e-mail: procurar "maria" tem que achar
  * "Maria Silva". O Postgres compara maiúsculas por padrão.
  */
-export async function listarContatos(busca?: string): Promise<ContatoListado[]> {
+export async function listarContatos(
+  busca?: string,
+  opcoes?: { limite?: number }
+): Promise<Listagem<ContatoListado>> {
   const termo = busca?.trim() ?? "";
   const digitos = termo.replace(/\D/g, "");
+  const limite = opcoes?.limite ?? LIMITE_LISTAGEM;
 
   const contatos = await prisma.contact.findMany({
+    // `limite + 1`: a linha extra distingue "exatamente `limite` contatos" de
+    // "`limite` e tem mais" — ver `core/listagem.ts`. Sem teto, esta consulta
+    // carrega a agenda inteira na memória do processo a cada abertura de
+    // `/contatos`, e num fork com dezenas de milhares de contatos é onde a
+    // tela deixa de renderizar devagar e passa a estourar o tempo da função.
+    take: limite + 1,
     where:
       termo.length === 0
         ? undefined
@@ -72,7 +83,10 @@ export async function listarContatos(busca?: string): Promise<ContatoListado[]> 
     },
   });
 
-  return contatos.map(({ _count, ...contato }) => ({ ...contato, totalLeads: _count.leads }));
+  return aplicarTeto(
+    contatos.map(({ _count, ...contato }) => ({ ...contato, totalLeads: _count.leads })),
+    limite
+  );
 }
 
 export type ContatoComHistorico = {

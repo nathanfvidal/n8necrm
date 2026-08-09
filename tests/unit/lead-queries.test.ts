@@ -39,7 +39,7 @@ describe("listarLeads", () => {
       const admin = await prisma.user.findUniqueOrThrow({ where: { email: "admin@exemplo.com" } });
       const vendedor = await prisma.user.findUniqueOrThrow({ where: { email: "vendedor@exemplo.com" } });
 
-      const leads = await listarLeads();
+      const { itens: leads } = await listarLeads();
 
       const responsaveisPresentes = new Set(leads.map((lead) => lead.responsavelId));
       expect(responsaveisPresentes.has(admin.id)).toBe(true);
@@ -48,7 +48,7 @@ describe("listarLeads", () => {
   );
 
   it("cada lead vem com a etapa (`stage`) incluída — a tabela da Task 16 usa `stage.nome` como coluna", async () => {
-    const leads = await listarLeads();
+    const { itens: leads } = await listarLeads();
 
     expect(leads.length).toBeGreaterThan(0);
     for (const lead of leads) {
@@ -58,7 +58,7 @@ describe("listarLeads", () => {
   });
 
   it("ordena por criadoEm decrescente (mesmo contrato de listarLeadsPorEtapa, Task 13)", async () => {
-    const leads = await listarLeads();
+    const { itens: leads } = await listarLeads();
 
     for (let i = 1; i < leads.length; i++) {
       expect(leads[i - 1].criadoEm.getTime()).toBeGreaterThanOrEqual(leads[i].criadoEm.getTime());

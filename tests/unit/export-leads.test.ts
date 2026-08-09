@@ -12,8 +12,21 @@ import type { User, Lead, Contact, PipelineStage } from "@prisma/client";
 const usuarioAtualMock = vi.fn();
 vi.mock("@/core/auth/session", () => ({ usuarioAtual: () => usuarioAtualMock() }));
 
+// `listarLeads` passou a devolver `{ itens, truncado }` (teto das listagens,
+// `core/listagem.ts`). O mock embrulha aqui para que os `mockResolvedValue`
+// dos ~30 casos abaixo continuem passando o ARRAY de leads, que é o que cada
+// um deles realmente quer descrever — e não a forma do envelope.
+//
+// `truncado: false` fixo: a exportação chama com `semTeto: true` e nunca
+// trunca. É o que o teste logo abaixo ("pede a listagem SEM teto") garante.
 const listarLeadsMock = vi.fn();
-vi.mock("@/core/leads/queries", () => ({ listarLeads: () => listarLeadsMock() }));
+const listarLeadsArgsMock = vi.fn();
+vi.mock("@/core/leads/queries", () => ({
+  listarLeads: async (...args: unknown[]) => {
+    listarLeadsArgsMock(...args);
+    return { itens: await listarLeadsMock(), truncado: false };
+  },
+}));
 
 // Auditoria e rate limit chegaram na Fase 2 da auditoria de segurança. Os dois
 // são mockados pelo mesmo motivo dos de cima: `@/core/audit/log` importa
@@ -120,6 +133,23 @@ beforeEach(() => {
   // dentro da cota, e com a auditoria gravando sem erro.
   checarRateLimitMock.mockReset().mockResolvedValue(true);
   registrarAuditoriaMock.mockReset().mockResolvedValue(undefined);
+  listarLeadsArgsMock.mockReset();
+});
+
+// O teto das listagens (`core/listagem.ts`) corta em 1000 linhas por padrão.
+// Um CSV com 1000 de 1500 leads é indistinguível de um CSV completo para quem
+// abre a planilha — viraria decisão de negócio tomada sobre dado faltando.
+// Esta é a única chamada do sistema que pede a listagem inteira, e o teste
+// existe para que ninguém remova o `semTeto` por engano ao mexer na rota.
+describe("GET /export/leads — a exportacao nunca e' truncada", () => {
+  it("pede a listagem SEM teto", async () => {
+    usuarioAtualMock.mockResolvedValue(usuarioFake({ papel: "ADMIN" }));
+    listarLeadsMock.mockResolvedValue([leadFake()]);
+
+    await GET(requisicaoFake());
+
+    expect(listarLeadsArgsMock).toHaveBeenCalledWith({ semTeto: true });
+  });
 });
 
 describe("GET /export/leads — autorização", () => {

@@ -4,6 +4,7 @@ import { hasPermission } from "@/core/auth/permissions";
 import { LeadForm } from "@/components/leads/lead-form";
 import { LeadTable, type LeadLinha } from "@/components/leads/lead-table";
 import { listarLeads } from "@/core/leads/queries";
+import { LIMITE_LISTAGEM } from "@/core/listagem";
 import { EmptyState } from "@/components/empty-state";
 import { buttonVariants } from "@/components/ui/button";
 import { dataISOEmSaoPaulo, formatarDataBR } from "@/lib/date";
@@ -65,7 +66,9 @@ export default async function LeadsPage({
   // histórico de um lead que "pertence" a outro para atender um cliente que
   // chegou na loja. `listarLeads()` voltou a listar todo lead para todo
   // papel — mesmo comportamento do kanban, sem escopo por responsável.
-  const leads = await listarLeads({ incluirArquivados: mostrarArquivados });
+  const { itens: leads, truncado } = await listarLeads({
+    incluirArquivados: mostrarArquivados,
+  });
 
   const linhas: LeadLinha[] = leads.map((lead) => ({
     id: lead.id,
@@ -118,6 +121,15 @@ export default async function LeadsPage({
         </div>
       </div>
       <LeadForm responsavelPadraoId={usuario.id} vendedores={vendedores} />
+      {/* Truncamento nunca acontece em silêncio: uma tabela que mostra 1000 de
+          1500 leads sem dizer nada faz quem olha concluir que a base tem 1000.
+          Ver `core/listagem.ts` sobre o teto e por que ele existe. */}
+      {truncado && (
+        <p role="status" className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm">
+          Mostrando os {LIMITE_LISTAGEM} leads mais recentes. Há mais no banco — use a busca da
+          tabela para encontrar um lead específico.
+        </p>
+      )}
       {linhas.length === 0 ? (
         <EmptyState
           title="Nenhum lead ainda"

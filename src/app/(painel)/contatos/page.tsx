@@ -2,6 +2,7 @@ import Link from "next/link";
 
 import { usuarioAtualOuLogin } from "@/core/auth/session";
 import { listarContatos } from "@/core/contacts/queries";
+import { LIMITE_LISTAGEM } from "@/core/listagem";
 import { ContactForm } from "@/components/contacts/contact-form";
 import { EmptyState } from "@/components/empty-state";
 import { Input } from "@/components/ui/input";
@@ -37,7 +38,7 @@ export default async function ContatosPage({
 
   const { q } = await searchParams;
   const busca = q?.trim() ?? "";
-  const contatos = await listarContatos(busca);
+  const { itens: contatos, truncado } = await listarContatos(busca);
 
   return (
     <div className="space-y-6 p-6">
@@ -72,6 +73,15 @@ export default async function ContatosPage({
         )}
       </form>
 
+      {/* Truncamento nunca em silêncio: sem este aviso, quem abre a agenda
+          conclui que ela tem exatamente o número de linhas mostradas. Aqui a
+          saída é a busca logo acima, que filtra no banco e não na tela. */}
+      {truncado && (
+        <p role="status" className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm">
+          Mostrando os {LIMITE_LISTAGEM} contatos mais recentes. Há mais no banco — use a busca
+          acima para encontrar alguém específico.
+        </p>
+      )}
       {contatos.length === 0 ? (
         <EmptyState
           title={busca ? "Nenhum contato encontrado" : "Nenhum contato ainda"}

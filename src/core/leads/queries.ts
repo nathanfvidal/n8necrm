@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { aplicarTeto, LIMITE_LISTAGEM, type Listagem } from "@/core/listagem";
 import type { Lead, Contact, User, PipelineStage } from "@prisma/client";
 
 // `responsavel` narrowed para só `id`/`nome` (Task 17, fix round 1/5,
@@ -28,9 +29,18 @@ export type LeadListado = Lead & {
  * funil aparece como chave, mesmo sem nenhum lead (array vazio), para que a
  * UI não precise checar existência antes de renderizar uma coluna.
  */
-export async function listarLeadsPorEtapa(): Promise<Record<string, LeadComRelacoes[]>> {
+export async function listarLeadsPorEtapa(opcoes?: {
+  /** Só para teste — ver `listarLeads`. */
+  limite?: number;
+}): Promise<{ porEtapa: Record<string, LeadComRelacoes[]>; truncado: boolean }> {
+  const limite = opcoes?.limite ?? LIMITE_LISTAGEM;
   const etapas = await prisma.pipelineStage.findMany({ orderBy: { ordem: "asc" } });
-  const leads = await prisma.lead.findMany({
+  const linhas = await prisma.lead.findMany({
+    // Teto no TOTAL de leads carregados, não por coluna. Um teto por coluna
+    // exigiria uma consulta por etapa; este basta para o que o teto existe
+    // para fazer — impedir que uma única requisição carregue a tabela
+    // inteira. O corte cai nos leads mais antigos (a ordenação é
+    // `criadoEm desc`), e a tela avisa que cortou.
     // Arquivado sai do funil por definição — ver `arquivarLead`
     // (`leads/service.ts`). Este filtro cobre DUAS telas de uma vez, o kanban
     // e o painel, porque as duas consomem esta função;
@@ -40,13 +50,16 @@ export async function listarLeadsPorEtapa(): Promise<Record<string, LeadComRelac
     where: { arquivadoEm: null },
     include: { contact: true, responsavel: { select: { id: true, nome: true } } },
     orderBy: { criadoEm: "desc" },
+    take: limite + 1,
   });
+
+  const { itens: leads, truncado } = aplicarTeto(linhas, limite);
 
   const agrupado: Record<string, LeadComRelacoes[]> = {};
   for (const etapa of etapas) {
     agrupado[etapa.id] = leads.filter((lead) => lead.stageId === etapa.id);
   }
-  return agrupado;
+  return { porEtapa: agrupado, truncado };
 }
 
 /**
@@ -70,8 +83,25 @@ export async function listarLeadsPorEtapa(): Promise<Record<string, LeadComRelac
  */
 export async function listarLeads(opcoes?: {
   incluirArquivados?: boolean;
-}): Promise<LeadListado[]> {
-  return prisma.lead.findMany({
+  /**
+   * Desliga o teto. Existe para UM chamador: a exportação CSV
+   * (`app/(painel)/export/leads/route.ts`), onde truncar seria pior que
+   * qualquer coisa — um arquivo com 1000 de 1500 leads, indistinguível de um
+   * arquivo completo, viraria decisão de negócio tomada sobre dado faltando.
+   * Aquela rota já documenta o próprio teto de escala e o sintoma de quando
+   * ele chegar.
+   *
+   * O padrão é COM teto, e não o contrário, pelo mesmo raciocínio de
+   * `incluirArquivados` logo abaixo: chamada nova que esqueça o parâmetro erra
+   * para o lado seguro.
+   */
+  semTeto?: boolean;
+  /** Só para teste — permite exercitar o truncamento sem criar 1001 linhas. */
+  limite?: number;
+}): Promise<Listagem<LeadListado>> {
+  const limite = opcoes?.limite ?? LIMITE_LISTAGEM;
+
+  const linhas = await prisma.lead.findMany({
     // Filtra arquivados por PADRÃO — quem quiser vê-los pede explicitamente
     // (o alternador "mostrar arquivados" da tela `/leads`). O padrão seguro é
     // o de esconder: uma chamada nova que esqueça o parâmetro erra para o lado
@@ -83,5 +113,10 @@ export async function listarLeads(opcoes?: {
       stage: true,
     },
     orderBy: { criadoEm: "desc" },
+    // `limite + 1` de propósito: a linha extra é o que distingue "exatamente
+    // `limite` leads" de "`limite` e tem mais" — ver `aplicarTeto`.
+    ...(opcoes?.semTeto ? {} : { take: limite + 1 }),
   });
+
+  return opcoes?.semTeto ? { itens: linhas, truncado: false } : aplicarTeto(linhas, limite);
 }

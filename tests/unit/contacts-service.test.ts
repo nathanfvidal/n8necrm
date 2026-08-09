@@ -161,13 +161,13 @@ describe("core/contacts", () => {
 
   describe("listarContatos", () => {
     it("encontra por nome sem diferenciar maiúsculas", async () => {
-      const encontrados = await listarContatos(MARCA.toLowerCase());
+      const encontrados = (await listarContatos(MARCA.toLowerCase())).itens;
       expect(encontrados.length).toBeGreaterThan(0);
       expect(encontrados.every((c) => c.nome.includes(MARCA))).toBe(true);
     });
 
     it("encontra por telefone mesmo digitado com formatação", async () => {
-      const encontrados = await listarContatos("(11) 98888-7001");
+      const encontrados = (await listarContatos("(11) 98888-7001")).itens;
       expect(encontrados.map((c) => c.telefone)).toContain(TELEFONES.basico);
     });
 
@@ -179,13 +179,13 @@ describe("core/contacts", () => {
       // crescer.
       await criarContato({ nome: `Alvo Unico ${MARCA}`, telefone: TELEFONES.busca }, autorId);
 
-      const encontrados = await listarContatos(`Alvo Unico ${MARCA}`);
+      const encontrados = (await listarContatos(`Alvo Unico ${MARCA}`)).itens;
       expect(encontrados).toHaveLength(1);
       expect(encontrados[0].telefone).toBe(TELEFONES.busca);
     });
 
     it("conta os leads de cada contato", async () => {
-      const encontrados = await listarContatos(`Alvo Unico ${MARCA}`);
+      const encontrados = (await listarContatos(`Alvo Unico ${MARCA}`)).itens;
       expect(encontrados[0].totalLeads).toBe(0);
     });
   });

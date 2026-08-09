@@ -31,7 +31,7 @@ import { formatarDataHoraBR } from "@/lib/date";
 export default async function DashboardPage() {
   const usuario = await usuarioAtualOuLogin();
 
-  const [etapas, leadsPorEtapa, tasksPendentes] = await Promise.all([
+  const [etapas, { porEtapa: leadsPorEtapa }, tasksPendentes] = await Promise.all([
     listarEtapas(),
     listarLeadsPorEtapa(),
     listarTasksPendentes(usuario.id),

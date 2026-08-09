@@ -238,7 +238,12 @@ export async function GET(request: Request) {
   // primeiro byte sair antes da última linha existir. Não fazer isso agora,
   // sem sinal real do volume que vai bater esse teto, é a escolha
   // deliberada — não uma omissão.
-  const leads = await listarLeads();
+  // `semTeto: true` — a única chamada do sistema que pede a listagem sem
+  // limite, e de propósito: um CSV com 1000 de 1500 leads é indistinguível de
+  // um CSV completo para quem abre a planilha, e viraria decisão de negócio
+  // tomada sobre dado faltando. O teto de escala desta rota é o descrito
+  // acima (tempo de execução da função), não o número de linhas.
+  const { itens: leads } = await listarLeads({ semTeto: true });
 
   // Registro da extração em massa (Fase 2 da auditoria de segurança).
   //
