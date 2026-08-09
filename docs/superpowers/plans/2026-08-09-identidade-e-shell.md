@@ -339,8 +339,15 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
 - Produz:
   - `const CROMA_MINIMO = 0.04`
   - `type Tokens = Record<string, Oklch>`
-  - `ajustarParaContraste(cor: Oklch, minimo?: number): { primaria: Oklch; texto: Oklch }`
+  - `escolherTexto(cor: Oklch): Oklch` — devolve preto ou branco
   - `derivarPaleta(marca: Oklch): { claro: Tokens; escuro: Tokens }`
+
+> ⚠️ **Correção aplicada durante a execução (2026-08-09).** O código abaixo mostra
+> `ajustarParaContraste` com um laço que move a luminosidade até atingir 4.5:1. **Esse laço
+> nunca executa** e foi removido — as duas curvas de contraste se cruzam em `y = 0.179`
+> valendo 4.583:1 cada, então o pior caso já passa. Se você está executando este plano do
+> zero, **não construa o laço**: implemente só a escolha entre preto e branco. A § 5.2 da
+> spec traz a prova. O resto desta task vale como está.
 
 - [ ] **Passo 1: escrever o teste que falha**
 

@@ -132,23 +132,34 @@ silêncio, e o cliente conclui que o sistema ignorou a marca dele. Falhar alto �
 recusá-la seria o sistema sendo burro. A identidade é o **matiz e o croma**; a luminosidade
 é negociável e o algoritmo a negocia.
 
-### 5.2 O ajuste de luminosidade da primária
+### 5.2 A escolha do texto sobre a primária ✅
+
+*(Corrigida em 2026-08-09, durante a execução — ver o aviso abaixo.)*
 
 ```
 1. Converte a marca para OKLCH → (L, C, H)
 2. Calcula contraste WCAG de branco e de preto contra a cor
-3. Escolhe o vencedor como --primary-foreground
-4. Enquanto contraste < 4.5:1 e couberem iterações:
-     move L em 0.02 na direção que aumenta o contraste
-5. --primary = oklch(L_ajustado, C, H)
+3. O vencedor é o --primary-foreground. Fim.
+4. --primary = a marca, sem ajuste
 ```
-
-Termina sempre: o contraste é monotônico em cada direção de `L`, e nos extremos (`L=0` com
-branco, `L=1` com preto) chega a 21:1. Limite de 40 iterações como rede de segurança, com
-erro explícito se estourar — um limite silencioso esconderia um bug de conversão.
 
 O limiar é **4.5:1** e não 3:1: rótulo de botão é texto normal (14–16px). O relaxamento de
 3:1 só vale para texto grande (≥24px, ou ≥18.66px em negrito), que não é o caso aqui.
+
+> ⚠️ **A primeira versão desta seção especificava um laço** que movia a luminosidade da
+> primária em passos de 0.02 até atingir 4.5:1. **Ele nunca executava.** A revisão da Task 2
+> provou por quê, e a prova é curta:
+>
+> As duas curvas de contraste — `1.05 / (y + 0.05)` para texto branco e `(y + 0.05) / 0.05`
+> para texto preto — se cruzam em `y = 0.179`, e nesse ponto **ambas valem 4.583:1**. Como
+> se escolhe sempre a melhor das duas, **4.583 é o pior caso possível**. Com texto preto ou
+> branco puro, nenhuma cor de marca pode falhar em 4.5:1.
+>
+> Era defesa para um problema que não existe, e foi apagada: código morto que parece
+> proteção é pior que proteção nenhuma, porque faz quem lê acreditar que há uma defesa ali.
+> **Quem garante o invariante é o teste da grade da § 10** — e ele continua valendo
+> inclusive para o dia em que o texto deixar de ser preto ou branco puro, que é exatamente
+> quando a garantia matemática acima deixa de valer.
 
 ### 5.3 Os tokens
 
@@ -161,8 +172,8 @@ invariante da § 9**, não estes números.
 |---|---|---|
 | `--background`, `--card`, `--popover` | 1.00 | **0** |
 | `--foreground` | 0.15 | `min(C×0.04, 0.008)` |
-| `--primary` | ajustado (§ 5.2) | **C** (cheio) |
-| `--primary-foreground` | calculado (§ 5.2) | 0 |
+| `--primary` | a da marca | **C** (cheio) |
+| `--primary-foreground` | preto ou branco (§ 5.2) | 0 |
 | `--ring` | = `--primary` | |
 | `--secondary`, `--muted` | 0.97 | `min(C×0.03, 0.006)` |
 | `--muted-foreground` | 0.55 | `min(C×0.05, 0.010)` |
@@ -190,9 +201,10 @@ outras e o contorno some.
 O tema **escuro é o principal** — é o da referência. Barra e conteúdo compartilham o mesmo
 fundo (`L 0.13`), e a separação entre eles vem da régua, não de dois tons.
 
-`--primary` roda **o mesmo laço da § 5.2 outra vez**, agora contra o fundo escuro — não
-reaproveita o resultado do tema claro. Na prática ela sai mais clara, porque acento escuro
-sobre fundo escuro desaparece.
+`--primary` do tema escuro tem **piso de luminosidade em 0.6**: acento escuro sobre fundo
+escuro desaparece, então uma marca azul-marinho precisa clarear para continuar sendo um
+botão. Marca que já é clara (L ≥ 0.6) fica igual nos dois temas, o que é o comportamento
+certo — ela já contrasta com os dois fundos.
 
 **Gráficos:** `chart-1..5` = `H`, `H±40°`, `H±80°`, com **L e C constantes** —
 `L = 0.65` (claro) / `0.70` (escuro), `C = clamp(C_marca, 0.10, 0.16)`.
@@ -417,7 +429,6 @@ A distinção precisa ficar escrita, senão a lição anterior vira regra cega.
 |---|---|
 | Hex malformado ou acinzentado | build |
 | Fonte fora do enum | build |
-| Laço de contraste estourando 40 iterações | build, com mensagem |
 | Logo ausente | runtime, degrada para o nome em texto |
 
 ## 10. Testes ✅
