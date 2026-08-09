@@ -1125,16 +1125,16 @@ afterEach(() => {
 describe("Marca", () => {
   it("sem logo, mostra o nome do cliente em texto", () => {
     render(<Marca />);
-    expect(screen.getByText("AutoCenter")).toBeInTheDocument();
-    expect(screen.queryByRole("img")).not.toBeInTheDocument();
+    expect(screen.getByText("AutoCenter")).toBeTruthy();
+    expect(screen.queryByRole("img")).toBeNull();
   });
 
   it("com logo, mostra a imagem com o nome como texto alternativo", () => {
     mocks.marca = { ...mocks.marca, logo: "/logo.svg" };
     render(<Marca />);
     const img = screen.getByRole("img");
-    expect(img).toHaveAttribute("src", "/logo.svg");
-    expect(img).toHaveAttribute("alt", "AutoCenter");
+    expect(img.getAttribute("src")).toBe("/logo.svg");
+    expect(img.getAttribute("alt")).toBe("AutoCenter");
   });
 });
 ```
@@ -1255,7 +1255,7 @@ describe("NavLinks", () => {
   it("marca o item ativo com aria-current", () => {
     mocks.caminho = "/leads";
     render(<NavLinks grupos={[GRUPO_A]} />);
-    expect(screen.getByRole("link", { name: /Leads/ })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("link", { name: /Leads/ }).getAttribute("aria-current")).toBe("page");
   });
 
   // A regra do href MAIS LONGO. Com `startsWith` simples, /leads e
@@ -1263,14 +1263,14 @@ describe("NavLinks", () => {
   it("acende só o href mais longo que casa", () => {
     mocks.caminho = "/leads/kanban";
     render(<NavLinks grupos={[GRUPO_A]} />);
-    expect(screen.getByRole("link", { name: /Funil/ })).toHaveAttribute("aria-current", "page");
-    expect(screen.getByRole("link", { name: /Leads/ })).not.toHaveAttribute("aria-current");
+    expect(screen.getByRole("link", { name: /Funil/ }).getAttribute("aria-current")).toBe("page");
+    expect(screen.getByRole("link", { name: /Leads/ }).getAttribute("aria-current")).toBeNull();
   });
 
   it("não deixa a raiz acender em toda rota", () => {
     mocks.caminho = "/contatos";
     render(<NavLinks grupos={[GRUPO_A]} />);
-    expect(screen.getByRole("link", { name: /Dashboard/ })).not.toHaveAttribute("aria-current");
+    expect(screen.getByRole("link", { name: /Dashboard/ }).getAttribute("aria-current")).toBeNull();
   });
 
   // Sem isto, "Sair" deixa de revogar sessão: o Next pré-carrega a rota
@@ -1448,14 +1448,14 @@ E os casos novos:
 ```tsx
 it("mostra o nome do usuario no rodape da barra", () => {
   render(<PainelNav nomeUsuario="Rodrigo" papelUsuario="ADMIN" />);
-  expect(screen.getByTestId("usuario-logado")).toHaveTextContent("Rodrigo");
+  expect(screen.getByTestId("usuario-logado").textContent).toContain("Rodrigo");
 });
 
 it("mantem o logout como form, nunca como link", () => {
   const { container } = render(<PainelNav nomeUsuario="Rodrigo" papelUsuario="ADMIN" />);
   // GET que desloga e disparavel por <img src> de qualquer site.
-  expect(container.querySelector("form")).toBeInTheDocument();
-  expect(screen.queryByRole("link", { name: /Sair/ })).not.toBeInTheDocument();
+  expect(container.querySelector("form")).toBeTruthy();
+  expect(screen.queryByRole("link", { name: /Sair/ })).toBeNull();
 });
 
 it("nao renderiza regua para VENDEDOR com o modulo desligado", () => {
