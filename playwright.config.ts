@@ -79,9 +79,19 @@ export default defineConfig({
     trace: "on-first-retry",
   },
   projects: [
+    // Projeto de setup: faz UM login por conta e grava a sessão em disco,
+    // antes de qualquer spec. Roda como teste normal (com o webServer de pé),
+    // ao contrário de `globalSetup`, que só toca o banco.
+    //
+    // Os dois resolvem problemas diferentes com o mesmo limite de login:
+    // `globalSetup` zera o contador entre EXECUÇÕES da suíte; este projeto
+    // reduz o gasto DENTRO de uma execução, de ~9 tentativas de admin para 3.
+    // Ver `tests/e2e/credenciais.ts`.
+    { name: "setup", testMatch: /.*\.setup\.ts/ },
     {
       name: "chromium",
       use: { ...devices["Desktop Chrome"] },
+      dependencies: ["setup"],
     },
   ],
 });

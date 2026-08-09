@@ -7,8 +7,90 @@
 // HTML chega, e só o JavaScript morre — a tela aparece "quase certa" e
 // nenhum teste de status HTTP percebe. A única verificação que vale é abrir
 // cada página num navegador e ler o console.
+import "dotenv/config";
+import { PrismaClient } from "@prisma/client";
+import { PrismaPg } from "@prisma/adapter-pg";
 import { test, expect, type Page } from "@playwright/test";
-import { EMAIL_ADMIN_E2E, senhaE2e } from "./credenciais";
+import { EMAIL_ADMIN_E2E, SESSAO_ADMIN, senhaE2e } from "./credenciais";
+
+const prisma = new PrismaClient({
+  adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL! }),
+});
+
+/**
+ * Telefone exclusivo deste arquivo — não colide com nenhum outro prefixo em
+ * uso (ver a lista em `tests/unit/stage-transition.test.ts`).
+ */
+const TELEFONE_TESTE = "11933330001";
+const NOME_TESTE = "E2E CSP Detalhe";
+
+/**
+ * Cria o contato e o lead que a caminhada por telas de DETALHE precisa.
+ *
+ * ## Por que isto passou a ser necessário
+ *
+ * Este arquivo NÃO criava dado nenhum: percorria `/leads` e `/contatos` e
+ * clicava no primeiro link de registro que encontrasse, contando com o que já
+ * existisse no banco compartilhado. Funcionava por acidente de ORDEM — o
+ * login deste spec levava alguns segundos, e nesse intervalo
+ * `lead-to-won.spec.ts` já tinha criado o lead dele.
+ *
+ * Ao trocar o login por sessão reaproveitada (`auth.setup.ts`), este teste
+ * passou a partir direto para as telas e chegou em `/leads` antes de existir
+ * lead — ou depois de `lead-edicao.spec.ts` arquivar o dele, que some da
+ * listagem por definição. O sintoma era `locator.click` estourando timeout em
+ * `a[href^="/leads/"]`, que parece quebra de CSP e é dado ausente.
+ *
+ * A dependência oculta entre specs já existia; a sessão reaproveitada só a
+ * revelou. Um teste que depende do que outro arquivo criou passa ou falha por
+ * motivo que não é o dele.
+ */
+test.beforeAll(async () => {
+  await limparDadosDeTeste();
+
+  const etapa = await prisma.pipelineStage.findFirstOrThrow({ orderBy: { ordem: "asc" } });
+  const responsavel = await prisma.user.findFirstOrThrow({ where: { email: EMAIL_ADMIN_E2E } });
+  const contato = await prisma.contact.create({
+    data: { nome: NOME_TESTE, telefone: TELEFONE_TESTE },
+  });
+  await prisma.lead.create({
+    data: {
+      contactId: contato.id,
+      stageId: etapa.id,
+      responsavelId: responsavel.id,
+      canal: "MANUAL",
+    },
+  });
+});
+
+test.afterAll(async () => {
+  await limparDadosDeTeste();
+  await prisma.$disconnect();
+});
+
+async function limparDadosDeTeste(): Promise<void> {
+  const contato = await prisma.contact.findUnique({ where: { telefone: TELEFONE_TESTE } });
+  if (!contato) return;
+
+  const leads = await prisma.lead.findMany({ where: { contactId: contato.id } });
+  const leadIds = leads.map((lead) => lead.id);
+
+  if (leadIds.length > 0) {
+    // `Notification` não tem FK para `Lead` (o `leadId` é um campo solto no
+    // JSON do payload), então filtra em memória — mesmo padrão de
+    // `lead-to-won.spec.ts`.
+    const notificacoes = await prisma.notification.findMany({ where: { tipo: "NOVO_LEAD" } });
+    const ids = notificacoes
+      .filter((n) => leadIds.includes((n.payload as { leadId?: string } | null)?.leadId ?? ""))
+      .map((n) => n.id);
+    if (ids.length > 0) await prisma.notification.deleteMany({ where: { id: { in: ids } } });
+
+    await prisma.auditLog.deleteMany({ where: { entidade: "Lead", entidadeId: { in: leadIds } } });
+    await prisma.lead.deleteMany({ where: { id: { in: leadIds } } });
+  }
+
+  await prisma.contact.deleteMany({ where: { telefone: TELEFONE_TESTE } });
+}
 
 const CREDENCIAIS = { email: EMAIL_ADMIN_E2E, senha: senhaE2e() };
 
@@ -170,9 +252,16 @@ test("CANÁRIO: script inline sem nonce que chega pela REDE não executa", async
   expect(problemas.length, "CSP bloqueou, mas o detector não registrou nada").toBeGreaterThan(0);
 });
 
-test("nenhuma tela do painel viola o CSP", async ({ page }) => {
+// Sessão reaproveitada de `auth.setup.ts` em vez de mais um login: este teste
+// só precisa ESTAR logado para percorrer as telas, e cada login gasta cota do
+// teto de 10 por conta a cada 10 minutos (`core/rate-limit/login.ts`). O teste
+// acima ("a tela de login carrega e funciona sob o CSP") continua logando de
+// verdade — lá o login É o objeto do teste, não um pré-requisito.
+test.describe(() => {
+  test.use({ storageState: SESSAO_ADMIN });
+
+  test("nenhuma tela do painel viola o CSP", async ({ page }) => {
   const problemas = coletarProblemas(page);
-  await entrar(page);
 
   for (const tela of TELAS) {
     await page.goto(tela);
@@ -202,4 +291,5 @@ test("nenhuma tela do painel viola o CSP", async ({ page }) => {
       `violações de CSP no ${descricao} (${page.url()}):\n${problemas.join("\n")}`
     ).toEqual([]);
   }
+  });
 });

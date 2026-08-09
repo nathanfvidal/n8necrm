@@ -65,5 +65,9 @@ next-env.d.ts
 # playwright
 /test-results/
 /playwright-report/
+# Sessões gravadas por tests/e2e/auth.setup.ts. São cookies de sessão VÁLIDOS
+# — de conta de teste, mas contra o mesmo banco que a aplicação usa. Nunca
+# versionar.
+/tests/e2e/.auth/
 /blob-report/
 /playwright/.cache/

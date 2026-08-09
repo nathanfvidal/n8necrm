@@ -24,7 +24,7 @@ import { PrismaPg } from "@prisma/adapter-pg";
 import bcrypt from "bcryptjs";
 import { randomUUID } from "node:crypto";
 import { test, expect, type Page } from "@playwright/test";
-import { EMAIL_ADMIN_E2E, EMAIL_VENDEDOR_E2E, senhaE2e } from "./credenciais";
+import { EMAIL_VENDEDOR_E2E, SESSAO_ADMIN, senhaE2e } from "./credenciais";
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL! });
 const prisma = new PrismaClient({ adapter });
@@ -133,47 +133,53 @@ async function login(page: Page, email: string, senha = senhaE2e()): Promise<voi
   await page.waitForURL("/");
 }
 
-test("pausar, responder e religar a IA numa conversa", async ({ page }) => {
-  // `nomeExibicao` único (não só o prefixo do `waId`, que não aparece na
-  // tela) para escopar a asserção na lista de /conversas a ESTA linha —
-  // `page.getByText("IA pausada")` sozinho quebraria em modo estrito do
-  // Playwright se outra conversa pausada já existisse no banco compartilhado.
-  const nomeExibicao = `E2E Ciclo IA ${randomUUID().slice(0, 8)}`;
-  const conversa = await prisma.conversation.create({
-    data: { waId: `${PREFIXO_WAID}${randomUUID()}`, telefone: "5511999990000", nomeExibicao },
+// Sessao reaproveitada de `auth.setup.ts`: este teste so precisa ESTAR
+// logado como ADMIN, e cada login gasta cota do teto de 10 por conta a
+// cada 10 minutos (`core/rate-limit/login.ts`). Foi o estouro desse teto
+// que derrubou o ULTIMO teste da fila ao integrar esta fatia.
+test.describe(() => {
+  test.use({ storageState: SESSAO_ADMIN });
+  test("pausar, responder e religar a IA numa conversa", async ({ page }) => {
+    // `nomeExibicao` único (não só o prefixo do `waId`, que não aparece na
+    // tela) para escopar a asserção na lista de /conversas a ESTA linha —
+    // `page.getByText("IA pausada")` sozinho quebraria em modo estrito do
+    // Playwright se outra conversa pausada já existisse no banco compartilhado.
+    const nomeExibicao = `E2E Ciclo IA ${randomUUID().slice(0, 8)}`;
+    const conversa = await prisma.conversation.create({
+      data: { waId: `${PREFIXO_WAID}${randomUUID()}`, telefone: "5511999990000", nomeExibicao },
+    });
+    await prisma.whatsappMessage.create({
+      data: {
+        conversationId: conversa.id,
+        idExterno: `${PREFIXO_WAID}msg-${randomUUID()}`,
+        direcao: "ENTRADA",
+        autor: "CLIENTE",
+        tipo: "TEXTO",
+        texto: "Bom dia, tem carro na faixa de 60 mil?",
+      },
+    });
+
+
+    await page.goto(`/conversas/${conversa.id}`);
+    await expect(page.getByText("IA respondendo")).toBeVisible();
+
+    await page.getByRole("button", { name: "Pausar IA" }).click();
+    await expect(page.getByText("IA pausada")).toBeVisible();
+
+    // O estado tem que aparecer TAMBÉM na lista — é o que evita conversa
+    // pausada e esquecida. `getByRole("link", ...)` mira o mesmo `<Link>` que
+    // envolve nome E badge em `conversas/page.tsx` (`ConversasPage`); o nome
+    // acessível do link inclui os dois textos, então buscar por `nomeExibicao`
+    // (substring, não `exact`) chega na linha certa antes de checar o badge
+    // dentro dela.
+    await page.goto("/conversas");
+    const linkConversa = page.getByRole("link", { name: nomeExibicao });
+    await expect(linkConversa.getByText("IA pausada")).toBeVisible();
+
+    await page.goto(`/conversas/${conversa.id}`);
+    await page.getByRole("button", { name: "Religar IA" }).click();
+    await expect(page.getByText("IA respondendo")).toBeVisible();
   });
-  await prisma.whatsappMessage.create({
-    data: {
-      conversationId: conversa.id,
-      idExterno: `${PREFIXO_WAID}msg-${randomUUID()}`,
-      direcao: "ENTRADA",
-      autor: "CLIENTE",
-      tipo: "TEXTO",
-      texto: "Bom dia, tem carro na faixa de 60 mil?",
-    },
-  });
-
-  await login(page, EMAIL_ADMIN_E2E);
-
-  await page.goto(`/conversas/${conversa.id}`);
-  await expect(page.getByText("IA respondendo")).toBeVisible();
-
-  await page.getByRole("button", { name: "Pausar IA" }).click();
-  await expect(page.getByText("IA pausada")).toBeVisible();
-
-  // O estado tem que aparecer TAMBÉM na lista — é o que evita conversa
-  // pausada e esquecida. `getByRole("link", ...)` mira o mesmo `<Link>` que
-  // envolve nome E badge em `conversas/page.tsx` (`ConversasPage`); o nome
-  // acessível do link inclui os dois textos, então buscar por `nomeExibicao`
-  // (substring, não `exact`) chega na linha certa antes de checar o badge
-  // dentro dela.
-  await page.goto("/conversas");
-  const linkConversa = page.getByRole("link", { name: nomeExibicao });
-  await expect(linkConversa.getByText("IA pausada")).toBeVisible();
-
-  await page.goto(`/conversas/${conversa.id}`);
-  await page.getByRole("button", { name: "Religar IA" }).click();
-  await expect(page.getByText("IA respondendo")).toBeVisible();
 });
 
 test("a tela do agente é inacessível a quem não é ADMIN", async ({ page }) => {
@@ -182,16 +188,22 @@ test("a tela do agente é inacessível a quem não é ADMIN", async ({ page }) =
   await expect(page).toHaveURL(/\/conversas$/);
 });
 
-test("editar a persona muda a prévia do prompt", async ({ page }) => {
-  await login(page, EMAIL_ADMIN_E2E);
-  await page.goto("/conversas/agente");
-  await page.getByLabel("Nome da persona").fill("Beatriz");
-  await expect(page.getByTestId("previa-prompt")).toContainText("Você é Beatriz");
-  // Nenhum clique em "Salvar" — a prévia é estado local (`AgenteForm` monta o
-  // texto no cliente com a mesma `montarPromptSistema` que o servidor usa,
-  // sobre o `useState` do formulário), então este teste nunca escreve na
-  // linha única de `BotConfig`. É por isso que `limparDadosDeTeste` acima não
-  // precisa capturar/restaurar a persona original.
+// Sessao reaproveitada de `auth.setup.ts`: este teste so precisa ESTAR
+// logado como ADMIN, e cada login gasta cota do teto de 10 por conta a
+// cada 10 minutos (`core/rate-limit/login.ts`). Foi o estouro desse teto
+// que derrubou o ULTIMO teste da fila ao integrar esta fatia.
+test.describe(() => {
+  test.use({ storageState: SESSAO_ADMIN });
+  test("editar a persona muda a prévia do prompt", async ({ page }) => {
+    await page.goto("/conversas/agente");
+    await page.getByLabel("Nome da persona").fill("Beatriz");
+    await expect(page.getByTestId("previa-prompt")).toContainText("Você é Beatriz");
+    // Nenhum clique em "Salvar" — a prévia é estado local (`AgenteForm` monta o
+    // texto no cliente com a mesma `montarPromptSistema` que o servidor usa,
+    // sobre o `useState` do formulário), então este teste nunca escreve na
+    // linha única de `BotConfig`. É por isso que `limparDadosDeTeste` acima não
+    // precisa capturar/restaurar a persona original.
+  });
 });
 
 /**

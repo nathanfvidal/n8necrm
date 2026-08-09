@@ -24,7 +24,7 @@ import "dotenv/config";
 import { PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { test, expect, type Page, type Locator } from "@playwright/test";
-import { EMAIL_ADMIN_E2E, senhaE2e } from "./credenciais";
+import { SESSAO_ADMIN } from "./credenciais";
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL! });
 const prisma = new PrismaClient({ adapter });
@@ -321,6 +321,10 @@ async function arrastarComTeclado(
   await page.keyboard.press("Space");
 }
 
+// Arquivo de um teste só, e ele apenas precisa estar logado como ADMIN —
+// então a sessão gravada por `auth.setup.ts` serve ao arquivo inteiro.
+test.use({ storageState: SESSAO_ADMIN });
+
 test("cria um lead manualmente e move até a etapa final do funil", async ({ page }) => {
   // O quadro (kanban-board.tsx) tem 5 colunas de 288px + 16px de gap dentro
   // de um container `overflow-x-auto` — 5 colunas cabem em ~1544px, mais que
@@ -329,13 +333,9 @@ test("cria um lead manualmente e move até a etapa final do funil", async ({ pag
   // `boundingBox()` devolve coordenadas além do viewport.
   await page.setViewportSize({ width: 1600, height: 900 });
 
-  await test.step("login", async () => {
-    await page.goto("/login");
-    await page.getByLabel("E-mail").fill(EMAIL_ADMIN_E2E);
-    await page.getByLabel("Senha").fill(senhaE2e());
-    await page.getByRole("button", { name: "Entrar" }).click();
-    await page.waitForURL("/");
-  });
+  // Sem passo de login: a sessão vem de `auth.setup.ts` (ver `test.use`
+  // acima). O login aqui sempre foi pré-requisito, nunca o objeto do teste —
+  // e cada um gasta cota do teto de 10 por conta a cada 10 minutos.
 
   await test.step("cria o lead manualmente (Task 14)", async () => {
     await page.goto("/leads");
