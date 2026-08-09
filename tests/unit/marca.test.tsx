@@ -32,15 +32,15 @@ afterEach(() => {
 describe("Marca", () => {
   it("sem logo, mostra o nome do cliente em texto", () => {
     render(<Marca />);
-    expect(screen.getByText("AutoCenter")).toBeInTheDocument();
-    expect(screen.queryByRole("img")).not.toBeInTheDocument();
+    expect(screen.getByText("AutoCenter")).toBeTruthy();
+    expect(screen.queryByRole("img")).toBeNull();
   });
 
   it("com logo, mostra a imagem com o nome como texto alternativo", () => {
     mocks.marca = { ...mocks.marca, logo: "/logo.svg" };
     render(<Marca />);
     const img = screen.getByRole("img");
-    expect(img).toHaveAttribute("src", "/logo.svg");
-    expect(img).toHaveAttribute("alt", "AutoCenter");
+    expect(img.getAttribute("src")).toBe("/logo.svg");
+    expect(img.getAttribute("alt")).toBe("AutoCenter");
   });
 });
