@@ -51,7 +51,8 @@ export function hexParaOklch(hex: string): Oklch {
  * (croma alto com luminosidade alta, por exemplo), e o navegador as mapeia
  * sozinho ao renderizar `oklch()`. O grampeamento é a aproximação equivalente
  * para o cálculo de contraste: sem ele um canal negativo produziria
- * luminância sem significado, e o laço de ajuste decidiria com base em lixo.
+ * luminância sem significado, e o contraste calculado a partir dela não
+ * teria valor nenhum.
  */
 export function oklchParaRgbLinear(cor: Oklch): [number, number, number] {
   const a = cor.C * Math.cos((cor.H * Math.PI) / 180);
