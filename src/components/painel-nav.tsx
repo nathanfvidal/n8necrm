@@ -47,73 +47,86 @@ export function PainelNav({
   ];
 
   const grupos = [GRUPO_TRABALHO, grupoExtra];
-  const temNaoLida = notificacoesNaoLidas.length > 0;
 
-  const conteudo = (
-    <div className="flex h-full flex-col gap-4 p-3">
-      <div className="px-2 py-1">
-        <Marca />
-      </div>
-
-      <div className="flex-1">
-        <NavLinks grupos={grupos} />
-      </div>
-
-      <div className="border-t pt-3">
-        <div className="flex items-center gap-2 px-2">
-          <Avatar className="size-6">
-            <AvatarFallback>{nomeUsuario?.slice(0, 1).toUpperCase() ?? "?"}</AvatarFallback>
-          </Avatar>
-          {/* Quem está logado, visível sempre: num computador compartilhado
-              da revenda, é o que faz alguém perceber que ficou na conta do
-              colega antes de mexer no funil no nome dele. */}
-          {nomeUsuario && (
-            <span className="truncate text-sm text-muted-foreground" data-testid="usuario-logado">
-              {nomeUsuario}
-            </span>
-          )}
+  /**
+   * Chamada duas vezes abaixo — uma para o `<aside>` do desktop, outra para
+   * o `<SheetContent>` da gaveta do celular —, e CADA chamada cria uma
+   * árvore própria. As duas convivem no DOM ao mesmo tempo (CSS decide qual
+   * aparece: `hidden lg:block` no aside; a gaveta é portalizada para
+   * `document.body` e só monta quando aberta), mas em nenhuma largura as
+   * DUAS ficam visíveis juntas.
+   *
+   * `comSino` existe por causa do portal: abrir a gaveta não troca de lugar
+   * o `<aside>`, soma outra árvore ao documento. Se as duas chamadas
+   * renderizassem `<NotificationBell>`, abrir a gaveta no celular colocaria
+   * DOIS sinos no DOM ao mesmo tempo — por isso a gaveta NUNCA leva sino
+   * (`comSino={false}`). No celular o sino mora na barra superior, fora da
+   * gaveta, e por isso fica disponível a zero toques.
+   */
+  function conteudo({ comSino }: { comSino: boolean }) {
+    return (
+      <div className="flex h-full flex-col gap-4 p-3">
+        <div className="px-2 py-1">
+          <Marca />
         </div>
-        <div className="mt-2 flex items-center gap-1 px-1">
-          <ThemeToggle />
-          <NotificationBell notificacoes={notificacoesNaoLidas} />
-          {/* Form + Server Action em vez de link: um GET que desloga pode ser
-              disparado por qualquer site com um <img src>. Ver sairAction. */}
-          <form action={sairAction} className="ml-auto">
-            <button
-              type="submit"
-              className="rounded-md px-2 py-1 text-sm text-muted-foreground hover:text-foreground"
-            >
-              Sair
-            </button>
-          </form>
+
+        <div className="flex-1">
+          <NavLinks grupos={grupos} />
+        </div>
+
+        <div className="border-t pt-3">
+          <div className="flex items-center gap-2 px-2">
+            <Avatar className="size-6">
+              <AvatarFallback>{nomeUsuario?.slice(0, 1).toUpperCase() ?? "?"}</AvatarFallback>
+            </Avatar>
+            {/* Quem está logado, visível sempre: num computador compartilhado
+                da revenda, é o que faz alguém perceber que ficou na conta do
+                colega antes de mexer no funil no nome dele. */}
+            {nomeUsuario && (
+              <span className="truncate text-sm text-muted-foreground" data-testid="usuario-logado">
+                {nomeUsuario}
+              </span>
+            )}
+          </div>
+          <div className="mt-2 flex items-center gap-1 px-1">
+            <ThemeToggle />
+            {comSino && <NotificationBell notificacoes={notificacoesNaoLidas} />}
+            {/* Form + Server Action em vez de link: um GET que desloga pode ser
+                disparado por qualquer site com um <img src>. Ver sairAction. */}
+            <form action={sairAction} className="ml-auto">
+              <button
+                type="submit"
+                className="rounded-md px-2 py-1 text-sm text-muted-foreground hover:text-foreground"
+              >
+                Sair
+              </button>
+            </form>
+          </div>
         </div>
       </div>
-    </div>
-  );
+    );
+  }
 
   return (
     <>
-      <aside className="hidden w-[248px] shrink-0 border-r bg-sidebar lg:block">{conteudo}</aside>
+      <aside className="hidden w-[248px] shrink-0 border-r bg-sidebar lg:block">
+        {conteudo({ comSino: true })}
+      </aside>
 
       <div className="flex items-center gap-2 border-b p-2 lg:hidden">
         <Sheet>
-          <SheetTrigger
-            aria-label="Abrir menu"
-            className="relative rounded-md p-2 hover:bg-sidebar-accent"
-          >
+          <SheetTrigger aria-label="Abrir menu" className="rounded-md p-2 hover:bg-sidebar-accent">
             <Menu size={18} />
-            {/* O sino tem um único ponto de montagem, no rodapé — no celular
-                ele fica dentro da gaveta. Este ponto evita que o aviso se
-                perca atrás de um toque, sem criar um segundo <NotificationBell>
-                para o e2e confundir com o primeiro. */}
-            {temNaoLida && (
-              <span className="absolute right-1 top-1 size-2 rounded-full bg-primary" />
-            )}
           </SheetTrigger>
           <SheetContent side="left" className="w-[248px] bg-sidebar p-0">
-            {conteudo}
+            {conteudo({ comSino: false })}
           </SheetContent>
         </Sheet>
+        {/* Sino direto na barra do celular, fora da gaveta: fica a zero
+            toques em vez de um, e mantém uma instância só de
+            `<NotificationBell>` visível nesta largura — a gaveta não tem a
+            dela (ver o comentário de `conteudo`). */}
+        <NotificationBell notificacoes={notificacoesNaoLidas} />
         <Marca />
       </div>
     </>
