@@ -13,6 +13,31 @@ import { useSyncExternalStore } from "react";
  * Diferente do `useMontado` do `theme-toggle`, aqui a inscrição é DE VERDADE:
  * lá o valor muda uma vez (montou) e nunca mais; aqui muda a cada clique e em
  * qualquer aba aberta no mesmo navegador.
+ *
+ * ─── Decisão de auditoria: isto NÃO é limpo no logout (achado R1) ───
+ *
+ * A preferência sobrevive ao "Sair". Num computador compartilhado, quem sentar
+ * depois consegue ler no DevTools os ids dos leads que a pessoa anterior estava
+ * acompanhando. Foi avaliado e ACEITO, por três motivos, nesta ordem:
+ *
+ * 1. O que persiste é id opaco. Para fazer qualquer coisa com ele é preciso
+ *    entrar no CRM — e quem entra já enxerga TODO lead, de qualquer papel (ver
+ *    a decisão de negócio em `listarLeads`, em `core/leads/queries.ts`). O
+ *    ganho de informação para o atacante é praticamente zero.
+ * 2. `painel-nav.tsx` é Server Component. Limpar no logout exigiria puxar o
+ *    controle de "Sair" para o cliente — fronteira nova no shell do painel,
+ *    caro para o tamanho do problema.
+ * 3. Decisivo: não cobriria quase nada. Sessão que expira, usuário desativado
+ *    pelo ADMIN, segunda aba, aba fechada sem logout e o próprio `<form>`
+ *    funcionando antes da hidratação — nenhum desses caminhos roda código de
+ *    cliente. Seria uma limpeza que PARECE completa e não é, que é pior que a
+ *    ausência documentada.
+ *
+ * O GATILHO para reabrir a decisão: no dia em que esta chave guardar qualquer
+ * coisa que não seja id opaco — um termo de busca, um nome de cliente, um
+ * valor, um filtro salvo — ela passa a vazar conteúdo, e aí precisa ser
+ * escopada pelo id do usuário (comparado na leitura, descartando o que for de
+ * outro) em vez de limpa no logout, justamente pelo motivo 3.
  */
 const CHAVE = "crm:kanban:cartoes-recolhidos";
 
