@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { aplicarTeto, LIMITE_LISTAGEM, type Listagem } from "@/core/listagem";
+import { formatarValorBR } from "@/lib/dinheiro";
 import type { Lead, Contact, User, PipelineStage } from "@prisma/client";
 
 // `responsavel` narrowed para só `id`/`nome` (Task 17, fix round 1/5,
@@ -12,9 +13,40 @@ import type { Lead, Contact, User, PipelineStage } from "@prisma/client";
 // `contact` continua com o tipo completo — `Contact` não guarda senha.
 type ResponsavelResumido = Pick<User, "id" | "nome">;
 
-export type LeadComRelacoes = Lead & {
-  contact: Contact | null;
-  responsavel: ResponsavelResumido | null;
+/**
+ * O que o quadro precisa, e SÓ isso.
+ *
+ * Antes daqui esta função devolvia `Lead & { contact: Contact }` — a linha
+ * inteira das duas tabelas — e `kanban/page.tsx` passava o objeto direto para
+ * `KanbanBoard`, que é Client Component. Medido contra o servidor de produção
+ * antes da mudança: **11 campos que o cartão nunca lê chegavam no navegador**
+ * (`utm`, `sessionId`, `itemId`, `valorEstimado`, `ultimaInteracaoEm`,
+ * `arquivadoEm`, `criadoEm`, `email`, `stageId`, `contactId`,
+ * `responsavelId`), mais o valor do e-mail do contato em texto.
+ *
+ * Era a única superfície do sistema servindo linha crua de banco ao cliente —
+ * `/leads`, `/tasks`, `/leads/[id]`, `/contatos` e o CSV todos projetam antes
+ * da fronteira. O perigo não era o e-mail de hoje: é que `Contact` vai ganhar
+ * documento e endereço, e uma consulta curinga serviria os dois ao navegador
+ * sem uma linha de código nova e sem nenhum teste ficar vermelho.
+ *
+ * `valorFormatado` e não `valorEstimado`: `Decimal` não é serializável para
+ * Client Component (o que chegava era a saída do `toJSON`, então o tipo mentia
+ * em runtime — `.toFixed(2)` compilaria e explodiria). Formatar aqui também
+ * evita puxar o namespace do Prisma para o bundle do navegador, já que
+ * `formatarValorBR` importa `@prisma/client`.
+ *
+ * `null` continua `null`: o cartão escreve "Sem valor estimado", como já faz
+ * com "Sem contato identificado". String vazia num cartão é indistinguível de
+ * campo quebrado.
+ */
+export type LeadDoQuadro = {
+  id: string;
+  canal: Lead["canal"];
+  contatoNome: string | null;
+  contatoTelefone: string | null;
+  responsavelNome: string | null;
+  valorFormatado: string | null;
 };
 
 export type LeadListado = Lead & {
@@ -32,7 +64,7 @@ export type LeadListado = Lead & {
 export async function listarLeadsPorEtapa(opcoes?: {
   /** Só para teste — ver `listarLeads`. */
   limite?: number;
-}): Promise<{ porEtapa: Record<string, LeadComRelacoes[]>; truncado: boolean }> {
+}): Promise<{ porEtapa: Record<string, LeadDoQuadro[]>; truncado: boolean }> {
   const limite = opcoes?.limite ?? LIMITE_LISTAGEM;
   const etapas = await prisma.pipelineStage.findMany({ orderBy: { ordem: "asc" } });
   const linhas = await prisma.lead.findMany({
@@ -48,16 +80,36 @@ export async function listarLeadsPorEtapa(opcoes?: {
     // listagem, porque esquecer um faz o lead reaparecer justamente onde
     // arquivar deveria tê-lo removido.
     where: { arquivadoEm: null },
-    include: { contact: true, responsavel: { select: { id: true, nome: true } } },
+    // `select` e não `include`: `include` traz TODAS as colunas escalares da
+    // tabela junto com a relação, e é exatamente por isso que 11 campos
+    // vazavam. `stageId` entra aqui porque o agrupamento precisa dele, e
+    // NÃO entra no DTO — agrupa primeiro, mapeia depois.
+    select: {
+      id: true,
+      canal: true,
+      stageId: true,
+      valorEstimado: true,
+      contact: { select: { nome: true, telefone: true } },
+      responsavel: { select: { nome: true } },
+    },
     orderBy: { criadoEm: "desc" },
     take: limite + 1,
   });
 
   const { itens: leads, truncado } = aplicarTeto(linhas, limite);
 
-  const agrupado: Record<string, LeadComRelacoes[]> = {};
+  const agrupado: Record<string, LeadDoQuadro[]> = {};
   for (const etapa of etapas) {
-    agrupado[etapa.id] = leads.filter((lead) => lead.stageId === etapa.id);
+    agrupado[etapa.id] = leads
+      .filter((lead) => lead.stageId === etapa.id)
+      .map((lead) => ({
+        id: lead.id,
+        canal: lead.canal,
+        contatoNome: lead.contact?.nome ?? null,
+        contatoTelefone: lead.contact?.telefone ?? null,
+        responsavelNome: lead.responsavel?.nome ?? null,
+        valorFormatado: lead.valorEstimado === null ? null : formatarValorBR(lead.valorEstimado),
+      }));
   }
   return { porEtapa: agrupado, truncado };
 }

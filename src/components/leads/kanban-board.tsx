@@ -17,9 +17,9 @@ import type { PipelineStage } from "@prisma/client";
 import { KanbanCard } from "./kanban-card";
 import { moverLeadDeEtapa } from "@/core/leads/actions";
 import { EmptyState } from "@/components/empty-state";
-import type { LeadComRelacoes } from "@/core/leads/queries";
+import type { LeadDoQuadro } from "@/core/leads/queries";
 
-type LeadsPorEtapa = Record<string, LeadComRelacoes[]>;
+type LeadsPorEtapa = Record<string, LeadDoQuadro[]>;
 
 // w-72 (288px) + gap-4 (16px) = a distância, em pixels, entre o início de
 // uma coluna e o início da próxima (ver o layout em `KanbanBoard` abaixo).
@@ -174,7 +174,7 @@ export function useKanbanBoard(leadsPorEtapaInicial: LeadsPorEtapa) {
   return { leadsPorEtapa, erro, handleDragEnd, limparErro: () => setErro(null) };
 }
 
-function Coluna({ etapa, leads }: { etapa: PipelineStage; leads: LeadComRelacoes[] }) {
+function Coluna({ etapa, leads }: { etapa: PipelineStage; leads: LeadDoQuadro[] }) {
   const { setNodeRef, isOver } = useDroppable({ id: etapa.id });
 
   return (
