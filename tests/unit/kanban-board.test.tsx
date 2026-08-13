@@ -21,10 +21,9 @@
 // exercitado.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, renderHook, act, cleanup } from "@testing-library/react";
-import type { Contact, User } from "@prisma/client";
 import type { DragEndEvent } from "@dnd-kit/core";
 
-import type { LeadComRelacoes } from "../../src/core/leads/queries";
+import type { LeadDoQuadro } from "../../src/core/leads/queries";
 
 const moverLeadDeEtapaMock = vi.fn();
 vi.mock("@/core/leads/actions", () => ({
@@ -33,48 +32,20 @@ vi.mock("@/core/leads/actions", () => ({
 
 const { useKanbanBoard, KanbanBoard } = await import("../../src/components/leads/kanban-board");
 
-function contatoFake(overrides: Partial<Contact> = {}): Contact {
-  return {
-    id: "contact-1",
-    nome: "Cliente Teste",
-    telefone: "11988887777",
-    email: null,
-    criadoEm: new Date("2026-01-01T00:00:00.000Z"),
-    ...overrides,
-  };
-}
-
-function usuarioFake(overrides: Partial<User> = {}): User {
-  return {
-    id: "user-1",
-    nome: "Vendedor Teste",
-    email: "vendedor@teste.local",
-    senhaHash: "hash",
-    papel: "VENDEDOR",
-    ativo: true,
-    criadoEm: new Date("2026-01-01T00:00:00.000Z"),
-    ...overrides,
-  };
-}
-
-function leadFake(overrides: Partial<LeadComRelacoes> = {}): LeadComRelacoes {
+// A fábrica encolheu de 13 campos para 6 quando `LeadComRelacoes` virou
+// `LeadDoQuadro`. Não é cosmética: antes ela precisava montar a linha inteira
+// de `Lead`, `Contact` e `User` — inclusive `senhaHash`, `utm` e `sessionId` —
+// para renderizar um cartão que lê quatro campos. Um teste obrigado a
+// fabricar dado que a tela nunca usa é o sintoma de que a fronteira estava
+// larga demais; o tipo agora impede isso de voltar.
+function leadFake(overrides: Partial<LeadDoQuadro> = {}): LeadDoQuadro {
   return {
     id: "lead-1",
-    contactId: "contact-1",
-    itemId: null,
-    stageId: "etapa-1",
-    responsavelId: "user-1",
     canal: "MANUAL",
-    valorEstimado: null,
-    sessionId: null,
-    utm: null,
-    criadoEm: new Date("2026-01-01T00:00:00.000Z"),
-    ultimaInteracaoEm: new Date("2026-01-01T00:00:00.000Z"),
-    // Lead ativo. `arquivadoEm` nasceu com a edição/arquivamento
-    // (2026-08-08) e é obrigatório no tipo, ainda que nulo.
-    arquivadoEm: null,
-    contact: contatoFake(),
-    responsavel: usuarioFake(),
+    contatoNome: "Cliente Teste",
+    contatoTelefone: "11988887777",
+    responsavelNome: "Vendedor Teste",
+    valorFormatado: null,
     ...overrides,
   };
 }
@@ -109,7 +80,7 @@ afterEach(() => {
 
 describe("useKanbanBoard", () => {
   it("move otimisticamente o lead para a nova etapa quando a action resolve", async () => {
-    moverLeadDeEtapaMock.mockResolvedValue(leadFake({ stageId: "etapa-2" }));
+    moverLeadDeEtapaMock.mockResolvedValue(leadFake());
     const { result } = renderHook(() => useKanbanBoard({ "etapa-1": [leadFake()], "etapa-2": [] }));
 
     await act(async () => {
@@ -278,7 +249,7 @@ describe("KanbanBoard", () => {
     render(
       <KanbanBoard
         etapas={etapasFake}
-        leadsPorEtapa={{ "etapa-1": [leadFake({ contact: null, canal: "WHATSAPP" })], "etapa-2": [] }}
+        leadsPorEtapa={{ "etapa-1": [leadFake({ contatoNome: null, contatoTelefone: null, canal: "WHATSAPP" })], "etapa-2": [] }}
       />
     );
 
@@ -292,7 +263,7 @@ describe("KanbanBoard", () => {
     render(
       <KanbanBoard
         etapas={etapasFake}
-        leadsPorEtapa={{ "etapa-1": [leadFake({ responsavel: null, responsavelId: null })], "etapa-2": [] }}
+        leadsPorEtapa={{ "etapa-1": [leadFake({ responsavelNome: null })], "etapa-2": [] }}
       />
     );
 

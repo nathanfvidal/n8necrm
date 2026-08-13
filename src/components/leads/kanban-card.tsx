@@ -4,9 +4,9 @@ import { useDraggable } from "@dnd-kit/core";
 import { CSS } from "@dnd-kit/utilities";
 
 import { Card, CardContent } from "@/components/ui/card";
-import type { LeadComRelacoes } from "@/core/leads/queries";
+import type { LeadDoQuadro } from "@/core/leads/queries";
 
-const rotuloCanal: Record<LeadComRelacoes["canal"], string> = {
+const rotuloCanal: Record<LeadDoQuadro["canal"], string> = {
   FORMULARIO: "Formulário",
   WHATSAPP: "WhatsApp",
   MANUAL: "Manual",
@@ -25,14 +25,14 @@ const rotuloCanal: Record<LeadComRelacoes["canal"], string> = {
  * por Tab e operável via `KeyboardSensor` (ver kanban-board.tsx), sem
  * nenhum código extra aqui.
  */
-export function KanbanCard({ lead }: { lead: LeadComRelacoes }) {
+export function KanbanCard({ lead }: { lead: LeadDoQuadro }) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
     id: lead.id,
   });
 
   const style = transform ? { transform: CSS.Translate.toString(transform) } : undefined;
 
-  const nomeContato = lead.contact?.nome ?? "Sem contato identificado";
+  const nomeContato = lead.contatoNome ?? "Sem contato identificado";
 
   return (
     <Card
@@ -48,10 +48,10 @@ export function KanbanCard({ lead }: { lead: LeadComRelacoes }) {
       <CardContent className="space-y-1 p-3">
         <p className="text-sm font-medium">{nomeContato}</p>
         <p className="text-xs text-muted-foreground">
-          {lead.contact?.telefone ?? rotuloCanal[lead.canal]}
+          {lead.contatoTelefone ?? rotuloCanal[lead.canal]}
         </p>
         <p className="text-xs text-muted-foreground">
-          {lead.responsavel?.nome ?? "Sem responsável"}
+          {lead.responsavelNome ?? "Sem responsável"}
         </p>
       </CardContent>
     </Card>
