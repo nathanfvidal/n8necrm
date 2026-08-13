@@ -72,6 +72,7 @@ model Contact {
   criadoEm      DateTime       @default(now())
   leads         Lead[]
   conversations Conversation[]
+  tasks         Task[]
 }
 
 model PipelineStage {
@@ -158,7 +159,29 @@ model Task {
   responsavel   User      @relation(fields: [responsavelId], references: [id])
   leadId        String?
   lead          Lead?     @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  // `Restrict` e NÃO o `SetNull` que o Prisma usaria por padrão numa relação
+  // opcional — por isso é explícito. Não existe exclusão de contato na
+  // aplicação hoje; no dia em que existir, `SetNull` faria "ligar para a
+  // Fernanda às 15h" perder a Fernanda em silêncio, e a tarefa continuaria
+  // na lista apontando para ninguém. `Restrict` transforma isso num erro que
+  // alguém precisa resolver de propósito. Custo hoje: zero.
+  contactId     String?
+  contact       Contact?  @relation(fields: [contactId], references: [id], onDelete: Restrict)
   criadoEm      DateTime  @default(now())
+
+  // `Task` não tinha índice NENHUM. Seja honesto sobre o motivo: nesta escala
+  // nenhum dos dois é mensurável — é seguro barato numa tabela de escrita
+  // baixa, posto agora porque o filtro de concluídas passa a consultar por
+  // `concluidaEm` em toda listagem.
+  //
+  // A ordem das colunas não é arbitrária: o Postgres serve igualdade
+  // (`responsavelId`, `concluidaEm`) e ordenação (`vencimento`) no MESMO
+  // índice, desde que as colunas de igualdade venham primeiro.
+  //
+  // NÃO existe `Task_contactId_idx` de propósito: nada consulta tarefa por
+  // contato nesta branch, e índice sem consulta é peso morto na escrita.
+  @@index([responsavelId, concluidaEm, vencimento])
+  @@index([leadId, concluidaEm])
 }
 
 model Notification {
