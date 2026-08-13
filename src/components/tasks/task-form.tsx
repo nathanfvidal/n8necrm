@@ -9,8 +9,20 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { criarMinhaTask } from "@/core/tasks/actions";
 import { parseDataCivil } from "@/lib/date";
+
+export type OpcaoDeContato = { id: string; nome: string };
+
+// `<select>` nativo e não `ui/select.tsx` (Base UI). O componente da casa
+// renderiza um listbox em portal, que não existe sem JavaScript e complica o
+// teste sem entregar nada aqui: são poucos contatos numa lista simples. O
+// nativo é acessível por padrão, funciona antes da hidratação e é
+// alcançável por `getByLabelText` sem truque. Se um dia a lista precisar de
+// busca dentro do campo, aí sim o Base UI paga o próprio custo.
+const CLASSES_SELECT =
+  "h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50";
 
 // Validação client-side deliberadamente rasa (só "tem título" e "tem
 // alguma data") — mesmo raciocínio de `lead-form.tsx` (Task 14): a
@@ -20,6 +32,12 @@ import { parseDataCivil } from "@/lib/date";
 const schema = z.object({
   titulo: z.string().min(1, "Informe o título"),
   vencimento: z.string().min(1, "Informe a data"),
+  // Sem `min`: descrição e contato são opcionais. O teto de tamanho da
+  // descrição é conferido no servidor (`core/tasks/schema.ts`) — repetir o
+  // número aqui criaria duas verdades para o mesmo limite, e a que vale é a
+  // que o cliente não controla.
+  descricao: z.string(),
+  contactId: z.string(),
 });
 
 type FormValues = z.infer<typeof schema>;
@@ -41,6 +59,12 @@ function mensagemDeErro(erro: unknown): string {
     if (/^Lead não encontrado/.test(erro.message)) {
       return "Esse lead não existe mais. Atualize a página.";
     }
+    if (/^Contato não encontrado/.test(erro.message)) {
+      return "Esse contato não existe mais. Atualize a página.";
+    }
+    if (/^Descrição /.test(erro.message)) {
+      return erro.message;
+    }
     if (erro.message === "Não autenticado") {
       return "Sua sessão expirou ou sua conta foi desativada. Atualize a página e faça login novamente.";
     }
@@ -60,9 +84,29 @@ function mensagemDeErro(erro: unknown): string {
  * `LeadForm`, porque a Fase 1 nem oferece a escolha de atribuir a outra
  * pessoa (ver comentário em `actions.ts`).
  */
-export function TaskForm({ leadId }: { leadId?: string }) {
+export function TaskForm({
+  leadId,
+  contatos = [],
+  contactIdPadrao,
+}: {
+  leadId?: string;
+  contatos?: OpcaoDeContato[];
+  /**
+   * Pré-seleciona um contato. É onde a decisão de ligar tarefa a lead E
+   * contato paga: em `/leads/[id]`, o contato do próprio lead já vem
+   * escolhido, e criar "ligar para o cliente" não exige achá-lo numa lista.
+   */
+  contactIdPadrao?: string | null;
+}) {
   const router = useRouter();
   const [erroEnvio, setErroEnvio] = useState<string | null>(null);
+
+  const vazio = {
+    titulo: "",
+    vencimento: "",
+    descricao: "",
+    contactId: contactIdPadrao ?? "",
+  };
 
   const {
     register,
@@ -71,7 +115,7 @@ export function TaskForm({ leadId }: { leadId?: string }) {
     formState: { errors, isSubmitting },
   } = useForm<FormValues>({
     resolver: zodResolver(schema),
-    defaultValues: { titulo: "", vencimento: "" },
+    defaultValues: vazio,
   });
 
   async function onSubmit(data: FormValues) {
@@ -85,10 +129,16 @@ export function TaskForm({ leadId }: { leadId?: string }) {
       // calendário) — por isso fica dentro do mesmo try que a action.
       await criarMinhaTask({
         titulo: data.titulo,
+        // `|| undefined` e não a string crua: o `<textarea>` vazio manda `""`,
+        // e o `<select>` sem escolha também. Mandar `""` como `contactId`
+        // reprovaria na validação do servidor ("Contato inválido") por um
+        // campo que a pessoa simplesmente não preencheu.
+        descricao: data.descricao || undefined,
+        contactId: data.contactId || undefined,
         vencimento: parseDataCivil(data.vencimento),
         leadId,
       });
-      reset({ titulo: "", vencimento: "" });
+      reset(vazio);
       router.refresh();
     } catch (erro) {
       // De propósito NÃO chamamos `reset` aqui: em caso de erro a pessoa
@@ -98,25 +148,56 @@ export function TaskForm({ leadId }: { leadId?: string }) {
   }
 
   return (
-    <form onSubmit={handleSubmit(onSubmit)} className="flex flex-wrap items-end gap-3">
-      <div className="space-y-1">
-        <Label htmlFor="titulo">Título</Label>
-        <Input id="titulo" {...register("titulo")} />
-        {errors.titulo && <p className="text-xs text-red-600">{errors.titulo.message}</p>}
+    <form onSubmit={handleSubmit(onSubmit)} className="space-y-3 rounded-lg border p-4">
+      <div className="flex flex-wrap items-end gap-3">
+        <div className="min-w-56 flex-1 space-y-1">
+          <Label htmlFor="titulo">Título</Label>
+          <Input id="titulo" {...register("titulo")} />
+          {errors.titulo && <p className="text-xs text-red-600">{errors.titulo.message}</p>}
+        </div>
+
+        <div className="space-y-1">
+          <Label htmlFor="vencimento">Vencimento</Label>
+          <Input id="vencimento" type="date" {...register("vencimento")} />
+          {errors.vencimento && <p className="text-xs text-red-600">{errors.vencimento.message}</p>}
+        </div>
+
+        {/* Some quando não há contato nenhum cadastrado: um `<select>` com uma
+            única opção "Nenhum" não é escolha, é ruído. */}
+        {contatos.length > 0 && (
+          <div className="min-w-48 space-y-1">
+            <Label htmlFor="contactId">Contato</Label>
+            <select id="contactId" className={CLASSES_SELECT} {...register("contactId")}>
+              <option value="">Nenhum</option>
+              {contatos.map((contato) => (
+                <option key={contato.id} value={contato.id}>
+                  {contato.nome}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
       </div>
 
+      {/* O campo que o dono foi buscar: "não tem objetivo, uma caixa de texto".
+          `<Textarea>` e não `<Input>` — o texto tem quebra de linha, e um
+          campo de uma linha só ensina a pessoa a não escrever nada. */}
       <div className="space-y-1">
-        <Label htmlFor="vencimento">Vencimento</Label>
-        <Input id="vencimento" type="date" {...register("vencimento")} />
-        {errors.vencimento && <p className="text-xs text-red-600">{errors.vencimento.message}</p>}
+        <Label htmlFor="descricao">Descrição</Label>
+        <Textarea
+          id="descricao"
+          rows={3}
+          placeholder="O que precisa ser feito, e por quê."
+          {...register("descricao")}
+        />
       </div>
 
-      <Button type="submit" disabled={isSubmitting} className="self-end">
+      <Button type="submit" disabled={isSubmitting}>
         {isSubmitting ? "Salvando..." : "Adicionar tarefa"}
       </Button>
 
       {erroEnvio && (
-        <p role="alert" className="w-full text-sm text-red-600">
+        <p role="alert" className="text-sm text-red-600">
           {erroEnvio}
         </p>
       )}

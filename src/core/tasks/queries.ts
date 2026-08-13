@@ -4,9 +4,34 @@
 import "server-only";
 
 import { prisma } from "@/lib/prisma";
-import type { Task, Lead, Contact, User } from "@prisma/client";
+import { aplicarTeto, LIMITE_LISTAGEM, type Listagem } from "@/core/listagem";
+import type { Task, User } from "@prisma/client";
 
-export type TaskComLead = Task & { lead: (Lead & { contact: Contact | null }) | null };
+/**
+ * O que a tela de tarefas precisa, e só isso.
+ *
+ * Substitui o antigo `TaskComLead`, que era `Task & { lead: Lead & { contact:
+ * Contact } }` — a linha inteira de três tabelas para ler UM nome. Não era
+ * vazamento (a `page.tsx` já projetava antes de entregar ao componente de
+ * cliente, diferente do que o kanban fazia), mas era o mesmo desperdício: o
+ * banco montava e transportava `utm`, `sessionId` e o e-mail do contato a
+ * cada carregamento de `/tasks`, para nada.
+ *
+ * Projetar aqui também evita que a próxima pessoa que precise de mais um
+ * campo na tela seja tentada a passar o objeto inteiro um nível adiante —
+ * que é exatamente como o vazamento do kanban nasceu.
+ */
+export type TarefaListada = {
+  id: string;
+  titulo: string;
+  descricao: string | null;
+  vencimento: Date;
+  concluidaEm: Date | null;
+  leadId: string | null;
+  leadContatoNome: string | null;
+  contactId: string | null;
+  contatoNome: string | null;
+};
 
 // `responsavel` narrowed para só `id`/`nome` — mesmo padrão de
 // `leads/queries.ts` (`ResponsavelResumido`) e `leads/[id]/page.tsx`:
@@ -17,9 +42,14 @@ type ResponsavelResumido = Pick<User, "id" | "nome">;
 export type TaskDoLead = Task & { responsavel: ResponsavelResumido };
 
 /**
- * Lê as tarefas PENDENTES de um responsável, com o lead vinculado (e o
- * contato do lead) incluído — o formato que `/tasks` (`page.tsx`) consome
- * direto para renderizar "Vence em ... · Nome do Contato" em cada linha.
+ * Lê as tarefas de um responsável — pendentes por padrão, concluídas sob
+ * pedido — já projetadas em `TarefaListada`.
+ *
+ * Com teto e `truncado`, como toda listagem da casa (`aplicarTeto`,
+ * `core/listagem.ts`). Antes desta branch a consulta não tinha teto nenhum:
+ * a lista de pendentes de uma pessoa dificilmente passa de algumas dezenas,
+ * mas a de CONCLUÍDAS cresce para sempre — sem teto, a tela de histórico de
+ * quem usa o CRM há um ano carregaria a tabela inteira numa requisição.
  *
  * Sempre escopada por `responsavelId`, sem exceção: diferente de
  * `listarLeads` (`leads/queries.ts`, sem escopo — decisão de negócio:
@@ -28,12 +58,63 @@ export type TaskDoLead = Task & { responsavel: ResponsavelResumido };
  * faz sentido a tela principal de tarefas de uma pessoa mostrar o lembrete
  * de outra, que ela nem consegue concluir.
  */
-export async function listarTasksComLead(responsavelId: string): Promise<TaskComLead[]> {
-  return prisma.task.findMany({
-    where: { responsavelId, concluidaEm: null },
-    include: { lead: { include: { contact: true } } },
-    orderBy: { vencimento: "asc" },
+export async function listarMinhasTasks(
+  responsavelId: string,
+  opcoes?: {
+    /**
+     * `false` (o padrão) lista as PENDENTES. O padrão é o seguro no sentido
+     * que importa aqui: uma chamada nova que esqueça o parâmetro mostra a
+     * lista de trabalho, não um histórico de tarefas mortas.
+     */
+    concluidas?: boolean;
+    /** Só para teste — exercita o truncamento sem criar 1001 linhas. */
+    limite?: number;
+  }
+): Promise<Listagem<TarefaListada>> {
+  const limite = opcoes?.limite ?? LIMITE_LISTAGEM;
+  const concluidas = opcoes?.concluidas ?? false;
+
+  const linhas = await prisma.task.findMany({
+    where: {
+      responsavelId,
+      concluidaEm: concluidas ? { not: null } : null,
+    },
+    select: {
+      id: true,
+      titulo: true,
+      descricao: true,
+      vencimento: true,
+      concluidaEm: true,
+      leadId: true,
+      contactId: true,
+      lead: { select: { contact: { select: { nome: true } } } },
+      contact: { select: { nome: true } },
+    },
+    // Pendente ordena por vencimento (a mais urgente primeiro); concluída
+    // ordena pela conclusão mais recente. São perguntas diferentes: numa
+    // "o que faço agora", na outra "o que acabei de fazer". Manter
+    // `vencimento asc` nas concluídas deixaria no topo a tarefa vencida há
+    // mais tempo, que é a menos interessante das duas listas.
+    orderBy: concluidas ? { concluidaEm: "desc" } : { vencimento: "asc" },
+    take: limite + 1,
   });
+
+  const { itens, truncado } = aplicarTeto(linhas, limite);
+
+  return {
+    truncado,
+    itens: itens.map((t) => ({
+      id: t.id,
+      titulo: t.titulo,
+      descricao: t.descricao,
+      vencimento: t.vencimento,
+      concluidaEm: t.concluidaEm,
+      leadId: t.leadId,
+      leadContatoNome: t.lead?.contact?.nome ?? null,
+      contactId: t.contactId,
+      contatoNome: t.contact?.nome ?? null,
+    })),
+  };
 }
 
 /**
