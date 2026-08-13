@@ -1208,8 +1208,22 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
 **Interfaces:**
 - Consome: nada do projeto — recebe tudo por prop, de propósito.
 - Produz:
-  - `type LinkDoPainel = { href: string; label: string; icone: LucideIcon }`
+  - `type IconeDoPainel = "dashboard" | "leads" | "funil" | "contatos" | "tarefas" | "conversas" | "equipe"`
+  - `type LinkDoPainel = { href: string; label: string; icone: IconeDoPainel }`
   - `<NavLinks grupos={LinkDoPainel[][]} />`
+
+> ⚠️ **Correção aplicada durante a execução (2026-08-13).** Este plano especificava
+> `icone: LucideIcon` — a **referência de componente**. Isso **derruba o painel inteiro em
+> produção**: `painel-nav.tsx` é Server Component e `nav-links.tsx` é de cliente, e função
+> não atravessa essa fronteira (o React precisa serializar as props). O erro é
+> *"Functions cannot be passed directly to Client Components"*.
+>
+> A chave de string serializa, e a união fechada mantém a segurança de tipo. **O mapa de
+> ícones mora do lado do cliente**, em `nav-links.tsx`.
+>
+> Nada disso é pego por teste unitário — jsdom não tem fronteira RSC — nem por
+> `typecheck`, `lint` ou `build`, que são análise estática. **Quem pega é o e2e carregando
+> o painel.** Foi assim que apareceu, sete tarefas depois.
 
 - [ ] **Passo 1: escrever o teste que falha**
 
@@ -1504,6 +1518,11 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import type { Role } from "@prisma/client";
 
+// ⚠️ Corrigido na execução — ver o aviso na Task 6. `icone` é uma CHAVE DE
+// STRING, não a referência do componente: passar a função do lucide daqui
+// (Server Component) para `NavLinks` (cliente) derruba o painel em produção.
+// O correto é `icone: "dashboard"`, `"leads"`, `"funil"`, `"contatos"`,
+// `"tarefas"` — e o mapa vive em `nav-links.tsx`.
 const GRUPO_TRABALHO: LinkDoPainel[] = [
   { href: "/", label: "Dashboard", icone: LayoutDashboard },
   { href: "/leads", label: "Leads", icone: Target },
