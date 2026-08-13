@@ -41,6 +41,7 @@ function taskFake(overrides: Partial<Task> = {}): Task {
     concluidaEm: null,
     responsavelId: "usuario-fake-id",
     leadId: null,
+    contactId: null,
     criadoEm: new Date("2026-01-01T00:00:00.000Z"),
     ...overrides,
   };
