@@ -1727,6 +1727,32 @@ export function ThemeToggle() {
 }
 ```
 
+> ⚠️ **Duas correções aplicadas durante a execução (2026-08-13).** O código
+> acima está errado em dois pontos; o arquivo real é a referência.
+>
+> **1. `useEffect(() => setMontado(true), [])` não compila aqui.** Este projeto
+> trata `react-hooks/set-state-in-effect` como **erro** de lint. A troca é
+> `useSyncExternalStore(semInscricao, () => true, () => false)`: snapshot do
+> servidor `false`, do cliente `true`, sem inscrição — mesmo efeito, sem
+> `setState` dentro de Effect.
+>
+> **2. O `aria-label` precisa passar pela guarda de mount, igual ao ícone.**
+> `const escuro = resolvedTheme === "dark"` está fora da guarda, e isso
+> **congela o rótulo para sempre**. O `getTheme` do `next-themes` começa com
+> `if (typeof window === "undefined") return` — no servidor devolve
+> `undefined`, ignorando o `defaultTheme`; no cliente, o inicializador do
+> `useState` lê o localStorage já no primeiro render. Os dois lados divergem, e
+> **o React não confere atributo durante a hidratação**: ele fica com o DOM do
+> servidor acreditando que o valor do cliente já está lá. Todo render seguinte
+> produz esse mesmo valor, o diff nunca acusa diferença, e o atributo nunca é
+> corrigido. O botão anuncia o oposto do que faz para quem usa leitor de tela,
+> enquanto o ícone (esse sim atrás da guarda) mostra o certo — ninguém vê pela
+> tela. O correto é `const escuro = montado && resolvedTheme === "dark"`.
+>
+> Nada disso aparece em `typecheck`, `lint` ou `build`. Quem pegou foi o
+> `getByRole("button", { name: "Usar tema claro" })` do e2e, estourando por
+> tempo.
+
 - [ ] **Passo 2: montar o provider com o nonce**
 
 Em `src/app/(painel)/layout.tsx`, acrescente as importações e envolva o retorno:

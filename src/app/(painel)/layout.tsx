@@ -1,4 +1,6 @@
+import { headers } from "next/headers";
 import { redirect } from "next/navigation";
+import { ThemeProvider } from "next-themes";
 
 import { PainelNav } from "@/components/painel-nav";
 import { usuarioAtual } from "@/core/auth/session";
@@ -86,17 +88,33 @@ export default async function PainelLayout({ children }: { children: React.React
     await listarNotificacoesNaoLidas(usuario.id)
   );
 
+  // `headers()` é assíncrona no Next 16. Ler o nonce aqui não custa nada:
+  // este layout já é `force-dynamic`. Na raiz, tornaria TODA rota dinâmica
+  // para servir um recurso que só o painel usa. `src/proxy.ts` grava o
+  // mesmo valor no header `Content-Security-Policy` da RESPOSTA — os dois
+  // precisam bater para o script anti-flash do `next-themes` rodar sob
+  // `strict-dynamic`.
+  const nonce = (await headers()).get("x-nonce") ?? undefined;
+
   return (
-    <div className="flex min-h-screen flex-col lg:flex-row">
-      {/* `papelUsuario` alimenta o link de "Equipe", que só ADMIN vê.
-          `PainelNav` é síncrona e não tem acesso à sessão — o papel vem daqui,
-          do `usuario` que `usuarioAtual()` já resolveu, sem consulta nova. */}
-      <PainelNav
-        notificacoesNaoLidas={notificacoesNaoLidas}
-        nomeUsuario={usuario.nome}
-        papelUsuario={usuario.papel}
-      />
-      <main className="flex-1">{children}</main>
-    </div>
+    <ThemeProvider
+      attribute="class"
+      themes={["light", "dark"]}
+      enableSystem={false}
+      defaultTheme="dark"
+      nonce={nonce}
+    >
+      <div className="flex min-h-screen flex-col lg:flex-row">
+        {/* `papelUsuario` alimenta o link de "Equipe", que só ADMIN vê.
+            `PainelNav` é síncrona e não tem acesso à sessão — o papel vem daqui,
+            do `usuario` que `usuarioAtual()` já resolveu, sem consulta nova. */}
+        <PainelNav
+          notificacoesNaoLidas={notificacoesNaoLidas}
+          nomeUsuario={usuario.nome}
+          papelUsuario={usuario.papel}
+        />
+        <main className="flex-1">{children}</main>
+      </div>
+    </ThemeProvider>
   );
 }
