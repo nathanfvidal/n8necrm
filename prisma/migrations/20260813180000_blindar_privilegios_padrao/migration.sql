@@ -1,0 +1,43 @@
+-- Achado R1 da auditoria: a PRÓXIMA tabela criada por migração nasceria
+-- exposta.
+--
+-- Medido antes desta migração, em `pg_default_acl`:
+--
+--   defaclrole=postgres, defaclobjtype='r' (tabelas)
+--   acl = {postgres=arwdDxtm/postgres, anon=arwdDxtm/postgres,
+--          authenticated=arwdDxtm/postgres, service_role=arwdDxtm/postgres}
+--
+-- Ou seja: toda tabela criada pelo papel `postgres` (que é o papel das nossas
+-- migrações — `DIRECT_URL`) nascia com privilégio TOTAL para `anon` e
+-- `authenticated`, os dois papéis que a API pública do Supabase usa.
+--
+-- Isso não estava explorável no momento da auditoria: as 13 tabelas de então
+-- tinham RLS ligada e zero grants para esses papéis — alguém revogou à mão
+-- depois de criar cada uma. Mas a proteção dependia de DUAS lembranças
+-- manuais por tabela nova, e o Prisma não emite `ENABLE ROW LEVEL SECURITY`
+-- em migração nenhuma. Bastava uma tabela criada sem que alguém executasse os
+-- dois passos para ela ficar legível pela internet.
+--
+-- Revogar o privilégio PADRÃO tira metade do problema do campo das
+-- lembranças: passa a valer para toda tabela futura, sem ninguém decidir
+-- nada. A outra metade (RLS) não tem equivalente declarativo no Postgres, e
+-- por isso virou um teste que falha — `tests/e2e/banco-blindado.spec.ts`.
+--
+-- ## O que isto NÃO alcança
+--
+-- `ALTER DEFAULT PRIVILEGES` sem `FOR ROLE` vale para o papel que executa, e
+-- migração roda como `postgres`. As entradas de `supabase_admin` em
+-- `pg_default_acl` continuam como estão: são os objetos internos do Supabase
+-- (auth, storage, realtime), não os nossos, e alterá-las exigiria ser aquele
+-- papel. Nossas tabelas nascem de `postgres` — é a linha que importa aqui.
+--
+-- ## Risco de aplicar
+--
+-- Nenhum sobre o que já existe: `ALTER DEFAULT PRIVILEGES` só afeta objetos
+-- CRIADOS DEPOIS. E nada na aplicação usa esses dois papéis — o único cliente
+-- Supabase do código (`src/lib/storage.ts`) autentica com `SERVICE_ROLE`, que
+-- esta migração não toca de propósito.
+
+ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON TABLES FROM anon, authenticated;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON SEQUENCES FROM anon, authenticated;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON FUNCTIONS FROM anon, authenticated;
