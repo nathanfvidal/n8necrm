@@ -66,6 +66,37 @@ beforeEach(() => {
 // efeito prático não era teórico: `router.refresh()` no formulário conserta a
 // aba de quem agiu, e todo o resto (a mesma pessoa em outra aba, o contador
 // do painel) continuava servindo a página em cache, sem a tarefa nova.
+// Correção do achado R2 da auditoria da branch. O valor de retorno de uma
+// Server Action é SERIALIZADO para o navegador: devolver `Task` mandava a
+// linha inteira (`responsavelId`, `contactId`, `criadoEm`) para chamadores
+// que descartam o retorno. Era a tarefa do próprio usuário, então não vazava
+// entre pessoas — mas é o mesmo padrão que produziu o vazamento do funil.
+describe("nada da linha do banco atravessa a fronteira", () => {
+  it("criar não devolve a tarefa ao navegador", async () => {
+    usuarioAtualMock.mockResolvedValue(usuarioFake());
+    criarTaskMock.mockResolvedValue(taskFake({ responsavelId: "segredo" }));
+
+    const devolvido = await criarMinhaTask({
+      titulo: "Ligar",
+      vencimento: new Date("2026-08-05T00:00:00.000Z"),
+    });
+
+    expect(devolvido).toBeUndefined();
+  });
+
+  it("concluir não devolve a tarefa, mas ainda lê o leadId dela por dentro", async () => {
+    usuarioAtualMock.mockResolvedValue(usuarioFake());
+    concluirTaskMock.mockResolvedValue(taskFake({ leadId: "lead-7" }));
+
+    const devolvido = await concluirMinhaTask("task-1");
+
+    expect(devolvido).toBeUndefined();
+    // A linha continua sendo lida no servidor — é de lá que sai a rota do
+    // lead a invalidar. O que mudou é ela não sair de lá.
+    expect(revalidatePathMock).toHaveBeenCalledWith("/leads/lead-7");
+  });
+});
+
 describe("invalidação de cache", () => {
   it("criar invalida /tasks e o painel", async () => {
     usuarioAtualMock.mockResolvedValue(usuarioFake());

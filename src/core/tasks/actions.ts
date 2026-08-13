@@ -5,7 +5,6 @@ import { revalidatePath } from "next/cache";
 import { usuarioAtual } from "@/core/auth/session";
 import { ehSessaoInvalida, MENSAGEM_SESSAO_INVALIDA, type ResultadoAcao } from "@/lib/acao";
 import { criarTask, concluirTask, editarTask, excluirTask, reabrirTask } from "./service";
-import type { Task } from "@prisma/client";
 
 /**
  * ⚠️ Este arquivo tem DUAS convenções de erro, e isso é dívida declarada.
@@ -49,9 +48,9 @@ export async function criarMinhaTask(input: {
   vencimento: Date;
   leadId?: string;
   contactId?: string | null;
-}): Promise<Task> {
+}): Promise<void> {
   const autor = await usuarioAtual();
-  const criada = await criarTask({ ...input, responsavelId: autor.id });
+  await criarTask({ ...input, responsavelId: autor.id });
   // `revalidatePath` não é estilo: sem ele, só a aba de quem agiu conserta
   // (via `router.refresh()` no formulário), e o cache de rota fica velho para
   // todo mundo — inclusive para a própria pessoa em outra aba, e para o
@@ -62,7 +61,6 @@ export async function criarMinhaTask(input: {
   if (input.leadId) {
     revalidatePath(`/leads/${input.leadId}`);
   }
-  return criada;
 }
 
 /**
@@ -71,15 +69,21 @@ export async function criarMinhaTask(input: {
  * verifica dono; ver o comentário lá sobre por que essa checagem existe e
  * por que difere da decisão de leads (`moverEtapa`, que nunca checa dono).
  */
-export async function concluirMinhaTask(taskId: string): Promise<Task> {
+export async function concluirMinhaTask(taskId: string): Promise<void> {
   const autor = await usuarioAtual();
+  // A linha volta do serviço porque `leadId` é preciso para invalidar a
+  // página do lead — mas NÃO atravessa a fronteira: o valor de retorno de uma
+  // Server Action é serializado para o navegador, e devolver `Task` mandava a
+  // linha inteira (`responsavelId`, `contactId`, `criadoEm`) para um chamador
+  // que descarta o retorno. É a tarefa do próprio usuário, então não vazava
+  // entre pessoas — mas é o mesmo padrão que produziu o vazamento do funil, e
+  // a regra da casa passou a ser: só atravessa o que a tela usa.
   const concluida = await concluirTask({ taskId, autorId: autor.id });
   revalidatePath("/tasks");
   revalidatePath("/");
   if (concluida.leadId) {
     revalidatePath(`/leads/${concluida.leadId}`);
   }
-  return concluida;
 }
 
 /**
