@@ -9,7 +9,21 @@ import "server-only";
 
 import { prisma } from "@/lib/prisma";
 import { registrarAuditoria } from "@/core/audit/log";
+import { validarCamposNovosDaTarefa } from "./schema";
 import type { Task } from "@prisma/client";
+
+/**
+ * Confere que o contato existe antes de gravar — mesmo raciocínio da checagem
+ * de `leadId` logo abaixo: sem isto, um id que não corresponde a contato
+ * nenhum faria o Prisma estourar violação de FK crua (P2003), sem mensagem
+ * acionável, e a pessoa leria "Falha ao salvar a tarefa".
+ */
+async function exigirContatoExistente(contactId: string): Promise<void> {
+  const contato = await prisma.contact.findUnique({ where: { id: contactId } });
+  if (!contato) {
+    throw new Error(`Contato não encontrado: "${contactId}" não corresponde a nenhum contato.`);
+  }
+}
 
 /**
  * Cria uma tarefa.
@@ -45,6 +59,7 @@ export async function criarTask(input: {
   vencimento: Date;
   responsavelId: string;
   leadId?: string;
+  contactId?: string | null;
 }): Promise<Task> {
   const titulo = input.titulo.trim();
   if (!titulo) {
@@ -62,7 +77,16 @@ export async function criarTask(input: {
     }
   }
 
-  const descricao = input.descricao?.trim();
+  // Apara ANTES de validar: senão um texto no limite exato reprovaria por
+  // causa de um espaço no fim que não vai ser gravado.
+  const { descricao, contactId } = validarCamposNovosDaTarefa({
+    descricao: input.descricao?.trim(),
+    contactId: input.contactId,
+  });
+
+  if (contactId) {
+    await exigirContatoExistente(contactId);
+  }
 
   return prisma.task.create({
     data: {
@@ -71,6 +95,10 @@ export async function criarTask(input: {
       vencimento: input.vencimento,
       responsavelId: input.responsavelId,
       leadId: input.leadId,
+      // Ao CRIAR, `null` e `undefined` significam a mesma coisa ("sem
+      // contato") — diferente de `editarTask`, onde `null` é uma ordem de
+      // desvincular. Normaliza para não gravar `null` explícito à toa.
+      contactId: contactId || undefined,
     },
   });
 }
@@ -133,6 +161,7 @@ export async function editarTask(input: {
   descricao?: string;
   vencimento: Date;
   leadId?: string | null;
+  contactId?: string | null;
   autorId: string;
 }): Promise<Task> {
   const task = await prisma.task.findUnique({ where: { id: input.taskId } });
@@ -154,7 +183,14 @@ export async function editarTask(input: {
     }
   }
 
-  const descricao = input.descricao?.trim();
+  const { descricao, contactId } = validarCamposNovosDaTarefa({
+    descricao: input.descricao?.trim(),
+    contactId: input.contactId,
+  });
+
+  if (contactId) {
+    await exigirContatoExistente(contactId);
+  }
 
   return prisma.task.update({
     where: { id: input.taskId },
@@ -166,7 +202,41 @@ export async function editarTask(input: {
       descricao: descricao || null,
       vencimento: input.vencimento,
       ...(input.leadId === undefined ? {} : { leadId: input.leadId }),
+      // Mesma distinção do `leadId`, e vale repetir porque errar aqui é
+      // silencioso: campo AUSENTE quer dizer "não mexa no vínculo",
+      // `null` quer dizer "tire o vínculo". Colapsar os dois faria toda
+      // edição de título apagar o contato da tarefa sem ninguém pedir.
+      ...(input.contactId === undefined ? {} : { contactId: input.contactId }),
     },
+  });
+}
+
+/**
+ * Desfaz a conclusão. Regra de dono idêntica a `concluirTask` — inclusive a
+ * mensagem única para "não existe" e "não é sua".
+ *
+ * NÃO audita, e isto é uma restrição, não um esquecimento: `excluirTask` é a
+ * ÚNICA operação de tarefa que registra auditoria, porque é a única que
+ * destrói a linha para sempre. Reabrir é reversível por definição — um
+ * clique em "Concluir" desfaz. Auditar aqui encheria `AuditLog` de ruído e
+ * afogaria justamente o registro que existe para investigar sabotagem.
+ * `tests/unit/tasks-editar.test.ts` trava essa regra para edição; o teste
+ * de reabrir faz o mesmo.
+ *
+ * Idempotente de propósito: reabrir uma tarefa que já está pendente grava
+ * `concluidaEm: null` de novo e devolve sucesso, em vez de erro. Duas abas
+ * abertas, dois cliques — o segundo não pode virar mensagem de falha para uma
+ * ação cujo efeito desejado já está no lugar.
+ */
+export async function reabrirTask(input: { taskId: string; autorId: string }): Promise<Task> {
+  const task = await prisma.task.findUnique({ where: { id: input.taskId } });
+  if (!task || task.responsavelId !== input.autorId) {
+    throw new Error("Tarefa não encontrada");
+  }
+
+  return prisma.task.update({
+    where: { id: input.taskId },
+    data: { concluidaEm: null },
   });
 }
 
