@@ -232,3 +232,43 @@ describe("editar alcança descrição e contato", () => {
     expect(container.querySelectorAll("button.text-xs.underline")).toHaveLength(0);
   });
 });
+
+describe("ressincronizacao com o servidor", () => {
+  // Achado pelo PRIMEIRO e2e de tarefas do projeto, na primeira execucao.
+  // Defeito anterior a esta branch: `useTaskList` guarda a lista em
+  // `useState(tasksIniciais)`, e `useState` ignora props novas. Como
+  // `TaskForm` cria a tarefa e chama `router.refresh()` (que refaz o Server
+  // Component e manda props novas para um componente que continua montado),
+  // a tarefa recem-criada NAO aparecia ate a pessoa recarregar a pagina.
+  //
+  // Nenhum teste de unidade pegava: todos renderizam com a lista ja
+  // preenchida e nunca exercitam "as props mudaram depois do mount".
+  it("lista vazia que recebe uma tarefa nova passa a mostra-la", () => {
+    const { rerender } = render(<TaskList tasks={[]} />);
+    expect(screen.getByText("Nenhuma tarefa pendente")).toBeTruthy();
+
+    rerender(<TaskList tasks={[tarefa({ titulo: "Tarefa recem criada" })]} />);
+
+    expect(screen.getByText("Tarefa recem criada")).toBeTruthy();
+    expect(screen.queryByText("Nenhuma tarefa pendente")).toBeNull();
+  });
+
+  it("tarefa removida no servidor some da tela", () => {
+    const { rerender } = render(<TaskList tasks={[tarefa()]} />);
+    expect(screen.getByText("Ligar pro fornecedor")).toBeTruthy();
+
+    rerender(<TaskList tasks={[]} />);
+
+    expect(screen.queryByText("Ligar pro fornecedor")).toBeNull();
+  });
+
+  it("alteracao de conteudo vinda do servidor chega na tela", () => {
+    const { rerender } = render(<TaskList tasks={[tarefa({ descricao: "antiga" })]} />);
+    expect(screen.getByText("antiga")).toBeTruthy();
+
+    rerender(<TaskList tasks={[tarefa({ descricao: "corrigida no servidor" })]} />);
+
+    expect(screen.getByText("corrigida no servidor")).toBeTruthy();
+    expect(screen.queryByText("antiga")).toBeNull();
+  });
+});

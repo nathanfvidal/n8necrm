@@ -81,6 +81,39 @@ export function useTaskList(tasksIniciais: TaskLinha[]) {
   const [tasks, setTasks] = useState(tasksIniciais);
   const [erro, setErro] = useState<string | null>(null);
 
+  // ─── Ressincronização com o servidor ───────────────────────────────────
+  //
+  // Sem isto a lista congela na foto do PRIMEIRO render, e o defeito é
+  // grave: `TaskForm` cria a tarefa, chama `router.refresh()`, o Next refaz
+  // o Server Component e manda props novas — e `useState` ignora props
+  // novas, por definição. O componente continua montado com a lista antiga.
+  // Resultado em produção: **criar uma tarefa não a mostrava na tela até a
+  // pessoa recarregar a página**.
+  //
+  // O defeito é anterior a esta branch (`router.refresh()` e este `useState`
+  // já conviviam). Ninguém tinha visto porque não havia e2e de tarefas: os
+  // testes de unidade renderizam com a lista já preenchida e nunca exercitam
+  // "props mudaram depois do mount". O primeiro teste que criou uma tarefa
+  // num navegador de verdade encontrou na primeira execução.
+  //
+  // Ajuste durante o RENDER, não em `useEffect`: é o padrão que o React
+  // documenta para "estado derivado de prop que precisa ser reiniciado". O
+  // React descarta o render em andamento e refaz imediatamente, sem pintar o
+  // quadro intermediário — diferente do efeito, que pinta a lista velha
+  // primeiro e só então corrige. Também evita o `react-hooks/set-state-in-
+  // effect`, que este projeto trata como erro de lint (mesma escolha de
+  // `theme-toggle.tsx` e `notification-bell.tsx`).
+  //
+  // Comparação por REFERÊNCIA: `page.tsx` monta um array novo a cada render,
+  // então toda resposta do servidor ressincroniza. É o que se quer — o
+  // servidor é a verdade, e o estado otimista existe só para a janela entre
+  // o clique e a confirmação.
+  const [ultimoDoServidor, setUltimoDoServidor] = useState(tasksIniciais);
+  if (tasksIniciais !== ultimoDoServidor) {
+    setUltimoDoServidor(tasksIniciais);
+    setTasks(tasksIniciais);
+  }
+
   async function handleConcluir(id: string) {
     setErro(null);
     const tarefa = tasks.find((t) => t.id === id);
