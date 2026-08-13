@@ -339,8 +339,15 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
 - Produz:
   - `const CROMA_MINIMO = 0.04`
   - `type Tokens = Record<string, Oklch>`
-  - `ajustarParaContraste(cor: Oklch, minimo?: number): { primaria: Oklch; texto: Oklch }`
+  - `escolherTexto(cor: Oklch): Oklch` — devolve preto ou branco
   - `derivarPaleta(marca: Oklch): { claro: Tokens; escuro: Tokens }`
+
+> ⚠️ **Correção aplicada durante a execução (2026-08-09).** O código abaixo mostra
+> `ajustarParaContraste` com um laço que move a luminosidade até atingir 4.5:1. **Esse laço
+> nunca executa** e foi removido — as duas curvas de contraste se cruzam em `y = 0.179`
+> valendo 4.583:1 cada, então o pior caso já passa. Se você está executando este plano do
+> zero, **não construa o laço**: implemente só a escolha entre preto e branco. A § 5.2 da
+> spec traz a prova. O resto desta task vale como está.
 
 - [ ] **Passo 1: escrever o teste que falha**
 
@@ -1004,6 +1011,14 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
       className={`${fonte.variable} ${geistMono.variable} h-full antialiased`}
     >
       <head>
+        {/*
+          `dangerouslySetInnerHTML` é a única forma de emitir CSS inline em
+          React, e aqui não há superfície de injeção: `tema` é constante de
+          build derivada de `config/client.ts` — arquivo versionado, não
+          entrada de usuário — e todo valor passa por `formatarOklch`, que
+          emite exclusivamente números. Nenhum texto do config chega a este
+          string.
+        */}
         <style dangerouslySetInnerHTML={{ __html: tema }} />
       </head>
       <body className="min-h-full flex flex-col">{children}</body>
@@ -1110,16 +1125,16 @@ afterEach(() => {
 describe("Marca", () => {
   it("sem logo, mostra o nome do cliente em texto", () => {
     render(<Marca />);
-    expect(screen.getByText("AutoCenter")).toBeInTheDocument();
-    expect(screen.queryByRole("img")).not.toBeInTheDocument();
+    expect(screen.getByText("AutoCenter")).toBeTruthy();
+    expect(screen.queryByRole("img")).toBeNull();
   });
 
   it("com logo, mostra a imagem com o nome como texto alternativo", () => {
     mocks.marca = { ...mocks.marca, logo: "/logo.svg" };
     render(<Marca />);
     const img = screen.getByRole("img");
-    expect(img).toHaveAttribute("src", "/logo.svg");
-    expect(img).toHaveAttribute("alt", "AutoCenter");
+    expect(img.getAttribute("src")).toBe("/logo.svg");
+    expect(img.getAttribute("alt")).toBe("AutoCenter");
   });
 });
 ```
@@ -1193,8 +1208,22 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
 **Interfaces:**
 - Consome: nada do projeto — recebe tudo por prop, de propósito.
 - Produz:
-  - `type LinkDoPainel = { href: string; label: string; icone: LucideIcon }`
+  - `type IconeDoPainel = "dashboard" | "leads" | "funil" | "contatos" | "tarefas" | "conversas" | "equipe"`
+  - `type LinkDoPainel = { href: string; label: string; icone: IconeDoPainel }`
   - `<NavLinks grupos={LinkDoPainel[][]} />`
+
+> ⚠️ **Correção aplicada durante a execução (2026-08-13).** Este plano especificava
+> `icone: LucideIcon` — a **referência de componente**. Isso **derruba o painel inteiro em
+> produção**: `painel-nav.tsx` é Server Component e `nav-links.tsx` é de cliente, e função
+> não atravessa essa fronteira (o React precisa serializar as props). O erro é
+> *"Functions cannot be passed directly to Client Components"*.
+>
+> A chave de string serializa, e a união fechada mantém a segurança de tipo. **O mapa de
+> ícones mora do lado do cliente**, em `nav-links.tsx`.
+>
+> Nada disso é pego por teste unitário — jsdom não tem fronteira RSC — nem por
+> `typecheck`, `lint` ou `build`, que são análise estática. **Quem pega é o e2e carregando
+> o painel.** Foi assim que apareceu, sete tarefas depois.
 
 - [ ] **Passo 1: escrever o teste que falha**
 
@@ -1209,6 +1238,21 @@ import { LayoutDashboard, Target, Columns3 } from "lucide-react";
 const mocks = vi.hoisted(() => ({ caminho: "/" }));
 vi.mock("next/navigation", () => ({ usePathname: () => mocks.caminho }));
 
+// `next/link` mockado para INSPECIONAR as props. `prefetch` não vira atributo
+// no DOM, então sem isto não há como provar que a proteção está em todos os
+// links — e a alternativa (um atributo espelho `data-prefetch`) colocaria
+// artefato de teste no código de produção.
+const linksRenderizados = vi.hoisted(() => [] as { href: string; prefetch: unknown }[]);
+vi.mock("next/link", () => ({
+  // `Record<string, unknown>` e não `never`: rest só pode ser criado a partir
+  // de tipo de objeto, e `never` faz o `tsc` recusar com TS2700 — apesar de o
+  // Vitest passar, porque o esbuild descarta tipos sem checar.
+  default: ({ href, prefetch, children, ...resto }: Record<string, unknown>) => {
+    linksRenderizados.push({ href: href as string, prefetch });
+    return <a href={href as string} {...resto}>{children as React.ReactNode}</a>;
+  },
+}));
+
 import { NavLinks } from "@/components/nav-links";
 
 const GRUPO_A = [
@@ -1220,13 +1264,14 @@ const GRUPO_A = [
 afterEach(() => {
   cleanup();
   mocks.caminho = "/";
+  linksRenderizados.length = 0;
 });
 
 describe("NavLinks", () => {
   it("marca o item ativo com aria-current", () => {
     mocks.caminho = "/leads";
     render(<NavLinks grupos={[GRUPO_A]} />);
-    expect(screen.getByRole("link", { name: /Leads/ })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("link", { name: /Leads/ }).getAttribute("aria-current")).toBe("page");
   });
 
   // A regra do href MAIS LONGO. Com `startsWith` simples, /leads e
@@ -1234,22 +1279,23 @@ describe("NavLinks", () => {
   it("acende só o href mais longo que casa", () => {
     mocks.caminho = "/leads/kanban";
     render(<NavLinks grupos={[GRUPO_A]} />);
-    expect(screen.getByRole("link", { name: /Funil/ })).toHaveAttribute("aria-current", "page");
-    expect(screen.getByRole("link", { name: /Leads/ })).not.toHaveAttribute("aria-current");
+    expect(screen.getByRole("link", { name: /Funil/ }).getAttribute("aria-current")).toBe("page");
+    expect(screen.getByRole("link", { name: /Leads/ }).getAttribute("aria-current")).toBeNull();
   });
 
   it("não deixa a raiz acender em toda rota", () => {
     mocks.caminho = "/contatos";
     render(<NavLinks grupos={[GRUPO_A]} />);
-    expect(screen.getByRole("link", { name: /Dashboard/ })).not.toHaveAttribute("aria-current");
+    expect(screen.getByRole("link", { name: /Dashboard/ }).getAttribute("aria-current")).toBeNull();
   });
 
   // Sem isto, "Sair" deixa de revogar sessão: o Next pré-carrega a rota
   // protegida, a resposta chega depois do logout e o Auth.js reemite o cookie.
   it("põe prefetch=false em TODOS os links", () => {
     render(<NavLinks grupos={[GRUPO_A]} />);
-    for (const link of screen.getAllByRole("link")) {
-      expect(link).toHaveAttribute("data-prefetch", "false");
+    expect(linksRenderizados).toHaveLength(3);
+    for (const link of linksRenderizados) {
+      expect(link.prefetch).toBe(false);
     }
   });
 
@@ -1320,7 +1366,6 @@ export function NavLinks({ grupos }: { grupos: LinkDoPainel[][] }) {
               key={href}
               href={href}
               prefetch={false}
-              data-prefetch="false"
               aria-current={href === ativo ? "page" : undefined}
               className={
                 href === ativo
@@ -1339,9 +1384,9 @@ export function NavLinks({ grupos }: { grupos: LinkDoPainel[][] }) {
 }
 ```
 
-> `data-prefetch="false"` existe **só para o teste**: `prefetch` não vira atributo no DOM,
-> então sem esse espelho não há como provar que a proteção está em todos os links. É barato
-> e é o que trava a regressão do logout.
+> Nada de atributo espelho no código de produção. `prefetch` não aparece no DOM, e a prova
+> de que ele está em todos os links vem do mock de `next/link` no teste, que inspeciona as
+> props diretamente. É esse teste que trava a regressão do logout.
 
 - [ ] **Passo 4: rodar e confirmar que passa**
 
@@ -1419,14 +1464,14 @@ E os casos novos:
 ```tsx
 it("mostra o nome do usuario no rodape da barra", () => {
   render(<PainelNav nomeUsuario="Rodrigo" papelUsuario="ADMIN" />);
-  expect(screen.getByTestId("usuario-logado")).toHaveTextContent("Rodrigo");
+  expect(screen.getByTestId("usuario-logado").textContent).toContain("Rodrigo");
 });
 
 it("mantem o logout como form, nunca como link", () => {
   const { container } = render(<PainelNav nomeUsuario="Rodrigo" papelUsuario="ADMIN" />);
   // GET que desloga e disparavel por <img src> de qualquer site.
-  expect(container.querySelector("form")).toBeInTheDocument();
-  expect(screen.queryByRole("link", { name: /Sair/ })).not.toBeInTheDocument();
+  expect(container.querySelector("form")).toBeTruthy();
+  expect(screen.queryByRole("link", { name: /Sair/ })).toBeNull();
 });
 
 it("nao renderiza regua para VENDEDOR com o modulo desligado", () => {
@@ -1473,6 +1518,11 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import type { Role } from "@prisma/client";
 
+// ⚠️ Corrigido na execução — ver o aviso na Task 6. `icone` é uma CHAVE DE
+// STRING, não a referência do componente: passar a função do lucide daqui
+// (Server Component) para `NavLinks` (cliente) derruba o painel em produção.
+// O correto é `icone: "dashboard"`, `"leads"`, `"funil"`, `"contatos"`,
+// `"tarefas"` — e o mapa vive em `nav-links.tsx`.
 const GRUPO_TRABALHO: LinkDoPainel[] = [
   { href: "/", label: "Dashboard", icone: LayoutDashboard },
   { href: "/leads", label: "Leads", icone: Target },
@@ -1676,6 +1726,32 @@ export function ThemeToggle() {
   );
 }
 ```
+
+> ⚠️ **Duas correções aplicadas durante a execução (2026-08-13).** O código
+> acima está errado em dois pontos; o arquivo real é a referência.
+>
+> **1. `useEffect(() => setMontado(true), [])` não compila aqui.** Este projeto
+> trata `react-hooks/set-state-in-effect` como **erro** de lint. A troca é
+> `useSyncExternalStore(semInscricao, () => true, () => false)`: snapshot do
+> servidor `false`, do cliente `true`, sem inscrição — mesmo efeito, sem
+> `setState` dentro de Effect.
+>
+> **2. O `aria-label` precisa passar pela guarda de mount, igual ao ícone.**
+> `const escuro = resolvedTheme === "dark"` está fora da guarda, e isso
+> **congela o rótulo para sempre**. O `getTheme` do `next-themes` começa com
+> `if (typeof window === "undefined") return` — no servidor devolve
+> `undefined`, ignorando o `defaultTheme`; no cliente, o inicializador do
+> `useState` lê o localStorage já no primeiro render. Os dois lados divergem, e
+> **o React não confere atributo durante a hidratação**: ele fica com o DOM do
+> servidor acreditando que o valor do cliente já está lá. Todo render seguinte
+> produz esse mesmo valor, o diff nunca acusa diferença, e o atributo nunca é
+> corrigido. O botão anuncia o oposto do que faz para quem usa leitor de tela,
+> enquanto o ícone (esse sim atrás da guarda) mostra o certo — ninguém vê pela
+> tela. O correto é `const escuro = montado && resolvedTheme === "dark"`.
+>
+> Nada disso aparece em `typecheck`, `lint` ou `build`. Quem pegou foi o
+> `getByRole("button", { name: "Usar tema claro" })` do e2e, estourando por
+> tempo.
 
 - [ ] **Passo 2: montar o provider com o nonce**
 

@@ -1,12 +1,27 @@
-import { ClientConfig } from "./client.schema";
+import { clientConfigSchema } from "./client.schema";
 
-export const client: ClientConfig = {
-  nome: "AutoCenter Exemplo",
+/**
+ * `parse` e não anotação de tipo: até 2026-08-09 este arquivo só DECLARAVA
+ * `: ClientConfig`, então o schema Zod existia e nunca rodava — `marca` e
+ * `entidade` podiam conter qualquer coisa sem ninguém notar.
+ *
+ * Validar em escopo de módulo já derrubou o deploy deste projeto uma vez: o
+ * módulo `whatsapp` validava VARIÁVEIS DE AMBIENTE na importação, e
+ * `next build` fazia a validação rodar sem elas na Vercel. Aqui é seguro pelo
+ * motivo oposto — os valores estão neste arquivo versionado, não no ambiente,
+ * e não há como faltarem no build.
+ */
+export const client = clientConfigSchema.parse({
+  nome: "CRM Autus",
   vertical: "automotivo",
   marca: {
-    logo: "/logo.svg",
+    nome: "Autus",
     corPrimaria: "#0F62FE",
-    fonte: "Inter",
+    fonte: "Geist",
+    // Arte monocromática: a preta é para o tema claro, a branca para o
+    // escuro. Escolhido o par de 3 KB sem metadado C2PA — as variantes
+    // maiores da mesma arte carregavam ~9,5 KB de manifesto de proveniência.
+    logo: { claro: "/logo-preto.svg", escuro: "/logo-branco.svg" },
   },
   // "whatsapp" liga o atendente de IA (Fatia 1) e o link "Conversas" no
   // menu — ver src/modules/whatsapp/. Diferente de catalog/analytics
@@ -30,4 +45,4 @@ export const client: ClientConfig = {
     numero: "5511999999999",
     mensagem: "Olá, tenho interesse no {item}",
   },
-};
+});

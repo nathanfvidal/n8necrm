@@ -1,45 +1,28 @@
-import Link from "next/link";
+import { Menu } from "lucide-react";
 
 import { moduloAtivo } from "@/lib/module-gate";
 import { hasPermission } from "@/core/auth/permissions";
-import { NotificationBell, type NotificacaoApresentada } from "@/components/notifications/notification-bell";
 import { sairAction } from "@/core/auth/actions";
+import { Marca } from "@/components/marca";
+import { NavLinks, type LinkDoPainel } from "@/components/nav-links";
+import { ThemeToggle } from "@/components/theme-toggle";
+import { NotificationBell, type NotificacaoApresentada } from "@/components/notifications/notification-bell";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import type { Role } from "@prisma/client";
 
-const linksFixos = [
-  { href: "/", label: "Dashboard" },
-  { href: "/leads", label: "Leads" },
-  { href: "/leads/kanban", label: "Funil" },
-  { href: "/contatos", label: "Contatos" },
-  { href: "/tasks", label: "Tarefas" },
+const GRUPO_TRABALHO: LinkDoPainel[] = [
+  { href: "/", label: "Dashboard", icone: "dashboard" },
+  { href: "/leads", label: "Leads", icone: "leads" },
+  { href: "/leads/kanban", label: "Funil", icone: "funil" },
+  { href: "/contatos", label: "Contatos", icone: "contatos" },
+  { href: "/tasks", label: "Tarefas", icone: "tarefas" },
 ];
 
-// Um link por módulo que tem rota de verdade. `moduloAtivo` decide se ele
-// aparece; `exigirModulo()` no topo da page é que faz a rota devolver 404 num
-// fork com o módulo desligado — o menu esconder não é a defesa.
-//
-// **Só entre aqui quando a rota existir.** Até 2026-08-07 esta lista também
-// tinha `/catalogo` e `/analytics`, das Fases 2 e 3 do roteiro antigo: rotas
-// que nunca foram construídas, então o link prometia funcionalidade e
-// entregava 404. O roteiro de fases foi substituído por núcleo + módulos sob
-// demanda (`docs/superpowers/specs/2026-08-07-nucleo-e-modulos-sob-demanda.md`),
-// e os dois módulos continuam existindo como candidatos no enum de
-// `config/client.schema.ts` — o que saiu foi a promessa no menu, não a
-// intenção. Ver `docs/receita-modulo.md`, passo 6.
-const linksDeModulo = [{ href: "/conversas", label: "Conversas", modulo: "whatsapp" as const }];
-
 /**
- * `notificacoesNaoLidas` chega por PROP, opcional (default `[]`) — de
- * propósito, para `PainelNav` continuar uma função SÍNCRONA e sem Prisma,
- * testável com `render(<PainelNav />)` sem nenhum mock de banco
- * (`tests/unit/painel-nav.test.tsx`, Task 3, continua passando sem mudança).
- *
- * Quem busca o dado é `(painel)/layout.tsx` — o único lugar por onde toda
- * página do painel passa (mesmo raciocínio da guarda de sessão que já mora
- * lá) — reaproveitando o `usuario` que `usuarioAtual()` já resolveu ali para
- * checar a sessão, em vez de este componente (ou o sino) chamar
- * `usuarioAtual()`/buscar o `User` de novo. Ver o comentário em
- * `notification-bell.tsx` sobre o custo desta consulta extra por navegação.
+ * `PainelNav` continua SÍNCRONA e sem Prisma — é o que a deixa testável com
+ * `render(<PainelNav />)` sem nenhum mock de banco. Quem busca notificação é
+ * `(painel)/layout.tsx`, e o valor chega por prop.
  */
 export function PainelNav({
   notificacoesNaoLidas = [],
@@ -50,75 +33,110 @@ export function PainelNav({
   nomeUsuario?: string;
   papelUsuario?: Role;
 } = {}) {
-  const links = [
-    ...linksFixos,
-    ...linksDeModulo.filter((link) => moduloAtivo(link.modulo)),
-    // "Equipe" é filtrado por PAPEL, não por módulo: gestão de usuários é
-    // núcleo, existe em todo fork. `papelUsuario` é opcional para o
-    // componente continuar renderizável sem sessão nos testes — sem ele o
-    // link some, que é o padrão seguro.
+  // Segundo grupo: módulo e administração. Pode ficar VAZIO — vendedor num
+  // fork sem whatsapp. `NavLinks` é quem trata a régua nesse caso.
+  const grupoExtra: LinkDoPainel[] = [
+    ...(moduloAtivo("whatsapp")
+      ? [{ href: "/conversas", label: "Conversas", icone: "conversas" as const }]
+      : []),
     ...(papelUsuario && hasPermission(papelUsuario, "gerenciar_usuarios")
-      ? [{ href: "/usuarios", label: "Equipe" }]
+      ? [{ href: "/usuarios", label: "Equipe", icone: "equipe" as const }]
       : []),
   ];
 
-  return (
-    <nav className="flex items-center gap-4 border-b p-4">
-      {/*
-        `prefetch={false}` em TODOS os links do painel, e isto não é
-        conservadorismo — é a correção de um defeito que o e2e pegou.
+  const grupos = [GRUPO_TRABALHO, grupoExtra];
 
-        O padrão do Next é pré-carregar todo `<Link>` visível. Como esta nav
-        aparece em toda página do painel, isso significa requisições às rotas
-        protegidas em voo o tempo todo. Quando alguém sai, uma dessas
-        requisições chega DEPOIS do logout carregando o cookie que acabou de
-        ser invalidado — e o Auth.js reemite o cookie de sessão na resposta.
-        A sessão que o logout encerrou volta a valer, e "Sair" deixa de ser
-        revogação para virar navegação.
+  /**
+   * Chamada duas vezes abaixo — uma para o `<aside>` do desktop, outra para
+   * o `<SheetContent>` da gaveta do celular —, e CADA chamada cria uma
+   * árvore própria. As duas convivem no DOM ao mesmo tempo (CSS decide qual
+   * aparece: `hidden lg:block` no aside; a gaveta é portalizada para
+   * `document.body` e só monta quando aberta), mas em nenhuma largura as
+   * DUAS ficam visíveis juntas.
+   *
+   * `comSino` existe por causa do portal: abrir a gaveta não troca de lugar
+   * o `<aside>`, soma outra árvore ao documento. Se as duas chamadas
+   * renderizassem `<NotificationBell>`, abrir a gaveta no celular colocaria
+   * DOIS sinos no DOM ao mesmo tempo — por isso a gaveta NUNCA leva sino
+   * (`comSino={false}`). No celular o sino mora na barra superior, fora da
+   * gaveta, e por isso fica disponível a zero toques.
+   */
+  function conteudo({ comSino }: { comSino: boolean }) {
+    return (
+      <div className="flex h-full flex-col gap-4 p-3">
+        <div className="px-2 py-1">
+          <Marca />
+        </div>
 
-        Foi medido, não suposto: o teste `auth.spec.ts` ("o botão Sair encerra
-        a sessão de verdade") passou a falhar de forma intermitente a cada
-        link novo acrescentado aqui. Uma primeira correção desligou o prefetch
-        só do link novo daquela vez; acrescentar o link seguinte trouxe a
-        falha de volta, o que mostrou que o problema é do MECANISMO, não de
-        uma rota específica.
+        <div className="flex-1">
+          <NavLinks grupos={grupos} />
+        </div>
 
-        O custo é baixo: toda página do painel é `force-dynamic`
-        (`(painel)/layout.tsx`), e o Next não pré-carrega o conteúdo de rota
-        dinâmica sem um `loading.tsx` — que este projeto não tem. Ou seja, o
-        prefetch aqui gastava requisição sem entregar navegação mais rápida.
-      */}
-      {links.map((link) => (
-        <Link
-          key={link.href}
-          href={link.href}
-          prefetch={false}
-          className="text-sm font-medium hover:underline"
-        >
-          {link.label}
-        </Link>
-      ))}
-      <div className="ml-auto flex items-center gap-4">
-        <NotificationBell notificacoes={notificacoesNaoLidas} />
-        {/* Quem está logado, visível em toda tela: num computador
-            compartilhado da revenda, é o que faz alguém perceber que ficou
-            na conta do colega antes de mexer no funil no nome dele. */}
-        {nomeUsuario && (
-          <span className="text-sm text-muted-foreground" data-testid="usuario-logado">
-            {nomeUsuario}
-          </span>
-        )}
-        {/* Form + Server Action em vez de link: um GET que desloga pode ser
-            disparado por qualquer site com um <img src>. Ver sairAction. */}
-        <form action={sairAction}>
-          <button
-            type="submit"
-            className="text-sm font-medium text-muted-foreground hover:text-foreground hover:underline"
-          >
-            Sair
-          </button>
-        </form>
+        <div className="border-t pt-3">
+          <div className="flex items-center gap-2 px-2">
+            <Avatar className="size-6">
+              <AvatarFallback>{nomeUsuario?.slice(0, 1).toUpperCase() ?? "?"}</AvatarFallback>
+            </Avatar>
+            {/* Quem está logado, visível sempre: num computador compartilhado
+                da revenda, é o que faz alguém perceber que ficou na conta do
+                colega antes de mexer no funil no nome dele. */}
+            {nomeUsuario && (
+              <span className="truncate text-sm text-muted-foreground" data-testid="usuario-logado">
+                {nomeUsuario}
+              </span>
+            )}
+          </div>
+          <div className="mt-2 flex items-center gap-1 px-1">
+            <ThemeToggle />
+            {comSino && <NotificationBell notificacoes={notificacoesNaoLidas} />}
+            {/* Form + Server Action em vez de link: um GET que desloga pode ser
+                disparado por qualquer site com um <img src>. Ver sairAction. */}
+            <form action={sairAction} className="ml-auto">
+              <button
+                type="submit"
+                className="rounded-md px-2 py-1 text-sm text-muted-foreground hover:text-foreground"
+              >
+                Sair
+              </button>
+            </form>
+          </div>
+        </div>
       </div>
-    </nav>
+    );
+  }
+
+  return (
+    <>
+      <aside className="hidden w-[248px] shrink-0 border-r bg-sidebar lg:block">
+        {conteudo({ comSino: true })}
+      </aside>
+
+      <div className="flex items-center gap-2 border-b p-2 lg:hidden">
+        <Sheet>
+          <SheetTrigger aria-label="Abrir menu" className="rounded-md p-2 hover:bg-sidebar-accent">
+            <Menu size={18} />
+          </SheetTrigger>
+          {/* `data-[side=left]:w-[248px]` e não `w-[248px]`: o `sheet.tsx` já
+              traz `data-[side=left]:w-3/4`, que o `tailwind-merge` não
+              considera conflitante com a classe simples — as duas sobrevivem
+              e a de maior especificidade vence. Medido antes do conserto:
+              293px de largura numa janela de 390, onde o código dizia 248. */}
+          <SheetContent side="left" className="data-[side=left]:w-[248px] bg-sidebar p-0">
+            {/* Sem isto o leitor de tela anuncia só "diálogo": `role="dialog"`
+                sem nome acessível nenhum (WCAG 4.1.2). Fica invisível porque
+                a gaveta já mostra a marca no topo — o nome é para quem não
+                enxerga a arte, não para repetir na tela. */}
+            <SheetTitle className="sr-only">Menu de navegação</SheetTitle>
+            {conteudo({ comSino: false })}
+          </SheetContent>
+        </Sheet>
+        {/* Sino direto na barra do celular, fora da gaveta: fica a zero
+            toques em vez de um, e mantém uma instância só de
+            `<NotificationBell>` visível nesta largura — a gaveta não tem a
+            dela (ver o comentário de `conteudo`). */}
+        <NotificationBell notificacoes={notificacoesNaoLidas} />
+        <Marca />
+      </div>
+    </>
   );
 }

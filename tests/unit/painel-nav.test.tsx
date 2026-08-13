@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, screen, cleanup } from "@testing-library/react";
+import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
 
 // `config/client` é mockado para que o teste não dependa do que o fork atual
 // tem ligado: se alguém mexer em `client.modulos`, estes casos continuam
@@ -13,6 +13,12 @@ import { render, screen, cleanup } from "@testing-library/react";
 // outro desligado. Com um único módulo de verdade (`whatsapp`), provar o caso
 // "não aparece" exige trocar a lista entre um teste e outro; um mock fixo só
 // conseguiria testar metade.
+//
+// `nome`/`marca` entraram junto com a reforma da barra lateral: `PainelNav`
+// agora renderiza `<Marca />` (Task 5) duas vezes (aside e gaveta), e o
+// componente lê `client.nome`/`client.marca.logo` — sem esses dois campos
+// aqui, o render quebra com "Cannot read properties of undefined". Mesmo
+// formato de `marca.test.tsx`, sem `logo` para cair no caminho de texto.
 const mocks = vi.hoisted(() => ({ modulos: ["whatsapp"] as string[] }));
 
 vi.mock("../../config/client", () => ({
@@ -20,6 +26,8 @@ vi.mock("../../config/client", () => ({
     get modulos() {
       return mocks.modulos;
     },
+    nome: "AutoCenter",
+    marca: { nome: "AutoCenter", corPrimaria: "#0F62FE", fonte: "Geist" },
   },
 }));
 
@@ -37,6 +45,7 @@ vi.mock("@/core/notifications/actions", () => ({
 }));
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: vi.fn() }),
+  usePathname: () => "/",
 }));
 
 // O botão "Sair" usa uma Server Action de `@/core/auth/actions`, que importa
@@ -130,5 +139,54 @@ describe("PainelNav", () => {
   it("não quebra quando o nome não é informado", () => {
     render(<PainelNav />);
     expect(screen.queryByTestId("usuario-logado")).toBeNull();
+  });
+
+  it("mostra o nome do usuario no rodape da barra", () => {
+    render(<PainelNav nomeUsuario="Rodrigo" papelUsuario="ADMIN" />);
+    expect(screen.getByTestId("usuario-logado").textContent).toContain("Rodrigo");
+  });
+
+  it("mantem o logout como form, nunca como link", () => {
+    const { container } = render(<PainelNav nomeUsuario="Rodrigo" papelUsuario="ADMIN" />);
+    // GET que desloga e disparavel por <img src> de qualquer site.
+    expect(container.querySelector("form")).toBeTruthy();
+    expect(screen.queryByRole("link", { name: /Sair/ })).toBeNull();
+  });
+
+  // A gaveta do celular é um `role="dialog"`. Sem nome acessível, o leitor de
+  // tela anuncia só "diálogo" e quem não enxerga não sabe o que abriu — falha
+  // WCAG 4.1.2. Achado dirigindo um navegador de verdade a 390x844; nenhuma
+  // análise estática pega, porque o defeito é a AUSÊNCIA de um atributo.
+  //
+  // O nome fica invisível (`sr-only`) de propósito: a gaveta já mostra a
+  // marca no topo, então repetir na tela seria ruído para quem enxerga.
+  it("a gaveta do celular abre com nome acessivel, nao so como dialogo anonimo", async () => {
+    render(<PainelNav nomeUsuario="Rodrigo" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Abrir menu" }));
+
+    const gaveta = await waitFor(() => {
+      const el = document.querySelector('[data-slot="sheet-content"]');
+      if (!el) throw new Error("gaveta nao abriu");
+      return el as HTMLElement;
+    });
+
+    expect(gaveta.getAttribute("role")).toBe("dialog");
+
+    // O nome pode chegar por `aria-label` ou por `aria-labelledby` apontando
+    // para um elemento com texto. Aceita os dois: o que não pode é nenhum.
+    const rotulo = gaveta.getAttribute("aria-label");
+    const idDoRotulo = gaveta.getAttribute("aria-labelledby");
+    const textoApontado = idDoRotulo
+      ? document.getElementById(idDoRotulo)?.textContent?.trim()
+      : undefined;
+
+    expect(rotulo || textoApontado, "a gaveta abriu sem nome acessivel").toBeTruthy();
+  });
+
+  it("nao renderiza regua para VENDEDOR com o modulo desligado", () => {
+    mocks.modulos = [];
+    const { container } = render(<PainelNav nomeUsuario="Ana" papelUsuario="VENDEDOR" />);
+    expect(container.querySelectorAll("hr")).toHaveLength(0);
   });
 });
