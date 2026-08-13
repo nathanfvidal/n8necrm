@@ -4,7 +4,12 @@ import { revalidatePath } from "next/cache";
 
 import { usuarioAtual } from "@/core/auth/session";
 import { ehSessaoInvalida, MENSAGEM_SESSAO_INVALIDA, type ResultadoAcao } from "@/lib/acao";
-import { atualizarContato, criarContato, ContatoInvalidoError } from "./service";
+import {
+  atualizarContato,
+  criarContato,
+  ContatoInvalidoError,
+  type DadosCadastrais,
+} from "./service";
 
 /**
  * Server Actions da agenda de contatos.
@@ -34,11 +39,13 @@ function paraResultadoErro(erro: unknown, mensagemGenerica: string): { ok: false
   return { ok: false, erro: mensagemGenerica };
 }
 
-export async function criarContatoAction(dados: {
-  nome: string;
-  telefone: string;
-  email?: string;
-}): Promise<ResultadoAcao> {
+export async function criarContatoAction(
+  dados: {
+    nome: string;
+    telefone: string;
+    email?: string;
+  } & DadosCadastrais
+): Promise<ResultadoAcao> {
   try {
     const autor = await usuarioAtual();
     await criarContato(dados, autor.id);
@@ -49,12 +56,14 @@ export async function criarContatoAction(dados: {
   return { ok: true };
 }
 
-export async function atualizarContatoAction(dados: {
-  id: string;
-  nome: string;
-  telefone: string;
-  email?: string;
-}): Promise<ResultadoAcao> {
+export async function atualizarContatoAction(
+  dados: {
+    id: string;
+    nome: string;
+    telefone: string;
+    email?: string;
+  } & DadosCadastrais
+): Promise<ResultadoAcao> {
   try {
     const autor = await usuarioAtual();
     await atualizarContato(dados, autor.id);

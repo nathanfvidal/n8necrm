@@ -131,6 +131,16 @@ function unificarNonoDigitoCelular(digitos: string): string {
  * lead voltando 6 meses depois) só é associado ao histórico já existente,
  * não usado para editar o cadastro.
  *
+ * ## NÃO "conserte" isso para atualizar o contato
+ *
+ * Desde que `Contact` virou cadastro de pessoa (empresa, cargo, documento,
+ * endereço, observações), a regra de nunca sobrescrever ficou MAIS certa, não
+ * menos. Um lead que chega pelo WhatsApp traz nome e telefone e nada mais —
+ * deixá-lo escrever no contato apagaria empresa e cargo que alguém curou à
+ * mão, trocando dado trabalhado por dado bruto sem ninguém pedir. Quem corrige
+ * cadastro é `atualizarContato` (`core/contacts/service.ts`), pela tela, com
+ * autor registrado em `AuditLog`. Esta função só liga lead a pessoa.
+ *
  * ## Concorrência
  *
  * Duas chamadas simultâneas para o mesmo telefone podem ambas passar pelo

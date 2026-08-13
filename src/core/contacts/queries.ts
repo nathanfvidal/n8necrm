@@ -25,6 +25,15 @@ export type ContatoListado = {
   nome: string;
   telefone: string;
   email: string | null;
+  /**
+   * Só `empresa` entra na listagem, e nenhum outro campo do cadastro.
+   *
+   * É o que identifica uma pessoa num CRM B2B quando há dois "Carlos" na
+   * agenda — o resto (documento, endereço, observações) é dado de detalhe, e
+   * trazê-lo para a lista significaria mandar o documento de TODA a agenda
+   * para o navegador a cada abertura de `/contatos`, para desenhar nada.
+   */
+  empresa: string | null;
   criadoEm: Date;
   totalLeads: number;
 };
@@ -66,6 +75,12 @@ export async function listarContatos(
             OR: [
               { nome: { contains: termo, mode: "insensitive" } },
               { email: { contains: termo, mode: "insensitive" } },
+              // Empresa entra na busca junto com o nome: num CRM B2B, "quem
+              // são meus contatos na Acme?" é a pergunta tão comum quanto
+              // "onde está o Carlos?". Sem isto, a coluna apareceria na tabela
+              // e não responderia quando alguém a digitasse na busca — que é
+              // pior que não ter a coluna.
+              { empresa: { contains: termo, mode: "insensitive" } },
               // Só entra no OR quando há dígito no termo: `contains: ""`
               // casaria com TODOS os telefones e anularia o filtro inteiro,
               // fazendo uma busca por "maria" devolver o banco completo.
@@ -78,6 +93,7 @@ export async function listarContatos(
       nome: true,
       telefone: true,
       email: true,
+      empresa: true,
       criadoEm: true,
       _count: { select: { leads: true } },
     },
@@ -94,7 +110,15 @@ export type ContatoComHistorico = {
   nome: string;
   telefone: string;
   email: string | null;
+  empresa: string | null;
+  cargo: string | null;
+  documento: string | null;
+  endereco: string | null;
+  cidade: string | null;
+  uf: string | null;
+  observacoes: string | null;
   criadoEm: Date;
+  atualizadoEm: Date;
   leads: Array<{
     id: string;
     canal: string;
@@ -112,12 +136,26 @@ export type ContatoComHistorico = {
 export async function buscarContatoComHistorico(id: string): Promise<ContatoComHistorico | null> {
   const contato = await prisma.contact.findUnique({
     where: { id },
+    // `select` explícito, campo a campo, e não `include`/linha crua: esta
+    // consulta alimenta a página de detalhe, que é Server Component mas passa
+    // o contato ao `ContactForm`, que é Client Component. Todo campo listado
+    // aqui ATRAVESSA a fronteira para o navegador — é a mesma decisão que o
+    // funil pagou caro para aprender (`core/leads/queries.ts`). A diferença é
+    // que aqui a tela realmente edita todos eles.
     select: {
       id: true,
       nome: true,
       telefone: true,
       email: true,
+      empresa: true,
+      cargo: true,
+      documento: true,
+      endereco: true,
+      cidade: true,
+      uf: true,
+      observacoes: true,
       criadoEm: true,
+      atualizadoEm: true,
       leads: {
         // Lead arquivado APARECE aqui de propósito — é a exceção da § 8 da
         // spec. "O que aconteceu com esta pessoa" precisa ser completo; é o

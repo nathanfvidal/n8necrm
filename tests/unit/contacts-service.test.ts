@@ -233,4 +233,165 @@ describe("core/contacts", () => {
       }
     });
   });
+
+  // ─── Cadastro de pessoa ────────────────────────────────────────────────
+  //
+  // `Contact` deixou de ser nome+telefone+email. O que estes testes protegem
+  // não é o "salva o campo" — é a auditoria, que lista os campos NA MÃO e por
+  // isso é o lugar onde um campo novo some sem ninguém ver, produzindo um log
+  // que *parece* completo. Log incompleto é pior que log ausente, porque quem
+  // investiga confia nele.
+  describe("campos cadastrais", () => {
+    const TELEFONE_CADASTRO = "11988887006";
+
+    async function criarCompleto(observacoes?: string) {
+      return criarContato(
+        {
+          nome: `Cadastro ${MARCA}`,
+          telefone: TELEFONE_CADASTRO,
+          empresa: "Acme Ltda",
+          cargo: "Diretor de Compras",
+          documento: "123.456.789-01",
+          endereco: "Rua das Flores, 100",
+          cidade: "São Paulo",
+          uf: "sp",
+          observacoes,
+        },
+        autorId
+      );
+    }
+
+    it("grava os campos, com documento sem máscara e UF em maiúsculas", async () => {
+      const criado = await criarCompleto();
+      try {
+        expect(criado.empresa).toBe("Acme Ltda");
+        expect(criado.cargo).toBe("Diretor de Compras");
+        expect(criado.documento).toBe("12345678901");
+        expect(criado.cidade).toBe("São Paulo");
+        expect(criado.uf).toBe("SP");
+      } finally {
+        await prisma.auditLog.deleteMany({ where: { entidadeId: criado.id } });
+        await prisma.contact.delete({ where: { id: criado.id } });
+      }
+    });
+
+    it("recusa UF inexistente com erro de domínio, não com ZodError cru", async () => {
+      // O `safeParse` → `ContatoInvalidoError` é o que impede a mensagem do Zod
+      // (que carrega o caminho do campo e o valor recebido) de atravessar até a
+      // tela. Sem essa ponte, a action cairia no ramo genérico e a pessoa leria
+      // "Falha ao salvar o contato" no lugar do motivo.
+      await expect(
+        criarContato(
+          { nome: `Ruim ${MARCA}`, telefone: "11988887007", uf: "XX" },
+          autorId
+        )
+      ).rejects.toThrow(ContatoInvalidoError);
+
+      await expect(
+        criarContato(
+          { nome: `Ruim ${MARCA}`, telefone: "11988887007", uf: "XX" },
+          autorId
+        )
+      ).rejects.toThrow(/UF inválida/);
+    });
+
+    it("a auditoria da criação carrega os campos novos, e o TAMANHO das observações", async () => {
+      const texto = "Reunião longa, cliente quer desconto.";
+      const criado = await criarCompleto(texto);
+      try {
+        const log = await prisma.auditLog.findFirstOrThrow({
+          where: { entidade: "Contact", entidadeId: criado.id, acao: "criar_contato" },
+        });
+
+        expect(log.depois).toMatchObject({
+          empresa: "Acme Ltda",
+          cargo: "Diretor de Compras",
+          documento: "12345678901",
+          cidade: "São Paulo",
+          uf: "SP",
+          observacoesTamanho: texto.length,
+        });
+
+        // A metade que importa: o TEXTO não entra. Até 4000 caracteres em
+        // `antes` E `depois` a cada edição incham `AuditLog` sem servir a
+        // investigador nenhum — o texto atual está no próprio contato.
+        expect(JSON.stringify(log.depois)).not.toContain(texto);
+      } finally {
+        await prisma.auditLog.deleteMany({ where: { entidadeId: criado.id } });
+        await prisma.contact.delete({ where: { id: criado.id } });
+      }
+    });
+
+    it("a edição guarda antes e depois dos campos novos", async () => {
+      const criado = await criarCompleto();
+      try {
+        await atualizarContato(
+          {
+            id: criado.id,
+            nome: criado.nome,
+            telefone: TELEFONE_CADASTRO,
+            empresa: "Outra Empresa",
+            cargo: "Gerente",
+            documento: "12.345.678/0001-95",
+            cidade: "Curitiba",
+            uf: "PR",
+          },
+          autorId
+        );
+
+        const log = await prisma.auditLog.findFirstOrThrow({
+          where: { entidade: "Contact", entidadeId: criado.id, acao: "editar_contato" },
+        });
+
+        expect(log.antes).toMatchObject({ empresa: "Acme Ltda", uf: "SP", documento: "12345678901" });
+        expect(log.depois).toMatchObject({
+          empresa: "Outra Empresa",
+          uf: "PR",
+          documento: "12345678000195",
+        });
+      } finally {
+        await prisma.auditLog.deleteMany({ where: { entidadeId: criado.id } });
+        await prisma.contact.delete({ where: { id: criado.id } });
+      }
+    });
+
+    it("acusa observação trocada por outra do MESMO tamanho", async () => {
+      // O buraco que `observacoesAlterada` existe para tapar: guardando só o
+      // tamanho, "Pedro" virar "Paulo" seria indistinguível de nada ter
+      // acontecido. Este é o caso que a comparação de tamanhos perde sozinha.
+      const criado = await criarCompleto("Pedro");
+      try {
+        await atualizarContato(
+          { id: criado.id, nome: criado.nome, telefone: TELEFONE_CADASTRO, observacoes: "Paulo" },
+          autorId
+        );
+
+        const log = await prisma.auditLog.findFirstOrThrow({
+          where: { entidade: "Contact", entidadeId: criado.id, acao: "editar_contato" },
+        });
+
+        expect(log.antes).toMatchObject({ observacoesTamanho: 5 });
+        expect(log.depois).toMatchObject({ observacoesTamanho: 5, observacoesAlterada: true });
+      } finally {
+        await prisma.auditLog.deleteMany({ where: { entidadeId: criado.id } });
+        await prisma.contact.delete({ where: { id: criado.id } });
+      }
+    });
+
+    it("atualizadoEm avança na edição, e criadoEm não", async () => {
+      const criado = await criarCompleto();
+      try {
+        const editado = await atualizarContato(
+          { id: criado.id, nome: `Editado ${MARCA}`, telefone: TELEFONE_CADASTRO },
+          autorId
+        );
+
+        expect(editado.criadoEm.getTime()).toBe(criado.criadoEm.getTime());
+        expect(editado.atualizadoEm.getTime()).toBeGreaterThan(criado.atualizadoEm.getTime());
+      } finally {
+        await prisma.auditLog.deleteMany({ where: { entidadeId: criado.id } });
+        await prisma.contact.delete({ where: { id: criado.id } });
+      }
+    });
+  });
 });
