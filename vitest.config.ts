@@ -30,3 +30,35 @@ export default defineConfig({
     fileParallelism: false,
   },
 });
+
+// ─── Se a suíte falhar com "Failed to start forks worker", leia isto ──────
+//
+// O sintoma: a execução termina com `Errors 1 error`, um ARQUIVO INTEIRO não
+// roda (o total cai, ex.: 87 → 86 arquivos) e a mensagem é
+//
+//   [vitest-pool]: Failed to start forks worker for test files <algum arquivo>
+//   Caused by: [vitest-pool-runner]: Timeout waiting for worker to respond
+//
+// O arquivo citado MUDA a cada execução. Isso é o que denuncia: não é aquele
+// teste, é o worker que não subiu a tempo.
+//
+// Causa observada: este projeto vive dentro de uma pasta sincronizada pelo
+// OneDrive. Logo após um merge (ou qualquer escrita grande), a sincronização
+// disputa o I/O e o processo do worker estoura o tempo de resposta.
+//
+// A assinatura que confirma, e que é o motivo de este bloco existir: compare
+// o `import` no rodapé do relatório. Medido em execuções consecutivas da
+// MESMA árvore, logo após um merge de 19 arquivos:
+//
+//   falhou  → Duration 507s (import 74.63s)
+//   passou  → Duration 364s (import 20.48s)
+//
+// I/O três vezes e meia mais lento. Espere a sincronização assentar e rode de
+// novo antes de investigar o teste citado.
+//
+// NÃO configure retentativa automática nem aumente o timeout do worker para
+// "resolver" isto. O `AGENTS.md` deste projeto existe por causa de um defeito
+// REAL de segurança que quase foi descartado como teste instável — mascarar
+// esta falha é treinar todo mundo a ignorar a próxima, que pode não ser
+// ambiental. Um erro visível que se explica em três linhas vale mais que um
+// verde que esconde qualquer coisa.
