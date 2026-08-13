@@ -1,0 +1,49 @@
+-- Conserto de uma quebra que a migração anterior causou EM PRODUÇÃO.
+--
+-- ## O que aconteceu
+--
+-- `20260813200000_contato_cadastro_completo` criou `Contact.atualizadoEm` como
+-- `TIMESTAMP(3) NOT NULL`, sem `DEFAULT`. Isso é o que o Prisma gera para um
+-- campo `@updatedAt`, e funciona perfeitamente — desde que TODO código que
+-- insere na tabela já conheça a coluna.
+--
+-- Banco e aplicação não são publicados juntos. A migração roda contra o banco
+-- (que aqui é o mesmo de produção) antes de o código novo ir para o ar, e
+-- nessa janela o cliente Prisma ANTIGO continua emitindo
+--
+--   INSERT INTO "Contact" (id, nome, telefone, email) VALUES (...)
+--
+-- sem a coluna nova. Sem `DEFAULT`, o Postgres recusa:
+--
+--   Code: 23502
+--   null value in column "atualizadoEm" of relation "Contact"
+--   violates not-null constraint
+--
+-- Medido contra o banco real, com um INSERT dentro de transação revertida —
+-- não deduzido do SQL.
+--
+-- ## O alcance real
+--
+-- Não era só a tela de contatos. `encontrarOuCriarContact`
+-- (`core/leads/dedupe.ts`) insere em `Contact` e é o ponto único por onde
+-- passa TODA criação de lead com telefone ainda não cadastrado — entrada
+-- manual, formulário público e clique de WhatsApp. Enquanto a janela existiu,
+-- criar lead para um número novo falhava junto.
+--
+-- ## O conserto
+--
+-- `DEFAULT CURRENT_TIMESTAMP` deixa o código antigo inserir de novo. Não muda
+-- nada para o código novo: o Prisma sempre manda o valor em `create` e em
+-- `update` por causa de `@updatedAt`, então o default nunca é consultado por
+-- ele. O campo passa a ser `@default(now()) @updatedAt` no schema para que
+-- banco e modelo não fiquem divergentes no próximo `migrate diff`.
+--
+-- ## A lição, para a próxima coluna NOT NULL
+--
+-- Coluna nova `NOT NULL` numa tabela viva precisa de `DEFAULT` sempre que o
+-- deploy do código não for simultâneo à migração — que é o caso deste projeto
+-- por construção, já que o banco é um só para desenvolvimento e produção.
+-- Sem default, a migração é uma bomba-relógio com pavio do tamanho da janela
+-- de deploy.
+
+ALTER TABLE "Contact" ALTER COLUMN "atualizadoEm" SET DEFAULT CURRENT_TIMESTAMP;

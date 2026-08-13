@@ -100,7 +100,15 @@ model Contact {
   // no serviço significa que a próxima escrita esquecida deixa a coluna
   // mentindo — e uma coluna de auditoria que mente é pior que não existir.
   // A migração faz o backfill a partir de `criadoEm`; ver o SQL para o porquê.
-  atualizadoEm DateTime @updatedAt
+  //
+  // `@default(now())` NÃO é redundante com `@updatedAt`, e a diferença já
+  // custou uma quebra: banco e aplicação não são publicados juntos. A migração
+  // roda antes do deploy, e entre um e outro o código ANTIGO continua
+  // inserindo sem esta coluna. Sem default, `NOT NULL` derruba todo
+  // `INSERT` de contato nessa janela — inclusive `encontrarOuCriarContact`,
+  // por onde passa a criação de lead. Medido em produção, não deduzido:
+  // `null value in column "atualizadoEm" violates not-null constraint`.
+  atualizadoEm DateTime @default(now()) @updatedAt
 
   leads         Lead[]
   conversations Conversation[]
