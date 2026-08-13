@@ -91,7 +91,20 @@ function contactFake(overrides: Partial<Contact> = {}): Contact {
     nome: "Nome Qualquer",
     telefone: "11999990000",
     email: null,
+    // Campos do cadastro de pessoa. Nulos aqui de propósito: este arquivo
+    // testa a EXPORTAÇÃO de leads, e o CSV não os inclui. O fixture precisa
+    // deles só porque `Contact` é o tipo completo do Prisma — se um dia o CSV
+    // passar a exportar empresa ou documento, é aqui que o teste correspondente
+    // vai querer valores de verdade.
+    empresa: null,
+    cargo: null,
+    documento: null,
+    endereco: null,
+    cidade: null,
+    uf: null,
+    observacoes: null,
     criadoEm: new Date("2026-01-01T00:00:00.000Z"),
+    atualizadoEm: new Date("2026-01-01T00:00:00.000Z"),
     ...overrides,
   };
 }

@@ -233,4 +233,264 @@ describe("core/contacts", () => {
       }
     });
   });
+
+  // ─── Cadastro de pessoa ────────────────────────────────────────────────
+  //
+  // `Contact` deixou de ser nome+telefone+email. O que estes testes protegem
+  // não é o "salva o campo" — é a auditoria, que lista os campos NA MÃO e por
+  // isso é o lugar onde um campo novo some sem ninguém ver, produzindo um log
+  // que *parece* completo. Log incompleto é pior que log ausente, porque quem
+  // investiga confia nele.
+  describe("campos cadastrais", () => {
+    const TELEFONE_CADASTRO = "11988887006";
+
+    async function criarCompleto(observacoes?: string) {
+      return criarContato(
+        {
+          nome: `Cadastro ${MARCA}`,
+          telefone: TELEFONE_CADASTRO,
+          empresa: "Acme Ltda",
+          cargo: "Diretor de Compras",
+          documento: "123.456.789-01",
+          endereco: "Rua das Flores, 100",
+          cidade: "São Paulo",
+          uf: "sp",
+          observacoes,
+        },
+        autorId
+      );
+    }
+
+    it("grava os campos, com documento sem máscara e UF em maiúsculas", async () => {
+      const criado = await criarCompleto();
+      try {
+        expect(criado.empresa).toBe("Acme Ltda");
+        expect(criado.cargo).toBe("Diretor de Compras");
+        expect(criado.documento).toBe("12345678901");
+        expect(criado.cidade).toBe("São Paulo");
+        expect(criado.uf).toBe("SP");
+      } finally {
+        await prisma.auditLog.deleteMany({ where: { entidadeId: criado.id } });
+        await prisma.contact.delete({ where: { id: criado.id } });
+      }
+    });
+
+    it("recusa UF inexistente com erro de domínio, não com ZodError cru", async () => {
+      // O `safeParse` → `ContatoInvalidoError` é o que impede a mensagem do Zod
+      // (que carrega o caminho do campo e o valor recebido) de atravessar até a
+      // tela. Sem essa ponte, a action cairia no ramo genérico e a pessoa leria
+      // "Falha ao salvar o contato" no lugar do motivo.
+      await expect(
+        criarContato(
+          { nome: `Ruim ${MARCA}`, telefone: "11988887007", uf: "XX" },
+          autorId
+        )
+      ).rejects.toThrow(ContatoInvalidoError);
+
+      await expect(
+        criarContato(
+          { nome: `Ruim ${MARCA}`, telefone: "11988887007", uf: "XX" },
+          autorId
+        )
+      ).rejects.toThrow(/UF inválida/);
+    });
+
+    it("a auditoria da criação carrega os campos novos, e o TAMANHO das observações", async () => {
+      const texto = "Reunião longa, cliente quer desconto.";
+      const criado = await criarCompleto(texto);
+      try {
+        const log = await prisma.auditLog.findFirstOrThrow({
+          where: { entidade: "Contact", entidadeId: criado.id, acao: "criar_contato" },
+        });
+
+        expect(log.depois).toMatchObject({
+          empresa: "Acme Ltda",
+          cargo: "Diretor de Compras",
+          cidade: "São Paulo",
+          uf: "SP",
+          observacoesTamanho: texto.length,
+          documentoPreenchido: true,
+        });
+
+        // As duas metades que importam, e são o achado R1 da auditoria: nem o
+        // TEXTO das observações nem o DOCUMENTO entram no log. O primeiro
+        // porque 4000 caracteres em `antes` E `depois` a cada edição incham
+        // `AuditLog` sem servir a investigador nenhum; o segundo porque é dado
+        // pessoal duplicado numa tabela sem prazo de descarte e sem FK para o
+        // contato — sobreviveria à exclusão da pessoa. Os valores atuais moram
+        // no próprio contato.
+        const gravado = JSON.stringify(log.depois);
+        expect(gravado).not.toContain(texto);
+        expect(gravado).not.toContain("12345678901");
+        // Nem parcial: metade de um CPF ainda é CPF de alguém.
+        expect(gravado).not.toContain("123456");
+        expect(gravado).not.toContain("678901");
+      } finally {
+        await prisma.auditLog.deleteMany({ where: { entidadeId: criado.id } });
+        await prisma.contact.delete({ where: { id: criado.id } });
+      }
+    });
+
+    it("a edição guarda antes e depois dos campos novos", async () => {
+      const criado = await criarCompleto();
+      try {
+        await atualizarContato(
+          {
+            id: criado.id,
+            nome: criado.nome,
+            telefone: TELEFONE_CADASTRO,
+            empresa: "Outra Empresa",
+            cargo: "Gerente",
+            documento: "12.345.678/0001-95",
+            cidade: "Curitiba",
+            uf: "PR",
+          },
+          autorId
+        );
+
+        const log = await prisma.auditLog.findFirstOrThrow({
+          where: { entidade: "Contact", entidadeId: criado.id, acao: "editar_contato" },
+        });
+
+        expect(log.antes).toMatchObject({ empresa: "Acme Ltda", uf: "SP" });
+        expect(log.depois).toMatchObject({
+          empresa: "Outra Empresa",
+          uf: "PR",
+          // O CPF virou CNPJ: `documentoPreenchido` continua `true` nos dois
+          // lados e não denuncia nada. É `documentoAlterado` que registra a
+          // troca — o evento mais suspeito que esta trilha pode ver.
+          documentoPreenchido: true,
+          documentoAlterado: true,
+        });
+
+        const gravado = `${JSON.stringify(log.antes)}${JSON.stringify(log.depois)}`;
+        expect(gravado).not.toContain("12345678901");
+        expect(gravado).not.toContain("12345678000195");
+      } finally {
+        await prisma.auditLog.deleteMany({ where: { entidadeId: criado.id } });
+        await prisma.contact.delete({ where: { id: criado.id } });
+      }
+    });
+
+    it("acusa observação trocada por outra do MESMO tamanho", async () => {
+      // O buraco que `observacoesAlterada` existe para tapar: guardando só o
+      // tamanho, "Pedro" virar "Paulo" seria indistinguível de nada ter
+      // acontecido. Este é o caso que a comparação de tamanhos perde sozinha.
+      const criado = await criarCompleto("Pedro");
+      try {
+        await atualizarContato(
+          { id: criado.id, nome: criado.nome, telefone: TELEFONE_CADASTRO, observacoes: "Paulo" },
+          autorId
+        );
+
+        const log = await prisma.auditLog.findFirstOrThrow({
+          where: { entidade: "Contact", entidadeId: criado.id, acao: "editar_contato" },
+        });
+
+        expect(log.antes).toMatchObject({ observacoesTamanho: 5 });
+        expect(log.depois).toMatchObject({ observacoesTamanho: 5, observacoesAlterada: true });
+      } finally {
+        await prisma.auditLog.deleteMany({ where: { entidadeId: criado.id } });
+        await prisma.contact.delete({ where: { id: criado.id } });
+      }
+    });
+
+    // A ida e volta completa, e o motivo de existir é um defeito SILENCIOSO.
+    //
+    // `buscarContatoComHistorico` alimenta a tela de detalhe, que preenche o
+    // formulário. Se um campo faltasse no `select` daquela consulta, a tela o
+    // desenharia VAZIO — e o primeiro "Salvar alterações" gravaria vazio por
+    // cima do que estava lá. Nenhum erro, nenhum teste vermelho, dado perdido.
+    // O teste de componente não pega: ele recebe o contato por prop. O teste
+    // de serviço não pega: ele lê o retorno de `atualizarContato`.
+    //
+    // Medido ao sabotar (tirando `cargo: true` do `select`): o `tsc` TAMBÉM
+    // fica vermelho, porque `ContatoComHistorico` declara o campo e o retorno
+    // deixa de ser atribuível. O tipo explícito é a guarda primária, e é justo
+    // dizer isso em vez de deixar este teste levar o crédito.
+    //
+    // O que ele acrescenta é cobertura de um caso que o tipo não vê: alguém
+    // afrouxar o retorno da consulta (um `Promise<any>`, um cast, um tipo
+    // inferido em vez do declarado) e o `select` incompleto passar calado.
+    // Duas guardas independentes contra perda silenciosa de dado — a barata em
+    // tempo de compilação, esta em tempo de execução.
+    it("a consulta da tela de detalhe devolve TODOS os campos do cadastro", async () => {
+      const criado = await criarCompleto("Uma observação qualquer.");
+      try {
+        const lido = await buscarContatoComHistorico(criado.id, { incluirDocumento: true });
+
+        expect(lido).toMatchObject({
+          nome: `Cadastro ${MARCA}`,
+          telefone: TELEFONE_CADASTRO,
+          empresa: "Acme Ltda",
+          cargo: "Diretor de Compras",
+          documento: "12345678901",
+          endereco: "Rua das Flores, 100",
+          cidade: "São Paulo",
+          uf: "SP",
+          observacoes: "Uma observação qualquer.",
+        });
+
+        // Campo que existe no banco e volta `undefined` da consulta é
+        // exatamente o sintoma de `select` incompleto — e `toMatchObject`
+        // sozinho não distingue "veio null" de "não veio". Esta asserção
+        // distingue.
+        for (const campo of [
+          "empresa",
+          "cargo",
+          "documento",
+          "endereco",
+          "cidade",
+          "uf",
+          "observacoes",
+          "atualizadoEm",
+        ] as const) {
+          expect(lido?.[campo], `campo fora do select da consulta: ${campo}`).not.toBeUndefined();
+        }
+      } finally {
+        await prisma.auditLog.deleteMany({ where: { entidadeId: criado.id } });
+        await prisma.contact.delete({ where: { id: criado.id } });
+      }
+    });
+
+    // Achado R2 da auditoria: o CPF/CNPJ é o único campo restrito por papel.
+    // O teto de segurança é o PADRÃO da consulta — uma chamada nova que
+    // esqueça o parâmetro esconde o documento em vez de expô-lo.
+    it("a consulta NÃO devolve o documento quando ninguém pediu por ele", async () => {
+      const criado = await criarCompleto();
+      try {
+        const lido = await buscarContatoComHistorico(criado.id);
+
+        expect(lido?.documento).toBeNull();
+        // A linha no banco continua intacta — o que mudou é o que sai da
+        // função, não o que está gravado. Sem esta segunda asserção, uma
+        // consulta que APAGASSE o documento passaria neste teste.
+        const noBanco = await prisma.contact.findUniqueOrThrow({ where: { id: criado.id } });
+        expect(noBanco.documento).toBe("12345678901");
+
+        // E o valor não sobra em nenhum outro canto do objeto devolvido: o
+        // que vai para o navegador é este objeto inteiro, não só o campo.
+        expect(JSON.stringify(lido)).not.toContain("12345678901");
+      } finally {
+        await prisma.auditLog.deleteMany({ where: { entidadeId: criado.id } });
+        await prisma.contact.delete({ where: { id: criado.id } });
+      }
+    });
+
+    it("atualizadoEm avança na edição, e criadoEm não", async () => {
+      const criado = await criarCompleto();
+      try {
+        const editado = await atualizarContato(
+          { id: criado.id, nome: `Editado ${MARCA}`, telefone: TELEFONE_CADASTRO },
+          autorId
+        );
+
+        expect(editado.criadoEm.getTime()).toBe(criado.criadoEm.getTime());
+        expect(editado.atualizadoEm.getTime()).toBeGreaterThan(criado.atualizadoEm.getTime());
+      } finally {
+        await prisma.auditLog.deleteMany({ where: { entidadeId: criado.id } });
+        await prisma.contact.delete({ where: { id: criado.id } });
+      }
+    });
+  });
 });

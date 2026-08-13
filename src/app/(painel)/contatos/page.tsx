@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import { usuarioAtualOuLogin } from "@/core/auth/session";
+import { hasPermission } from "@/core/auth/permissions";
 import { listarContatos } from "@/core/contacts/queries";
 import { LIMITE_LISTAGEM } from "@/core/listagem";
 import { ContactForm } from "@/components/contacts/contact-form";
@@ -34,7 +35,11 @@ export default async function ContatosPage({
 }: {
   searchParams: Promise<{ q?: string }>;
 }) {
-  await usuarioAtualOuLogin();
+  const usuario = await usuarioAtualOuLogin();
+  // Mesma regra da tela de detalhe: quem não pode ver o documento também não
+  // pode preenchê-lo no cadastro. Sem isto, o campo apareceria em "Adicionar
+  // contato" e sumiria ao reabrir a pessoa — comportamento que parece bug.
+  const podeVerDocumento = hasPermission(usuario.papel, "ver_documento_contato");
 
   const { q } = await searchParams;
   const busca = q?.trim() ?? "";
@@ -51,7 +56,7 @@ export default async function ContatosPage({
 
       <div className="rounded-md border p-4">
         <h2 className="mb-3 text-sm font-medium">Adicionar contato</h2>
-        <ContactForm />
+        <ContactForm podeVerDocumento={podeVerDocumento} />
       </div>
 
       {/* `<form method="get">` sem JavaScript: a busca é uma navegação, não
@@ -61,7 +66,12 @@ export default async function ContatosPage({
           <label htmlFor="q" className="text-sm font-medium">
             Buscar
           </label>
-          <Input id="q" name="q" defaultValue={busca} placeholder="Nome, telefone ou e-mail" />
+          <Input
+            id="q"
+            name="q"
+            defaultValue={busca}
+            placeholder="Nome, empresa, telefone ou e-mail"
+          />
         </div>
         <Button type="submit" variant="outline">
           Buscar
@@ -96,6 +106,11 @@ export default async function ContatosPage({
           <thead>
             <tr className="border-b text-left text-muted-foreground">
               <th className="py-2 font-medium">Nome</th>
+              {/* Empresa logo depois do nome: num CRM B2B é o que distingue
+                  dois "Carlos" na agenda. É o único campo do cadastro que sobe
+                  para a lista — ver `ContatoListado` para o porquê dos outros
+                  ficarem de fora. */}
+              <th className="py-2 font-medium">Empresa</th>
               <th className="py-2 font-medium">Telefone</th>
               <th className="py-2 font-medium">E-mail</th>
               <th className="py-2 font-medium">Leads</th>
@@ -110,6 +125,7 @@ export default async function ContatosPage({
                     {contato.nome}
                   </Link>
                 </td>
+                <td className="py-2 text-muted-foreground">{contato.empresa ?? "—"}</td>
                 <td className="py-2">{contato.telefone}</td>
                 <td className="py-2 text-muted-foreground">{contato.email ?? "—"}</td>
                 <td className="py-2">{contato.totalLeads}</td>

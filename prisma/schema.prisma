@@ -65,14 +65,61 @@ model User {
 }
 
 model Contact {
-  id            String         @id @default(cuid())
-  nome          String
-  telefone      String         @unique
-  email         String?
-  criadoEm      DateTime       @default(now())
+  id       String  @id @default(cuid())
+  nome     String
+  telefone String  @unique
+  email    String?
+
+  // ─── Cadastro de pessoa ───────────────────────────────────────────────
+  //
+  // Colunas fixas, e não uma tabela de campos configuráveis: decisão do dono.
+  // O caminho configurável foi desenhado e descartado — `config` continha uma
+  // chave `entidade.campos` que prometia exatamente isso e que nenhum código
+  // lia.
+  empresa String?
+  cargo   String?
+
+  // NÃO é `@unique`, de propósito. A unicidade de `telefone` existe porque o
+  // dedupe de leads depende dela, e já custa um ramo inteiro de tratamento de
+  // P2002 em `contacts/service.ts`. Nada no sistema deduplica por documento —
+  // uma constraint aqui só criaria um modo de falha novo (dois cadastros
+  // legítimos com o mesmo CNPJ de matriz, por exemplo) sem servir a ninguém.
+  documento String?
+
+  // Endereço em três colunas, não em sete com CEP/número/complemento. `cidade`
+  // separada é a única que paga o próprio custo: permite "leads por cidade"
+  // depois sem migração. O resto é texto livre até alguém precisar de mais.
+  endereco String?
+  cidade   String?
+  uf       String? @db.Char(2)
+
+  observacoes String?
+
+  criadoEm DateTime @default(now())
+  // `@updatedAt`: o Prisma carimba sozinho a cada `update`. Fazer isso na mão
+  // no serviço significa que a próxima escrita esquecida deixa a coluna
+  // mentindo — e uma coluna de auditoria que mente é pior que não existir.
+  // A migração faz o backfill a partir de `criadoEm`; ver o SQL para o porquê.
+  //
+  // `@default(now())` NÃO é redundante com `@updatedAt`, e a diferença já
+  // custou uma quebra: banco e aplicação não são publicados juntos. A migração
+  // roda antes do deploy, e entre um e outro o código ANTIGO continua
+  // inserindo sem esta coluna. Sem default, `NOT NULL` derruba todo
+  // `INSERT` de contato nessa janela — inclusive `encontrarOuCriarContact`,
+  // por onde passa a criação de lead. Medido em produção, não deduzido:
+  // `null value in column "atualizadoEm" violates not-null constraint`.
+  atualizadoEm DateTime @default(now()) @updatedAt
+
   leads         Lead[]
   conversations Conversation[]
   tasks         Task[]
+
+  // Ordenação padrão da agenda (`listarContatos`, `criadoEm desc`). NÃO há
+  // índice de busca aqui: `ILIKE '%termo%'` não é servido por btree, e a
+  // ferramenta certa (`pg_trgm` + GIN) o Prisma não representa — viraria drift
+  // em todo `migrate diff`. Gatilho para reabrir: a agenda passar de alguns
+  // milhares de linhas e a busca ficar lenta de verdade, medida.
+  @@index([criadoEm])
 }
 
 model PipelineStage {
