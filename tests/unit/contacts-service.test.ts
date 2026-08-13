@@ -306,16 +306,25 @@ describe("core/contacts", () => {
         expect(log.depois).toMatchObject({
           empresa: "Acme Ltda",
           cargo: "Diretor de Compras",
-          documento: "12345678901",
           cidade: "São Paulo",
           uf: "SP",
           observacoesTamanho: texto.length,
+          documentoPreenchido: true,
         });
 
-        // A metade que importa: o TEXTO não entra. Até 4000 caracteres em
-        // `antes` E `depois` a cada edição incham `AuditLog` sem servir a
-        // investigador nenhum — o texto atual está no próprio contato.
-        expect(JSON.stringify(log.depois)).not.toContain(texto);
+        // As duas metades que importam, e são o achado R1 da auditoria: nem o
+        // TEXTO das observações nem o DOCUMENTO entram no log. O primeiro
+        // porque 4000 caracteres em `antes` E `depois` a cada edição incham
+        // `AuditLog` sem servir a investigador nenhum; o segundo porque é dado
+        // pessoal duplicado numa tabela sem prazo de descarte e sem FK para o
+        // contato — sobreviveria à exclusão da pessoa. Os valores atuais moram
+        // no próprio contato.
+        const gravado = JSON.stringify(log.depois);
+        expect(gravado).not.toContain(texto);
+        expect(gravado).not.toContain("12345678901");
+        // Nem parcial: metade de um CPF ainda é CPF de alguém.
+        expect(gravado).not.toContain("123456");
+        expect(gravado).not.toContain("678901");
       } finally {
         await prisma.auditLog.deleteMany({ where: { entidadeId: criado.id } });
         await prisma.contact.delete({ where: { id: criado.id } });
@@ -343,12 +352,20 @@ describe("core/contacts", () => {
           where: { entidade: "Contact", entidadeId: criado.id, acao: "editar_contato" },
         });
 
-        expect(log.antes).toMatchObject({ empresa: "Acme Ltda", uf: "SP", documento: "12345678901" });
+        expect(log.antes).toMatchObject({ empresa: "Acme Ltda", uf: "SP" });
         expect(log.depois).toMatchObject({
           empresa: "Outra Empresa",
           uf: "PR",
-          documento: "12345678000195",
+          // O CPF virou CNPJ: `documentoPreenchido` continua `true` nos dois
+          // lados e não denuncia nada. É `documentoAlterado` que registra a
+          // troca — o evento mais suspeito que esta trilha pode ver.
+          documentoPreenchido: true,
+          documentoAlterado: true,
         });
+
+        const gravado = `${JSON.stringify(log.antes)}${JSON.stringify(log.depois)}`;
+        expect(gravado).not.toContain("12345678901");
+        expect(gravado).not.toContain("12345678000195");
       } finally {
         await prisma.auditLog.deleteMany({ where: { entidadeId: criado.id } });
         await prisma.contact.delete({ where: { id: criado.id } });
@@ -400,7 +417,7 @@ describe("core/contacts", () => {
     it("a consulta da tela de detalhe devolve TODOS os campos do cadastro", async () => {
       const criado = await criarCompleto("Uma observação qualquer.");
       try {
-        const lido = await buscarContatoComHistorico(criado.id);
+        const lido = await buscarContatoComHistorico(criado.id, { incluirDocumento: true });
 
         expect(lido).toMatchObject({
           nome: `Cadastro ${MARCA}`,
@@ -430,6 +447,30 @@ describe("core/contacts", () => {
         ] as const) {
           expect(lido?.[campo], `campo fora do select da consulta: ${campo}`).not.toBeUndefined();
         }
+      } finally {
+        await prisma.auditLog.deleteMany({ where: { entidadeId: criado.id } });
+        await prisma.contact.delete({ where: { id: criado.id } });
+      }
+    });
+
+    // Achado R2 da auditoria: o CPF/CNPJ é o único campo restrito por papel.
+    // O teto de segurança é o PADRÃO da consulta — uma chamada nova que
+    // esqueça o parâmetro esconde o documento em vez de expô-lo.
+    it("a consulta NÃO devolve o documento quando ninguém pediu por ele", async () => {
+      const criado = await criarCompleto();
+      try {
+        const lido = await buscarContatoComHistorico(criado.id);
+
+        expect(lido?.documento).toBeNull();
+        // A linha no banco continua intacta — o que mudou é o que sai da
+        // função, não o que está gravado. Sem esta segunda asserção, uma
+        // consulta que APAGASSE o documento passaria neste teste.
+        const noBanco = await prisma.contact.findUniqueOrThrow({ where: { id: criado.id } });
+        expect(noBanco.documento).toBe("12345678901");
+
+        // E o valor não sobra em nenhum outro canto do objeto devolvido: o
+        // que vai para o navegador é este objeto inteiro, não só o campo.
+        expect(JSON.stringify(lido)).not.toContain("12345678901");
       } finally {
         await prisma.auditLog.deleteMany({ where: { entidadeId: criado.id } });
         await prisma.contact.delete({ where: { id: criado.id } });

@@ -2,7 +2,10 @@
 
 import { revalidatePath } from "next/cache";
 
+import type { User } from "@prisma/client";
+
 import { usuarioAtual } from "@/core/auth/session";
+import { hasPermission } from "@/core/auth/permissions";
 import { ehSessaoInvalida, MENSAGEM_SESSAO_INVALIDA, type ResultadoAcao } from "@/lib/acao";
 import {
   atualizarContato,
@@ -27,6 +30,38 @@ import {
  * nada.
  */
 
+/**
+ * Tira `documento` do que veio do cliente quando quem age não pode mexer nele.
+ *
+ * ## Isto NÃO é só uma trava de segurança — é o que impede perda de dado
+ *
+ * O campo não é renderizado para VENDEDOR, mas o `react-hook-form` mantém o
+ * valor padrão dos campos não registrados, então o formulário dele envia
+ * `documento: ""` mesmo sem desenhar nada. Sem esta função, salvar qualquer
+ * correção de telefone feita por um vendedor APAGARIA o CPF do contato —
+ * `""` vira `null` no schema, e `null` no `update` do Prisma apaga.
+ *
+ * Por isso a chave é REMOVIDA e não zerada: ausente vira `undefined`, que para
+ * o Prisma significa "não mexa nesta coluna". Zerar seria o mesmo bug com
+ * outra roupa.
+ *
+ * ## Por que ignorar em silêncio, e não recusar
+ *
+ * O formulário legítimo nunca manda o campo; um `documento` chegando de um
+ * VENDEDOR é cliente desatualizado ou POST direto. Recusar com mensagem
+ * confirmaria ao curioso que o campo existe e é protegido. Ignorar não
+ * confirma nada e não quebra nada — e a tentativa fica no `AuditLog` de
+ * qualquer forma, pelo `documentoAlterado: false`.
+ */
+function semDocumentoSeNaoPodeVer<T extends { documento?: string | null }>(
+  dados: T,
+  autor: User
+): T {
+  if (hasPermission(autor.papel, "ver_documento_contato")) return dados;
+  const { documento: _ignorado, ...resto } = dados;
+  return resto as T;
+}
+
 function paraResultadoErro(erro: unknown, mensagemGenerica: string): { ok: false; erro: string } {
   if (erro instanceof ContatoInvalidoError) {
     return { ok: false, erro: erro.message };
@@ -48,7 +83,7 @@ export async function criarContatoAction(
 ): Promise<ResultadoAcao> {
   try {
     const autor = await usuarioAtual();
-    await criarContato(dados, autor.id);
+    await criarContato(semDocumentoSeNaoPodeVer(dados, autor), autor.id);
   } catch (erro) {
     return paraResultadoErro(erro, "Falha ao salvar o contato. Tente novamente.");
   }
@@ -66,7 +101,7 @@ export async function atualizarContatoAction(
 ): Promise<ResultadoAcao> {
   try {
     const autor = await usuarioAtual();
-    await atualizarContato(dados, autor.id);
+    await atualizarContato(semDocumentoSeNaoPodeVer(dados, autor), autor.id);
   } catch (erro) {
     return paraResultadoErro(erro, "Falha ao salvar o contato. Tente novamente.");
   }

@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { usuarioAtualOuLogin } from "@/core/auth/session";
+import { hasPermission } from "@/core/auth/permissions";
 import { buscarContatoComHistorico } from "@/core/contacts/queries";
 import { moduloAtivo } from "@/lib/module-gate";
 import { listarConversasDoContato } from "@/modules/whatsapp/queries";
@@ -27,10 +28,15 @@ import { formatarDataHoraBR } from "@/lib/date";
  * servidor não pagaria a complexidade.
  */
 export default async function ContatoPage({ params }: { params: Promise<{ id: string }> }) {
-  await usuarioAtualOuLogin();
+  const usuario = await usuarioAtualOuLogin();
+
+  // Achado R2 da auditoria: o CPF/CNPJ é o único campo do cadastro restrito
+  // por papel. A permissão é resolvida AQUI, onde a sessão existe, e vira um
+  // parâmetro da consulta — `core/` não conhece sessão, e não deve conhecer.
+  const podeVerDocumento = hasPermission(usuario.papel, "ver_documento_contato");
 
   const { id } = await params;
-  const contato = await buscarContatoComHistorico(id);
+  const contato = await buscarContatoComHistorico(id, { incluirDocumento: podeVerDocumento });
   if (!contato) notFound();
 
   const mostrarConversas = moduloAtivo("whatsapp");
@@ -56,7 +62,7 @@ export default async function ContatoPage({ params }: { params: Promise<{ id: st
 
       <div className="rounded-md border p-4">
         <h2 className="mb-3 text-sm font-medium">Dados</h2>
-        <ContactForm contato={contato} />
+        <ContactForm contato={contato} podeVerDocumento={podeVerDocumento} />
       </div>
 
       <div>

@@ -73,8 +73,8 @@ describe("localizadores de que o e2e depende", () => {
 });
 
 describe("campos do cadastro", () => {
-  it("mostra os dez campos", () => {
-    render(<ContactForm />);
+  it("mostra os dez campos para quem pode ver o documento", () => {
+    render(<ContactForm podeVerDocumento />);
 
     for (const rotulo of [
       "Nome",
@@ -92,6 +92,27 @@ describe("campos do cadastro", () => {
     }
   });
 
+  // Achado R2 da auditoria. Esconder aqui é conforto, não proteção — as duas
+  // camadas que contam são a consulta (que devolve `documento: null`) e a
+  // action (que descarta o campo). Mas o conforto importa: um campo desenhado
+  // e sempre vazio faria a pessoa achar que o CRM perdeu o CPF.
+  it("esconde o Documento de quem não tem permissão, e mantém os outros nove", () => {
+    render(<ContactForm />);
+
+    expect(screen.queryByLabelText("Documento")).toBeNull();
+    for (const rotulo of ["Nome", "Telefone", "Empresa", "Cargo", "Cidade", "UF", "Observações"]) {
+      expect(screen.getByLabelText(rotulo), `campo sumiu junto: ${rotulo}`).toBeDefined();
+    }
+  });
+
+  // O padrão da prop é `false`. Um uso novo que esqueça de passá-la esconde o
+  // CPF em vez de expor — errar para o lado seguro é o ponto.
+  it("o padrão da prop é esconder", () => {
+    render(<ContactForm contato={CONTATO} />);
+
+    expect(screen.queryByLabelText("Documento")).toBeNull();
+  });
+
   it("a UF oferece as 27 siglas mais a opção vazia", () => {
     render(<ContactForm />);
 
@@ -101,7 +122,7 @@ describe("campos do cadastro", () => {
   });
 
   it("em modo edição, começa preenchido com o que já está gravado", () => {
-    render(<ContactForm contato={CONTATO} />);
+    render(<ContactForm contato={CONTATO} podeVerDocumento />);
 
     expect((screen.getByLabelText("Empresa") as HTMLInputElement).value).toBe("Acme Ltda");
     expect((screen.getByLabelText("Documento") as HTMLInputElement).value).toBe("12345678901");

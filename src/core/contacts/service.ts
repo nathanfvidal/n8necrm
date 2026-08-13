@@ -153,12 +153,20 @@ function instantaneoParaAuditoria(contato: Contact) {
     email: contato.email,
     empresa: contato.empresa,
     cargo: contato.cargo,
-    // `documento` vai INTEIRO. É dado pessoal, e a decisão é deliberada: a
-    // pergunta que esta trilha existe para responder é "quem trocou o CPF
-    // desta pessoa, e qual era antes", e sem o valor ela não responde. Fica
-    // registrado para a auditoria de segurança avaliar — `AuditLog` tem RLS
-    // ligada e zero grants públicos, então o dado não sai daqui pela API.
-    documento: contato.documento,
+    // `documento` NÃO entra, nem parcial. Foi achado R1 da auditoria desta
+    // branch e o dono decidiu tirar.
+    //
+    // A versão anterior gravava o CPF/CNPJ inteiro, com o argumento de que a
+    // trilha precisa responder "qual era antes". O argumento contrário venceu
+    // e é mais forte: isso duplica dado pessoal numa segunda tabela, sem prazo
+    // de descarte, e `AuditLog` não tem FK para `Contact` — no dia em que
+    // existir exclusão de contato, o CPF sobreviveria à pessoa que pediu para
+    // ser apagada.
+    //
+    // O que sobra ainda responde as perguntas de investigação que importam:
+    // QUEM mexeu, QUANDO, e SE o documento mudou. O valor atual está no
+    // próprio contato, que é onde dado de pessoa deve morar — em um lugar só.
+    documentoPreenchido: contato.documento !== null,
     endereco: contato.endereco,
     cidade: contato.cidade,
     uf: contato.uf,
@@ -244,6 +252,12 @@ export async function atualizarContato(
       // outra do mesmo tamanho". Este booleano é o que fecha essa lacuna sem
       // gravar o texto — é a única coisa que a comparação de tamanhos perde.
       observacoesAlterada: antes.observacoes !== depois.observacoes,
+      // Mesma ideia para o documento, e aqui ela é ainda mais necessária:
+      // `documentoPreenchido` não muda quando um CPF vira outro CPF, então sem
+      // este booleano a troca do documento de alguém seria invisível na
+      // trilha — que é justamente o evento mais suspeito que ela deveria
+      // registrar.
+      documentoAlterado: antes.documento !== depois.documento,
     },
   });
 

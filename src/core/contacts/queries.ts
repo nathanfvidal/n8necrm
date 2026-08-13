@@ -133,7 +133,20 @@ export type ContatoComHistorico = {
  * Um contato com o histórico de leads dele. `null` quando não existe — a tela
  * chama `notFound()`.
  */
-export async function buscarContatoComHistorico(id: string): Promise<ContatoComHistorico | null> {
+export async function buscarContatoComHistorico(
+  id: string,
+  opcoes?: {
+    /**
+     * Traz o CPF/CNPJ. Padrão **falso**, e o padrão é o ponto: uma chamada
+     * nova que esqueça o parâmetro erra para o lado seguro — mesmo raciocínio
+     * de `incluirArquivados` em `listarLeads`. Quem pode passar `true` é
+     * `hasPermission(papel, "ver_documento_contato")`, conferido em quem tem
+     * a sessão (a página), nunca aqui: `core/` não conhece sessão.
+     */
+    incluirDocumento?: boolean;
+  }
+): Promise<ContatoComHistorico | null> {
+  const incluirDocumento = opcoes?.incluirDocumento ?? false;
   const contato = await prisma.contact.findUnique({
     where: { id },
     // `select` explícito, campo a campo, e não `include`/linha crua: esta
@@ -182,6 +195,15 @@ export async function buscarContatoComHistorico(id: string): Promise<ContatoComH
   const { leads, ...dados } = contato;
   return {
     ...dados,
+    // O documento é zerado AQUI, no mapeamento, e não escondido na tela.
+    //
+    // A distinção não é estilística: `/contatos/[id]` passa este objeto para
+    // `ContactForm`, que é Client Component, então tudo que sair desta função
+    // vai para o navegador dentro do payload — visível em "ver código-fonte"
+    // mesmo que nenhum pixel o desenhe. É exatamente o defeito que o funil
+    // teve (`core/leads/queries.ts`), e a lição que ficou de lá é que a
+    // barreira é o mapeamento, não a consulta nem o CSS.
+    documento: incluirDocumento ? dados.documento : null,
     leads: leads.map((lead) => ({
       id: lead.id,
       canal: lead.canal,

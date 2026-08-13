@@ -102,7 +102,22 @@ export type ContatoEditavel = {
  * derrubaria o teste com erro de modo estrito — que se parece com defeito de
  * aplicação e não é.
  */
-export function ContactForm({ contato }: { contato?: ContatoEditavel }) {
+export function ContactForm({
+  contato,
+  podeVerDocumento = false,
+}: {
+  contato?: ContatoEditavel;
+  /**
+   * Achado R2 da auditoria. Padrão **falso**: um uso novo deste componente que
+   * esqueça a prop esconde o campo em vez de expor o CPF.
+   *
+   * Esconder aqui é conforto, não proteção — quem não pode ver já recebeu
+   * `documento: null` da consulta (`buscarContatoComHistorico`), e quem tentar
+   * mandar o campo por um POST direto é barrado em `atualizarContatoAction`.
+   * São três camadas, e só as duas do servidor contam.
+   */
+  podeVerDocumento?: boolean;
+}) {
   const router = useRouter();
   const [erroEnvio, setErroEnvio] = useState<string | null>(null);
   const [salvo, setSalvo] = useState(false);
@@ -193,10 +208,12 @@ export function ContactForm({ contato }: { contato?: ContatoEditavel }) {
               <FieldLabel htmlFor="cargo">Cargo</FieldLabel>
               <Input id="cargo" {...register("cargo")} />
             </Field>
-            <Field>
-              <FieldLabel htmlFor="documento">Documento</FieldLabel>
-              <Input id="documento" placeholder="CPF ou CNPJ" {...register("documento")} />
-            </Field>
+            {podeVerDocumento && (
+              <Field>
+                <FieldLabel htmlFor="documento">Documento</FieldLabel>
+                <Input id="documento" placeholder="CPF ou CNPJ" {...register("documento")} />
+              </Field>
+            )}
           </div>
         </FieldSet>
 

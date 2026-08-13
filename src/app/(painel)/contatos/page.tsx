@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import { usuarioAtualOuLogin } from "@/core/auth/session";
+import { hasPermission } from "@/core/auth/permissions";
 import { listarContatos } from "@/core/contacts/queries";
 import { LIMITE_LISTAGEM } from "@/core/listagem";
 import { ContactForm } from "@/components/contacts/contact-form";
@@ -34,7 +35,11 @@ export default async function ContatosPage({
 }: {
   searchParams: Promise<{ q?: string }>;
 }) {
-  await usuarioAtualOuLogin();
+  const usuario = await usuarioAtualOuLogin();
+  // Mesma regra da tela de detalhe: quem não pode ver o documento também não
+  // pode preenchê-lo no cadastro. Sem isto, o campo apareceria em "Adicionar
+  // contato" e sumiria ao reabrir a pessoa — comportamento que parece bug.
+  const podeVerDocumento = hasPermission(usuario.papel, "ver_documento_contato");
 
   const { q } = await searchParams;
   const busca = q?.trim() ?? "";
@@ -51,7 +56,7 @@ export default async function ContatosPage({
 
       <div className="rounded-md border p-4">
         <h2 className="mb-3 text-sm font-medium">Adicionar contato</h2>
-        <ContactForm />
+        <ContactForm podeVerDocumento={podeVerDocumento} />
       </div>
 
       {/* `<form method="get">` sem JavaScript: a busca é uma navegação, não
