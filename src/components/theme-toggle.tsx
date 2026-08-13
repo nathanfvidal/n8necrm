@@ -67,7 +67,6 @@ export function ThemeToggle() {
     <button
       type="button"
       aria-label={escuro ? "Usar tema claro" : "Usar tema escuro"}
-      data-tema={montado ? resolvedTheme : undefined}
       onClick={() => setTheme(escuro ? "light" : "dark")}
       className="rounded-md p-2 text-muted-foreground hover:bg-sidebar-accent hover:text-foreground"
     >

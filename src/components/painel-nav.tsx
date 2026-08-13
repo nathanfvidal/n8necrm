@@ -8,7 +8,7 @@ import { NavLinks, type LinkDoPainel } from "@/components/nav-links";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { NotificationBell, type NotificacaoApresentada } from "@/components/notifications/notification-bell";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
+import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import type { Role } from "@prisma/client";
 
 const GRUPO_TRABALHO: LinkDoPainel[] = [
@@ -116,7 +116,17 @@ export function PainelNav({
           <SheetTrigger aria-label="Abrir menu" className="rounded-md p-2 hover:bg-sidebar-accent">
             <Menu size={18} />
           </SheetTrigger>
-          <SheetContent side="left" className="w-[248px] bg-sidebar p-0">
+          {/* `data-[side=left]:w-[248px]` e não `w-[248px]`: o `sheet.tsx` já
+              traz `data-[side=left]:w-3/4`, que o `tailwind-merge` não
+              considera conflitante com a classe simples — as duas sobrevivem
+              e a de maior especificidade vence. Medido antes do conserto:
+              293px de largura numa janela de 390, onde o código dizia 248. */}
+          <SheetContent side="left" className="data-[side=left]:w-[248px] bg-sidebar p-0">
+            {/* Sem isto o leitor de tela anuncia só "diálogo": `role="dialog"`
+                sem nome acessível nenhum (WCAG 4.1.2). Fica invisível porque
+                a gaveta já mostra a marca no topo — o nome é para quem não
+                enxerga a arte, não para repetir na tela. */}
+            <SheetTitle className="sr-only">Menu de navegação</SheetTitle>
             {conteudo({ comSino: false })}
           </SheetContent>
         </Sheet>

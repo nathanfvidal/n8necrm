@@ -76,8 +76,26 @@ describe("marcaSchema", () => {
 });
 
 describe("config/client.ts", () => {
-  it("é válido segundo o schema", () => {
-    expect(() => clientConfigSchema.parse(client)).not.toThrow();
+  // Havia aqui um `expect(() => clientConfigSchema.parse(client)).not.toThrow()`.
+  // Ele NÃO PODIA falhar: `client` já é a SAÍDA de `clientConfigSchema.parse`
+  // (config/client.ts), e reparsear uma saída válida sempre passa. Dava a
+  // impressão de cobrir a validação sem cobrir nada.
+  //
+  // O que de fato protege é o teste abaixo — a importação do módulo, que
+  // lança no build se o config for inválido — e este, que prova que os
+  // arquivos apontados pelo config EXISTEM em disco. Schema válido com
+  // caminho quebrado passaria pelo Zod e daria imagem quebrada na tela: o
+  // Zod valida o formato do caminho, não a existência do arquivo.
+  it("os arquivos de logo apontados pelo config existem em disco", async () => {
+    const { logo } = client.marca;
+    if (!logo) return; // fork sem logo é caminho normal — ver marcaSchema
+
+    const { existsSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    for (const caminho of [logo.claro, logo.escuro]) {
+      const emDisco = join(process.cwd(), "public", caminho);
+      expect(existsSync(emDisco), `nao existe: public${caminho}`).toBe(true);
+    }
   });
 
   it("passa pela validação de verdade, não só pelo tipo", async () => {
