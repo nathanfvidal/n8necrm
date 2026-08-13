@@ -8,9 +8,35 @@ describe("marcaSchema", () => {
       nome: "AutoCenter",
       corPrimaria: "#0F62FE",
       fonte: "Geist",
-      logo: "/logo.svg",
+      logo: { claro: "/logo-preto.svg", escuro: "/logo-branco.svg" },
     });
     expect(r.success).toBe(true);
+  });
+
+  it("exige as duas artes do logo, não uma", () => {
+    // Um arquivo só cobriria metade dos temas. O schema não deixa escolher
+    // metade: ou vem o par, ou não vem logo nenhum.
+    for (const logo of [{ claro: "/a.svg" }, { escuro: "/b.svg" }, "/a.svg"]) {
+      expect(marcaSchema.safeParse({
+        nome: "X", corPrimaria: "#0F62FE", fonte: "Geist", logo,
+      }).success).toBe(false);
+    }
+  });
+
+  it("recusa caminho de logo que sai do domínio ou tem espaço", () => {
+    // `startsWith("/")` sozinho aceitaria os dois primeiros: `//host/x` é URL
+    // protocolo-relativa e busca fora do domínio. O terceiro vira `%20` na
+    // URL. O CSP barraria a carga externa, mas a validação não deve depender
+    // de outra camada para dizer a verdade.
+    for (const ruim of ["//evil.example/x.svg", "/\\evil.example/x.svg", "/Logo Insta.svg"]) {
+      const r = marcaSchema.safeParse({
+        nome: "X",
+        corPrimaria: "#0F62FE",
+        fonte: "Geist",
+        logo: { claro: ruim, escuro: "/ok.svg" },
+      });
+      expect(r.success, `deveria recusar ${ruim}`).toBe(false);
+    }
   });
 
   it("aceita marca sem logo — o logo é opcional", () => {

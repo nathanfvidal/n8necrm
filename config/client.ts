@@ -18,6 +18,10 @@ export const client = clientConfigSchema.parse({
     nome: "AutoCenter Exemplo",
     corPrimaria: "#0F62FE",
     fonte: "Geist",
+    // Arte monocromática: a preta é para o tema claro, a branca para o
+    // escuro. Escolhido o par de 3 KB sem metadado C2PA — as variantes
+    // maiores da mesma arte carregavam ~9,5 KB de manifesto de proveniência.
+    logo: { claro: "/logo-preto.svg", escuro: "/logo-branco.svg" },
   },
   // "whatsapp" liga o atendente de IA (Fatia 1) e o link "Conversas" no
   // menu — ver src/modules/whatsapp/. Diferente de catalog/analytics

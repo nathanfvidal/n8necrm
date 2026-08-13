@@ -14,6 +14,25 @@ export const campoSchema = z.object({
 /** Lista FECHADA por causa do CSP: `font-src 'self'` obriga a empacotar no build. */
 export const FONTES = ["Geist", "Inter", "Manrope", "IBM Plex Sans"] as const;
 
+/**
+ * Caminho de arquivo servido por `public/`.
+ *
+ * `.startsWith("/")` sozinho NÃO significa "caminho local": `//outro-dominio/
+ * logo.svg` começa com barra e é uma URL protocolo-relativa — o navegador
+ * busca fora do domínio. `/\outro-dominio/x` idem, em alguns parsers. O
+ * `(?![/\\])` fecha os dois. Hoje o `img-src 'self'` do CSP barraria a carga,
+ * mas a validação não deve depender de outra camada para dizer a verdade.
+ *
+ * `\S*` recusa espaço: `/Logo Insta.svg` vira `%20` na URL e quebra em
+ * qualquer lugar que monte o caminho por concatenação.
+ */
+const caminhoDeAsset = z
+  .string()
+  .regex(
+    /^\/(?![/\\])\S*$/,
+    "Caminho de asset precisa começar com uma barra, sem espaço, e não pode começar com `//` ou `/\\` (sairia do domínio).",
+  );
+
 export const marcaSchema = z.object({
   nome: z.string().min(1),
   corPrimaria: z
@@ -39,8 +58,16 @@ export const marcaSchema = z.object({
         `neutro e o white-label para de funcionar em silêncio.`,
     ),
   fonte: z.enum(FONTES),
-  /** Opcional: fork sem arquivo de logo mostra o nome do cliente em texto. */
-  logo: z.string().startsWith("/").optional(),
+  /**
+   * Opcional: fork sem arquivo de logo mostra o nome do cliente em texto.
+   *
+   * **Um por tema, não um só.** Logo monocromático some no fundo da mesma cor,
+   * e o painel abre no escuro por padrão — um arquivo só cobriria metade dos
+   * casos. `claro` é o logo do TEMA claro (arte escura sobre fundo branco);
+   * `escuro`, o do TEMA escuro. A troca é por CSS, não por JavaScript, para
+   * acontecer junto com o resto do tema e não um quadro depois.
+   */
+  logo: z.object({ claro: caminhoDeAsset, escuro: caminhoDeAsset }).optional(),
 });
 
 export const clientConfigSchema = z.object({
