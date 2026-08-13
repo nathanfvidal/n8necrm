@@ -61,7 +61,12 @@ export default async function ContatosPage({
           <label htmlFor="q" className="text-sm font-medium">
             Buscar
           </label>
-          <Input id="q" name="q" defaultValue={busca} placeholder="Nome, telefone ou e-mail" />
+          <Input
+            id="q"
+            name="q"
+            defaultValue={busca}
+            placeholder="Nome, empresa, telefone ou e-mail"
+          />
         </div>
         <Button type="submit" variant="outline">
           Buscar
@@ -96,6 +101,11 @@ export default async function ContatosPage({
           <thead>
             <tr className="border-b text-left text-muted-foreground">
               <th className="py-2 font-medium">Nome</th>
+              {/* Empresa logo depois do nome: num CRM B2B é o que distingue
+                  dois "Carlos" na agenda. É o único campo do cadastro que sobe
+                  para a lista — ver `ContatoListado` para o porquê dos outros
+                  ficarem de fora. */}
+              <th className="py-2 font-medium">Empresa</th>
               <th className="py-2 font-medium">Telefone</th>
               <th className="py-2 font-medium">E-mail</th>
               <th className="py-2 font-medium">Leads</th>
@@ -110,6 +120,7 @@ export default async function ContatosPage({
                     {contato.nome}
                   </Link>
                 </td>
+                <td className="py-2 text-muted-foreground">{contato.empresa ?? "—"}</td>
                 <td className="py-2">{contato.telefone}</td>
                 <td className="py-2 text-muted-foreground">{contato.email ?? "—"}</td>
                 <td className="py-2">{contato.totalLeads}</td>

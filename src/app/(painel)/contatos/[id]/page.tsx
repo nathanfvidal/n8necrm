@@ -45,6 +45,12 @@ export default async function ContatoPage({ params }: { params: Promise<{ id: st
         <h1 className="text-xl font-semibold">{contato.nome}</h1>
         <p className="text-sm text-muted-foreground">
           Na agenda desde {formatarDataHoraBR(contato.criadoEm)}
+          {/* Só aparece quando de fato houve edição. Nos contatos antigos a
+              migração igualou `atualizadoEm` a `criadoEm` (não havia outra
+              verdade disponível), e escrever "atualizado em" com a mesma data
+              da criação faria a tela afirmar uma edição que nunca aconteceu. */}
+          {contato.atualizadoEm.getTime() !== contato.criadoEm.getTime() &&
+            ` · atualizado em ${formatarDataHoraBR(contato.atualizadoEm)}`}
         </p>
       </div>
 

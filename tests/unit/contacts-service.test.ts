@@ -378,6 +378,64 @@ describe("core/contacts", () => {
       }
     });
 
+    // A ida e volta completa, e o motivo de existir é um defeito SILENCIOSO.
+    //
+    // `buscarContatoComHistorico` alimenta a tela de detalhe, que preenche o
+    // formulário. Se um campo faltasse no `select` daquela consulta, a tela o
+    // desenharia VAZIO — e o primeiro "Salvar alterações" gravaria vazio por
+    // cima do que estava lá. Nenhum erro, nenhum teste vermelho, dado perdido.
+    // O teste de componente não pega: ele recebe o contato por prop. O teste
+    // de serviço não pega: ele lê o retorno de `atualizarContato`.
+    //
+    // Medido ao sabotar (tirando `cargo: true` do `select`): o `tsc` TAMBÉM
+    // fica vermelho, porque `ContatoComHistorico` declara o campo e o retorno
+    // deixa de ser atribuível. O tipo explícito é a guarda primária, e é justo
+    // dizer isso em vez de deixar este teste levar o crédito.
+    //
+    // O que ele acrescenta é cobertura de um caso que o tipo não vê: alguém
+    // afrouxar o retorno da consulta (um `Promise<any>`, um cast, um tipo
+    // inferido em vez do declarado) e o `select` incompleto passar calado.
+    // Duas guardas independentes contra perda silenciosa de dado — a barata em
+    // tempo de compilação, esta em tempo de execução.
+    it("a consulta da tela de detalhe devolve TODOS os campos do cadastro", async () => {
+      const criado = await criarCompleto("Uma observação qualquer.");
+      try {
+        const lido = await buscarContatoComHistorico(criado.id);
+
+        expect(lido).toMatchObject({
+          nome: `Cadastro ${MARCA}`,
+          telefone: TELEFONE_CADASTRO,
+          empresa: "Acme Ltda",
+          cargo: "Diretor de Compras",
+          documento: "12345678901",
+          endereco: "Rua das Flores, 100",
+          cidade: "São Paulo",
+          uf: "SP",
+          observacoes: "Uma observação qualquer.",
+        });
+
+        // Campo que existe no banco e volta `undefined` da consulta é
+        // exatamente o sintoma de `select` incompleto — e `toMatchObject`
+        // sozinho não distingue "veio null" de "não veio". Esta asserção
+        // distingue.
+        for (const campo of [
+          "empresa",
+          "cargo",
+          "documento",
+          "endereco",
+          "cidade",
+          "uf",
+          "observacoes",
+          "atualizadoEm",
+        ] as const) {
+          expect(lido?.[campo], `campo fora do select da consulta: ${campo}`).not.toBeUndefined();
+        }
+      } finally {
+        await prisma.auditLog.deleteMany({ where: { entidadeId: criado.id } });
+        await prisma.contact.delete({ where: { id: criado.id } });
+      }
+    });
+
     it("atualizadoEm avança na edição, e criadoEm não", async () => {
       const criado = await criarCompleto();
       try {
