@@ -1,6 +1,4 @@
-import {
-  LayoutDashboard, Target, Columns3, Users, ListChecks, MessageSquare, UserCog, Menu,
-} from "lucide-react";
+import { Menu } from "lucide-react";
 
 import { moduloAtivo } from "@/lib/module-gate";
 import { hasPermission } from "@/core/auth/permissions";
@@ -14,11 +12,11 @@ import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import type { Role } from "@prisma/client";
 
 const GRUPO_TRABALHO: LinkDoPainel[] = [
-  { href: "/", label: "Dashboard", icone: LayoutDashboard },
-  { href: "/leads", label: "Leads", icone: Target },
-  { href: "/leads/kanban", label: "Funil", icone: Columns3 },
-  { href: "/contatos", label: "Contatos", icone: Users },
-  { href: "/tasks", label: "Tarefas", icone: ListChecks },
+  { href: "/", label: "Dashboard", icone: "dashboard" },
+  { href: "/leads", label: "Leads", icone: "leads" },
+  { href: "/leads/kanban", label: "Funil", icone: "funil" },
+  { href: "/contatos", label: "Contatos", icone: "contatos" },
+  { href: "/tasks", label: "Tarefas", icone: "tarefas" },
 ];
 
 /**
@@ -39,10 +37,10 @@ export function PainelNav({
   // fork sem whatsapp. `NavLinks` é quem trata a régua nesse caso.
   const grupoExtra: LinkDoPainel[] = [
     ...(moduloAtivo("whatsapp")
-      ? [{ href: "/conversas", label: "Conversas", icone: MessageSquare }]
+      ? [{ href: "/conversas", label: "Conversas", icone: "conversas" as const }]
       : []),
     ...(papelUsuario && hasPermission(papelUsuario, "gerenciar_usuarios")
-      ? [{ href: "/usuarios", label: "Equipe", icone: UserCog }]
+      ? [{ href: "/usuarios", label: "Equipe", icone: "equipe" as const }]
       : []),
   ];
 

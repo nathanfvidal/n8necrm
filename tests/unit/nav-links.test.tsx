@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, cleanup } from "@testing-library/react";
-import { LayoutDashboard, Target, Columns3 } from "lucide-react";
 
 const mocks = vi.hoisted(() => ({ caminho: "/" }));
 vi.mock("next/navigation", () => ({ usePathname: () => mocks.caminho }));
@@ -19,12 +18,12 @@ vi.mock("next/link", () => ({
   },
 }));
 
-import { NavLinks } from "@/components/nav-links";
+import { NavLinks, type LinkDoPainel } from "@/components/nav-links";
 
-const GRUPO_A = [
-  { href: "/", label: "Dashboard", icone: LayoutDashboard },
-  { href: "/leads", label: "Leads", icone: Target },
-  { href: "/leads/kanban", label: "Funil", icone: Columns3 },
+const GRUPO_A: LinkDoPainel[] = [
+  { href: "/", label: "Dashboard", icone: "dashboard" },
+  { href: "/leads", label: "Leads", icone: "leads" },
+  { href: "/leads/kanban", label: "Funil", icone: "funil" },
 ];
 
 afterEach(() => {
@@ -71,7 +70,7 @@ describe("NavLinks", () => {
   });
 
   it("renderiza régua entre dois grupos com conteúdo", () => {
-    const grupoB = [{ href: "/usuarios", label: "Equipe", icone: Target }];
+    const grupoB: LinkDoPainel[] = [{ href: "/usuarios", label: "Equipe", icone: "equipe" }];
     const { container } = render(<NavLinks grupos={[GRUPO_A, grupoB]} />);
     expect(container.querySelectorAll("hr")).toHaveLength(1);
   });

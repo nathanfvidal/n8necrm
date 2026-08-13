@@ -2,9 +2,32 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import {
+  LayoutDashboard, Target, Columns3, Users, ListChecks, MessageSquare, UserCog,
+} from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
-export type LinkDoPainel = { href: string; label: string; icone: LucideIcon };
+export type IconeDoPainel =
+  | "dashboard" | "leads" | "funil" | "contatos" | "tarefas" | "conversas" | "equipe";
+
+export type LinkDoPainel = { href: string; label: string; icone: IconeDoPainel };
+
+// O mapa vive DO LADO DO CLIENTE de propósito. A referência de componente do
+// lucide é uma função, e função não atravessa a fronteira Server→Client: o
+// React precisa serializar as props, e uma função solta não é serializável.
+// A versão anterior passava `icone: LayoutDashboard` do servidor e derrubava
+// o painel inteiro em build de produção com "Functions cannot be passed
+// directly to Client Components". String serializa; a união fechada mantém a
+// segurança de tipo, então um nome errado não compila.
+const ICONES: Record<IconeDoPainel, LucideIcon> = {
+  dashboard: LayoutDashboard,
+  leads: Target,
+  funil: Columns3,
+  contatos: Users,
+  tarefas: ListChecks,
+  conversas: MessageSquare,
+  equipe: UserCog,
+};
 
 /**
  * Só o que precisa de `usePathname` mora aqui.
@@ -37,22 +60,25 @@ export function NavLinks({ grupos }: { grupos: LinkDoPainel[][] }) {
               está desligado E o usuário não é admin — combinação que ninguém
               testa à mão. */}
           {i > 0 && <hr className="my-2 border-sidebar-border" />}
-          {grupo.map(({ href, label, icone: Icone }) => (
-            <Link
-              key={href}
-              href={href}
-              prefetch={false}
-              aria-current={href === ativo ? "page" : undefined}
-              className={
-                href === ativo
-                  ? "flex items-center gap-2 rounded-md bg-sidebar-accent px-2 py-1.5 text-sm font-medium text-sidebar-accent-foreground"
-                  : "flex items-center gap-2 rounded-md px-2 py-1.5 text-sm font-medium text-muted-foreground hover:bg-sidebar-accent/50 hover:text-foreground"
-              }
-            >
-              <Icone size={16} aria-hidden />
-              {label}
-            </Link>
-          ))}
+          {grupo.map(({ href, label, icone }) => {
+            const Icone = ICONES[icone];
+            return (
+              <Link
+                key={href}
+                href={href}
+                prefetch={false}
+                aria-current={href === ativo ? "page" : undefined}
+                className={
+                  href === ativo
+                    ? "flex items-center gap-2 rounded-md bg-sidebar-accent px-2 py-1.5 text-sm font-medium text-sidebar-accent-foreground"
+                    : "flex items-center gap-2 rounded-md px-2 py-1.5 text-sm font-medium text-muted-foreground hover:bg-sidebar-accent/50 hover:text-foreground"
+                }
+              >
+                <Icone size={16} aria-hidden />
+                {label}
+              </Link>
+            );
+          })}
         </div>
       ))}
     </nav>
