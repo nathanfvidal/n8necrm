@@ -5,17 +5,37 @@ import { useRouter } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { concluirMinhaTask, editarTaskAction, excluirTaskAction } from "@/core/tasks/actions";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  concluirMinhaTask,
+  editarTaskAction,
+  excluirTaskAction,
+  reabrirTaskAction,
+} from "@/core/tasks/actions";
 import { EmptyState } from "@/components/empty-state";
+import { ConfirmarDialogo } from "@/components/confirmar-dialogo";
+import type { OpcaoDeContato } from "@/components/tasks/task-form";
 import { formatarDataCivilBR, parseDataCivil } from "@/lib/date";
+
+const CLASSES_SELECT =
+  "h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50";
 
 export type TaskLinha = {
   id: string;
   titulo: string;
   vencimento: Date;
   descricao?: string | null;
+  /**
+   * A lista serve às duas telas: pendentes e concluídas. Quem decide qual é
+   * a consulta (`/tasks?concluidas=1`), não este componente — ele só troca
+   * "Concluir" por "Reabrir". Manter `TaskList` burro é o que permite o
+   * filtro morar na URL.
+   */
+  concluida?: boolean;
   leadId?: string | null;
   leadContatoNome?: string;
+  contactId?: string | null;
+  contatoNome?: string;
   // Presentes só quando a lista pode conter tarefa de outra pessoa (seção
   // "Tarefas" de `/leads/[id]`, fix round 1/5 — ver `listarTasksPendentesDoLead`,
   // queries.ts) — `/tasks` nunca preenche estes dois campos, porque toda
@@ -61,6 +81,39 @@ export function useTaskList(tasksIniciais: TaskLinha[]) {
   const [tasks, setTasks] = useState(tasksIniciais);
   const [erro, setErro] = useState<string | null>(null);
 
+  // ─── Ressincronização com o servidor ───────────────────────────────────
+  //
+  // Sem isto a lista congela na foto do PRIMEIRO render, e o defeito é
+  // grave: `TaskForm` cria a tarefa, chama `router.refresh()`, o Next refaz
+  // o Server Component e manda props novas — e `useState` ignora props
+  // novas, por definição. O componente continua montado com a lista antiga.
+  // Resultado em produção: **criar uma tarefa não a mostrava na tela até a
+  // pessoa recarregar a página**.
+  //
+  // O defeito é anterior a esta branch (`router.refresh()` e este `useState`
+  // já conviviam). Ninguém tinha visto porque não havia e2e de tarefas: os
+  // testes de unidade renderizam com a lista já preenchida e nunca exercitam
+  // "props mudaram depois do mount". O primeiro teste que criou uma tarefa
+  // num navegador de verdade encontrou na primeira execução.
+  //
+  // Ajuste durante o RENDER, não em `useEffect`: é o padrão que o React
+  // documenta para "estado derivado de prop que precisa ser reiniciado". O
+  // React descarta o render em andamento e refaz imediatamente, sem pintar o
+  // quadro intermediário — diferente do efeito, que pinta a lista velha
+  // primeiro e só então corrige. Também evita o `react-hooks/set-state-in-
+  // effect`, que este projeto trata como erro de lint (mesma escolha de
+  // `theme-toggle.tsx` e `notification-bell.tsx`).
+  //
+  // Comparação por REFERÊNCIA: `page.tsx` monta um array novo a cada render,
+  // então toda resposta do servidor ressincroniza. É o que se quer — o
+  // servidor é a verdade, e o estado otimista existe só para a janela entre
+  // o clique e a confirmação.
+  const [ultimoDoServidor, setUltimoDoServidor] = useState(tasksIniciais);
+  if (tasksIniciais !== ultimoDoServidor) {
+    setUltimoDoServidor(tasksIniciais);
+    setTasks(tasksIniciais);
+  }
+
   async function handleConcluir(id: string) {
     setErro(null);
     const tarefa = tasks.find((t) => t.id === id);
@@ -102,14 +155,33 @@ export function useTaskList(tasksIniciais: TaskLinha[]) {
  * `undefined` (caso de `/tasks`) é tratado como "pode concluir" — toda
  * tarefa ali já é do próprio usuário, por construção de `TasksPage`.
  */
-export function TaskList({ tasks: tasksIniciais }: { tasks: TaskLinha[] }) {
+export function TaskList({
+  tasks: tasksIniciais,
+  contatos = [],
+  // O texto de lista vazia vem de fora porque a lista serve às duas telas:
+  // "Nenhuma tarefa pendente / Você está em dia" é elogio na tela de
+  // pendentes e mentira na de concluídas, onde significa "você nunca
+  // terminou nada". Achado pelo retrato que o Playwright grava na falha.
+  vazioTitulo = "Nenhuma tarefa pendente",
+  vazioDescricao = "Você está em dia.",
+}: {
+  tasks: TaskLinha[];
+  contatos?: OpcaoDeContato[];
+  vazioTitulo?: string;
+  vazioDescricao?: string;
+}) {
   const router = useRouter();
   const { tasks, erro, handleConcluir, limparErro } = useTaskList(tasksIniciais);
 
   // Edição em linha no padrão de `user-table.tsx`: um estado com o id da
   // linha em edição, e só ela troca de forma.
   const [editando, setEditando] = useState<string | null>(null);
-  const [rascunho, setRascunho] = useState({ titulo: "", descricao: "", vencimento: "" });
+  const [rascunho, setRascunho] = useState({
+    titulo: "",
+    descricao: "",
+    vencimento: "",
+    contactId: "",
+  });
   const [erroEdicao, setErroEdicao] = useState<string | null>(null);
   const [salvando, setSalvando] = useState(false);
 
@@ -128,6 +200,7 @@ export function TaskList({ tasks: tasksIniciais }: { tasks: TaskLinha[] }) {
       // `src/lib/date.ts`), então os componentes UTC são o dia que a pessoa
       // digitou. Usar o fuso local aqui devolveria o dia anterior.
       vencimento: task.vencimento.toISOString().slice(0, 10),
+      contactId: task.contactId ?? "",
     });
   }
 
@@ -148,9 +221,14 @@ export function TaskList({ tasks: tasksIniciais }: { tasks: TaskLinha[] }) {
       titulo: rascunho.titulo,
       descricao: rascunho.descricao,
       vencimento,
-      // `undefined` mantém o vínculo como está — esta tela não oferece
-      // trocar o lead de uma tarefa, então nunca manda `null`.
+      // `undefined` mantém o vínculo com o LEAD como está — esta tela não
+      // oferece trocar o lead de uma tarefa, então nunca manda `null`.
       leadId: undefined,
+      // O contato, sim, é editável aqui. `""` (opção "Nenhum" do `<select>`)
+      // vira `null`, que é a ordem de DESVINCULAR — antes desta branch o
+      // campo era mandado como `undefined` fixo, e desvincular era
+      // literalmente inalcançável pela interface.
+      contactId: rascunho.contactId || null,
     });
     setSalvando(false);
 
@@ -162,11 +240,22 @@ export function TaskList({ tasks: tasksIniciais }: { tasks: TaskLinha[] }) {
     router.refresh();
   }
 
+  // Sem `window.confirm`: a confirmação agora é DOM de verdade
+  // (`ConfirmarDialogo`), que é o que torna o e2e desta tela possível sem
+  // depender de `page.on("dialog")`.
   async function excluir(task: TaskLinha) {
-    if (!window.confirm("Excluir esta tarefa? Isso não pode ser desfeito.")) return;
-
     setErroEdicao(null);
     const resultado = await excluirTaskAction({ taskId: task.id, leadId: task.leadId });
+    if (!resultado.ok) {
+      setErroEdicao(resultado.erro);
+      return;
+    }
+    router.refresh();
+  }
+
+  async function reabrir(task: TaskLinha) {
+    setErroEdicao(null);
+    const resultado = await reabrirTaskAction({ taskId: task.id, leadId: task.leadId });
     if (!resultado.ok) {
       setErroEdicao(resultado.erro);
       return;
@@ -192,7 +281,7 @@ export function TaskList({ tasks: tasksIniciais }: { tasks: TaskLinha[] }) {
       )}
 
       {tasks.length === 0 ? (
-        <EmptyState title="Nenhuma tarefa pendente" description="Você está em dia." />
+        <EmptyState title={vazioTitulo} description={vazioDescricao} />
       ) : (
         <ul className="space-y-2">
           {tasks.map((task) => {
@@ -211,8 +300,13 @@ export function TaskList({ tasks: tasksIniciais }: { tasks: TaskLinha[] }) {
                       setRascunho((atual) => ({ ...atual, titulo: evento.target.value }))
                     }
                   />
-                  <Input
+                  {/* `<Textarea>` e não `<Input>`: a descrição tem quebra de
+                      linha, e um campo de uma linha só ensina a pessoa a não
+                      escrever nada. O rótulo acessível é o MESMO de antes,
+                      para não quebrar teste nem hábito de quem usa leitor. */}
+                  <Textarea
                     aria-label="Descrição da tarefa"
+                    rows={3}
                     value={rascunho.descricao}
                     onChange={(evento) =>
                       setRascunho((atual) => ({ ...atual, descricao: evento.target.value }))
@@ -226,6 +320,23 @@ export function TaskList({ tasks: tasksIniciais }: { tasks: TaskLinha[] }) {
                       setRascunho((atual) => ({ ...atual, vencimento: evento.target.value }))
                     }
                   />
+                  {contatos.length > 0 && (
+                    <select
+                      aria-label="Contato da tarefa"
+                      className={CLASSES_SELECT}
+                      value={rascunho.contactId}
+                      onChange={(evento) =>
+                        setRascunho((atual) => ({ ...atual, contactId: evento.target.value }))
+                      }
+                    >
+                      <option value="">Nenhum</option>
+                      {contatos.map((contato) => (
+                        <option key={contato.id} value={contato.id}>
+                          {contato.nome}
+                        </option>
+                      ))}
+                    </select>
+                  )}
                   <div className="flex gap-2">
                     <Button size="sm" onClick={() => salvarEdicao(task)} disabled={salvando}>
                       {salvando ? "Salvando..." : "Salvar"}
@@ -247,34 +358,68 @@ export function TaskList({ tasks: tasksIniciais }: { tasks: TaskLinha[] }) {
                 : task.responsavelNome
               : undefined;
             return (
-              <li key={task.id} className="flex items-center justify-between rounded border p-3">
-                <div>
+              <li key={task.id} className="flex items-start justify-between gap-3 rounded border p-3">
+                <div className="min-w-0 space-y-1">
                   <p className="text-sm font-medium">{task.titulo}</p>
+                  {/* A descrição EXISTIA no banco, o serviço gravava e a
+                      action aceitava — só que nada nesta tela a mostrava.
+                      Dava para digitar uma descrição ao editar, salvar, e
+                      vê-la sumir. `whitespace-pre-wrap` preserva as quebras
+                      de linha que o `<Textarea>` permite digitar;
+                      `line-clamp-3` impede que uma descrição de 2000
+                      caracteres empurre a lista inteira para fora da tela. */}
+                  {task.descricao && (
+                    <p className="line-clamp-3 whitespace-pre-wrap text-sm text-muted-foreground">
+                      {task.descricao}
+                    </p>
+                  )}
                   <p className="text-xs text-muted-foreground">
                     Vence em {formatarDataCivilBR(task.vencimento)}
+                    {task.contatoNome ? ` · ${task.contatoNome}` : ""}
                     {task.leadContatoNome ? ` · ${task.leadContatoNome}` : ""}
                     {quem ? ` · ${quem}` : ""}
                   </p>
                 </div>
                 {podeConcluir ? (
-                  <div className="flex items-center gap-2">
-                    <Button size="sm" variant="outline" onClick={() => concluirEAtualizar(task.id)}>
-                      Concluir
-                    </Button>
-                    <button
-                      type="button"
-                      className="text-xs underline"
-                      onClick={() => comecarEdicao(task)}
-                    >
+                  <div className="flex shrink-0 items-center gap-2">
+                    {task.concluida ? (
+                      <Button size="sm" variant="outline" onClick={() => reabrir(task)}>
+                        Reabrir
+                      </Button>
+                    ) : (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => concluirEAtualizar(task.id)}
+                      >
+                        Concluir
+                      </Button>
+                    )}
+                    {/* Eram `<button className="text-xs underline">` — texto
+                        sublinhado ao lado de um `<Button>` de verdade, que é
+                        como uma ação disponível se disfarça de nota de
+                        rodapé. Agora são botões, com peso visual proporcional
+                        ao que fazem: excluir é `destructive`. */}
+                    <Button size="sm" variant="ghost" onClick={() => comecarEdicao(task)}>
                       Editar
-                    </button>
-                    <button
-                      type="button"
-                      className="text-xs text-red-600 underline"
-                      onClick={() => excluir(task)}
-                    >
-                      Excluir
-                    </button>
+                    </Button>
+                    <ConfirmarDialogo
+                      gatilho={(abrir) => (
+                        // O rótulo do gatilho é "Excluir tarefa" e o da
+                        // confirmação é "Excluir": nomes distintos de
+                        // propósito, para que o localizador do e2e não fique
+                        // ambíguo entre os dois. Não dependo de o Base UI
+                        // tirar o fundo da árvore de acessibilidade — ele faz
+                        // isso hoje, e é conveniente demais para eu apostar.
+                        <Button size="sm" variant="ghost" onClick={abrir}>
+                          Excluir tarefa
+                        </Button>
+                      )}
+                      titulo="Excluir tarefa"
+                      descricao={`"${task.titulo}" será apagada para sempre. Isso não pode ser desfeito.`}
+                      rotuloConfirmar="Excluir"
+                      onConfirmar={() => excluir(task)}
+                    />
                   </div>
                 ) : (
                   // Nenhum botão aqui — nem "desabilitado" (que ainda sugere

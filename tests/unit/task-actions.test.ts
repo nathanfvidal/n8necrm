@@ -10,6 +10,14 @@ import type { User, Task } from "@prisma/client";
 const usuarioAtualMock = vi.fn();
 vi.mock("@/core/auth/session", () => ({ usuarioAtual: () => usuarioAtualMock() }));
 
+// `revalidatePath` lança fora do pipeline do Next ("static generation store
+// missing"). O mock é obrigatório — mas um no-op puro deixaria o teste verde
+// sem provar nada, então as chamadas são CAPTURADAS e viram asserção abaixo.
+const revalidatePathMock = vi.fn();
+vi.mock("next/cache", () => ({
+  revalidatePath: (...args: unknown[]) => revalidatePathMock(...args),
+}));
+
 const criarTaskMock = vi.fn();
 const concluirTaskMock = vi.fn();
 vi.mock("@/core/tasks/service", () => ({
@@ -41,6 +49,7 @@ function taskFake(overrides: Partial<Task> = {}): Task {
     concluidaEm: null,
     responsavelId: "usuario-fake-id",
     leadId: null,
+    contactId: null,
     criadoEm: new Date("2026-01-01T00:00:00.000Z"),
     ...overrides,
   };
@@ -50,6 +59,89 @@ beforeEach(() => {
   usuarioAtualMock.mockReset();
   criarTaskMock.mockReset();
   concluirTaskMock.mockReset();
+  revalidatePathMock.mockReset();
+});
+
+// Criar e concluir não invalidavam o cache de rota — só editar e excluir. O
+// efeito prático não era teórico: `router.refresh()` no formulário conserta a
+// aba de quem agiu, e todo o resto (a mesma pessoa em outra aba, o contador
+// do painel) continuava servindo a página em cache, sem a tarefa nova.
+// Correção do achado R2 da auditoria da branch. O valor de retorno de uma
+// Server Action é SERIALIZADO para o navegador: devolver `Task` mandava a
+// linha inteira (`responsavelId`, `contactId`, `criadoEm`) para chamadores
+// que descartam o retorno. Era a tarefa do próprio usuário, então não vazava
+// entre pessoas — mas é o mesmo padrão que produziu o vazamento do funil.
+describe("nada da linha do banco atravessa a fronteira", () => {
+  it("criar não devolve a tarefa ao navegador", async () => {
+    usuarioAtualMock.mockResolvedValue(usuarioFake());
+    criarTaskMock.mockResolvedValue(taskFake({ responsavelId: "segredo" }));
+
+    const devolvido = await criarMinhaTask({
+      titulo: "Ligar",
+      vencimento: new Date("2026-08-05T00:00:00.000Z"),
+    });
+
+    expect(devolvido).toBeUndefined();
+  });
+
+  it("concluir não devolve a tarefa, mas ainda lê o leadId dela por dentro", async () => {
+    usuarioAtualMock.mockResolvedValue(usuarioFake());
+    concluirTaskMock.mockResolvedValue(taskFake({ leadId: "lead-7" }));
+
+    const devolvido = await concluirMinhaTask("task-1");
+
+    expect(devolvido).toBeUndefined();
+    // A linha continua sendo lida no servidor — é de lá que sai a rota do
+    // lead a invalidar. O que mudou é ela não sair de lá.
+    expect(revalidatePathMock).toHaveBeenCalledWith("/leads/lead-7");
+  });
+});
+
+describe("invalidação de cache", () => {
+  it("criar invalida /tasks e o painel", async () => {
+    usuarioAtualMock.mockResolvedValue(usuarioFake());
+    criarTaskMock.mockResolvedValue(taskFake());
+
+    await criarMinhaTask({ titulo: "Ligar", vencimento: new Date("2026-08-05T00:00:00.000Z") });
+
+    expect(revalidatePathMock).toHaveBeenCalledWith("/tasks");
+    expect(revalidatePathMock).toHaveBeenCalledWith("/");
+  });
+
+  it("criar com lead invalida também a página daquele lead", async () => {
+    usuarioAtualMock.mockResolvedValue(usuarioFake());
+    criarTaskMock.mockResolvedValue(taskFake({ leadId: "lead-9" }));
+
+    await criarMinhaTask({
+      titulo: "Ligar",
+      vencimento: new Date("2026-08-05T00:00:00.000Z"),
+      leadId: "lead-9",
+    });
+
+    expect(revalidatePathMock).toHaveBeenCalledWith("/leads/lead-9");
+  });
+
+  it("concluir invalida /tasks e o painel", async () => {
+    usuarioAtualMock.mockResolvedValue(usuarioFake());
+    concluirTaskMock.mockResolvedValue(taskFake({ concluidaEm: new Date() }));
+
+    await concluirMinhaTask("task-1");
+
+    expect(revalidatePathMock).toHaveBeenCalledWith("/tasks");
+    expect(revalidatePathMock).toHaveBeenCalledWith("/");
+  });
+
+  // O `leadId` vem da tarefa DEVOLVIDA pelo serviço, não de um argumento —
+  // `concluirMinhaTask` só recebe o id. Sem isso, concluir uma tarefa a
+  // partir de `/tasks` deixaria a página do lead vinculado com cache velho.
+  it("concluir invalida a página do lead lendo o vínculo da tarefa devolvida", async () => {
+    usuarioAtualMock.mockResolvedValue(usuarioFake());
+    concluirTaskMock.mockResolvedValue(taskFake({ leadId: "lead-7" }));
+
+    await concluirMinhaTask("task-1");
+
+    expect(revalidatePathMock).toHaveBeenCalledWith("/leads/lead-7");
+  });
 });
 
 describe("criarMinhaTask", () => {

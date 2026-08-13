@@ -14,8 +14,19 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
 
 const concluirMinhaTaskMock = vi.fn();
+// As outras três precisam estar aqui mesmo que os testes antigos não as usem:
+// `task-list.tsx` as IMPORTA, e um mock que devolve objeto sem elas as deixa
+// `undefined` — o render passa, e o teste só descobre no clique. Foi assim
+// que os testes desta tela continuaram verdes enquanto o componente era
+// reescrito por baixo.
+const editarTaskActionMock = vi.fn();
+const excluirTaskActionMock = vi.fn();
+const reabrirTaskActionMock = vi.fn();
 vi.mock("@/core/tasks/actions", () => ({
   concluirMinhaTask: (...args: unknown[]) => concluirMinhaTaskMock(...args),
+  editarTaskAction: (...args: unknown[]) => editarTaskActionMock(...args),
+  excluirTaskAction: (...args: unknown[]) => excluirTaskActionMock(...args),
+  reabrirTaskAction: (...args: unknown[]) => reabrirTaskActionMock(...args),
 }));
 
 const refreshMock = vi.fn();
@@ -38,6 +49,9 @@ const TAREFAS_TESTE = [
 afterEach(() => {
   cleanup();
   concluirMinhaTaskMock.mockReset();
+  editarTaskActionMock.mockReset();
+  excluirTaskActionMock.mockReset();
+  reabrirTaskActionMock.mockReset();
   refreshMock.mockReset();
 });
 
