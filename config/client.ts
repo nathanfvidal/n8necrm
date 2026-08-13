@@ -12,10 +12,10 @@ import { clientConfigSchema } from "./client.schema";
  * e não há como faltarem no build.
  */
 export const client = clientConfigSchema.parse({
-  nome: "AutoCenter Exemplo",
+  nome: "CRM Autus",
   vertical: "automotivo",
   marca: {
-    nome: "AutoCenter Exemplo",
+    nome: "Autus",
     corPrimaria: "#0F62FE",
     fonte: "Geist",
     // Arte monocromática: a preta é para o tema claro, a branca para o
