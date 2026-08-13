@@ -79,7 +79,16 @@ export default async function TasksPage({
         </p>
       )}
 
-      <TaskList tasks={linhas} contatos={opcoesDeContato} />
+      <TaskList
+        tasks={linhas}
+        contatos={opcoesDeContato}
+        vazioTitulo={mostrarConcluidas ? "Nenhuma tarefa concluída" : "Nenhuma tarefa pendente"}
+        vazioDescricao={
+          mostrarConcluidas
+            ? "O que você concluir aparece aqui."
+            : "Você está em dia."
+        }
+      />
     </div>
   );
 }

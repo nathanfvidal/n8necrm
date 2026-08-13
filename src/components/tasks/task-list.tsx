@@ -158,9 +158,17 @@ export function useTaskList(tasksIniciais: TaskLinha[]) {
 export function TaskList({
   tasks: tasksIniciais,
   contatos = [],
+  // O texto de lista vazia vem de fora porque a lista serve às duas telas:
+  // "Nenhuma tarefa pendente / Você está em dia" é elogio na tela de
+  // pendentes e mentira na de concluídas, onde significa "você nunca
+  // terminou nada". Achado pelo retrato que o Playwright grava na falha.
+  vazioTitulo = "Nenhuma tarefa pendente",
+  vazioDescricao = "Você está em dia.",
 }: {
   tasks: TaskLinha[];
   contatos?: OpcaoDeContato[];
+  vazioTitulo?: string;
+  vazioDescricao?: string;
 }) {
   const router = useRouter();
   const { tasks, erro, handleConcluir, limparErro } = useTaskList(tasksIniciais);
@@ -273,7 +281,7 @@ export function TaskList({
       )}
 
       {tasks.length === 0 ? (
-        <EmptyState title="Nenhuma tarefa pendente" description="Você está em dia." />
+        <EmptyState title={vazioTitulo} description={vazioDescricao} />
       ) : (
         <ul className="space-y-2">
           {tasks.map((task) => {

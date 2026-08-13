@@ -45,6 +45,34 @@ const DESCRICAO_EDITADA = "Levar a proposta em PDF, ele mudou de ideia.";
  * é a proteção funcionando, e a limpeza respeitá-la é a prova mais barata de
  * que ela existe.
  */
+/**
+ * Espera a escrita chegar no Postgres antes de navegar.
+ *
+ * Não é paranoia nem `waitForTimeout` disfarçado: a lista faz remoção
+ * OTIMISTA (`useTaskList`), então `toHaveCount(0)` é satisfeito no mesmo
+ * quadro do clique, muito antes de a Server Action responder. Navegar em
+ * seguida tira a página do ar com a escrita ainda em voo, e o sintoma é uma
+ * lista de concluídas vazia — que parece defeito de consulta e não é.
+ *
+ * `lead-to-won.spec.ts` já carrega a mesma lição, escrita depois de o mesmo
+ * erro flakar aquele arquivo ("o reload vencia a corrida"). Este helper é a
+ * aplicação dela aqui.
+ */
+async function esperarConclusaoNoBanco(concluida: boolean): Promise<void> {
+  await expect
+    .poll(
+      () =>
+        prisma.task.count({
+          where: {
+            titulo: { contains: MARCA },
+            concluidaEm: concluida ? { not: null } : null,
+          },
+        }),
+      { timeout: 15_000 }
+    )
+    .toBe(1);
+}
+
 async function limparDadosDeTeste(): Promise<void> {
   const tarefas = await prisma.task.findMany({
     where: { titulo: { contains: MARCA } },
@@ -124,6 +152,9 @@ test("vendedor registra uma tarefa com descrição e contato, conclui, reabre e 
     .getByRole("button", { name: "Concluir" })
     .click();
   await expect(page.getByRole("listitem").filter({ hasText: titulo })).toHaveCount(0);
+  // A contagem zero acima é a remoção otimista, não a escrita. Só o banco
+  // distingue "concluída" de "sumiu da tela".
+  await esperarConclusaoNoBanco(true);
 
   // ── Achar em concluídas, pela URL ────────────────────────────────────
   // O filtro mora na query string (`?concluidas=1`), no molde de
@@ -140,6 +171,7 @@ test("vendedor registra uma tarefa com descrição e contato, conclui, reabre e 
 
   // ── Reabrir: volta para as pendentes ─────────────────────────────────
   await linhaConcluida.getByRole("button", { name: "Reabrir" }).click();
+  await esperarConclusaoNoBanco(false);
   await expect(page.getByRole("listitem").filter({ hasText: titulo })).toHaveCount(0);
 
   await page.getByRole("button", { name: "Ver pendentes" }).click();
