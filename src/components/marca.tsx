@@ -28,14 +28,15 @@ export function Marca() {
         um e2e para achar. Aqui o CSS troca junto com o resto do tema, antes
         do primeiro pixel.
 
-        `alt=""` + `aria-hidden` porque o nome está escrito ao lado: com `alt`
-        preenchido o leitor de tela diria o nome duas vezes.
+        O `alt` carrega o nome porque a arte está SOZINHA: sem texto ao lado,
+        ela é a única identificação da marca, e `alt=""` deixaria a barra sem
+        nome nenhum para quem usa leitor de tela. Nas duas, porque a escondida
+        não é anunciada — só a visível chega na árvore de acessibilidade.
       */}
       {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img src={logo.claro} alt="" aria-hidden className="h-6 w-auto dark:hidden" />
+      <img src={logo.claro} alt={client.nome} className="h-8 w-auto dark:hidden" />
       {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img src={logo.escuro} alt="" aria-hidden className="hidden h-6 w-auto dark:block" />
-      <span className="text-sm font-semibold">{client.nome}</span>
+      <img src={logo.escuro} alt={client.nome} className="hidden h-8 w-auto dark:block" />
     </span>
   );
 }

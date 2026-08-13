@@ -60,21 +60,23 @@ describe("Marca", () => {
     expect(imgs[1].className).toContain("dark:block");
   });
 
-  it("com logo, o nome continua sendo o texto lido, e a arte é decorativa", () => {
+  it("com logo, a arte fica sozinha e carrega o nome no alt", () => {
     mocks.marca = {
       ...mocks.marca,
       logo: { claro: "/logo-preto.svg", escuro: "/logo-branco.svg" },
     };
     const { container } = render(<Marca />);
 
-    // O nome aparece ao lado do símbolo, então repetir no `alt` faria o
-    // leitor de tela dizer "AutoCenter AutoCenter". Arte decorativa: `alt`
-    // vazio e fora da árvore de acessibilidade.
-    expect(screen.getByText("AutoCenter")).toBeTruthy();
-    expect(screen.queryByRole("img")).toBeNull();
+    // A barra mostra a marca DO CLIENTE, sem o nome repetido em texto ao
+    // lado. Como a arte fica sozinha, ela é a única identificação: `alt`
+    // vazio deixaria a barra anônima para quem usa leitor de tela.
+    expect(container.textContent).toBe("");
     for (const img of container.querySelectorAll("img")) {
-      expect(img.getAttribute("alt")).toBe("");
-      expect(img.getAttribute("aria-hidden")).toBe("true");
+      expect(img.getAttribute("alt")).toBe("AutoCenter");
     }
+
+    // Só a visível é anunciada — a escondida sai da árvore de
+    // acessibilidade pelo `display:none` da variante `dark:`.
+    expect(screen.getAllByRole("img")).toHaveLength(2);
   });
 });
