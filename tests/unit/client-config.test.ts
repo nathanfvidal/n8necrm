@@ -136,7 +136,12 @@ describe("config/client.ts", () => {
   });
 
   describe("contratos consumidos pelas próximas tasks", () => {
-    it("funil não tem etapas duplicadas (Task 9 cria uma PipelineStage por etapa e marca a última como ehGanho)", () => {
+    // "e marca a última como ehGanho" saiu do título: isso ainda é o que o
+    // seed faz na PRIMEIRA instalação (prisma/seed.ts), mas deixou de ser uma
+    // invariante do sistema — desde o CRUD de etapas, a tela deixa o ADMIN
+    // mover `ehGanho` para qualquer posição (`definirEtapaDeFechamento`,
+    // `core/pipeline/service.ts`), sem tocar em `client.funil`.
+    it("funil não tem etapas duplicadas (Task 9 cria uma PipelineStage por etapa a partir de client.funil)", () => {
       const unicos = new Set(client.funil);
       expect(unicos.size).toBe(client.funil.length);
     });

@@ -85,8 +85,8 @@ export async function seed(): Promise<void> {
   // tela existiu: renomearia "Negociação" para "Fechado" e recoloriria por
   // índice. `client.funil` virou SEMENTE de instalação, e é isso que permite
   // um fork nascer com o funil dele.
-  const etapasExistentes = await prisma.pipelineStage.count();
-  if (etapasExistentes === 0) {
+  const quantasEtapasExistem = await prisma.pipelineStage.count();
+  if (quantasEtapasExistem === 0) {
     for (const [index, nome] of client.funil.entries()) {
       await prisma.pipelineStage.create({
         data: {

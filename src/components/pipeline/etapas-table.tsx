@@ -17,8 +17,14 @@ import { EditarEtapaDialogo } from "./editar-etapa-dialogo";
 import { ExcluirEtapaDialogo } from "./excluir-etapa-dialogo";
 
 /**
- * DTO montado no servidor. NENHUMA linha crua de `PipelineStage` atravessa a
- * fronteira — mesma regra que o quadro do funil passou a seguir.
+ * DTO montado no servidor para ESTA tela. Nenhuma linha crua de
+ * `PipelineStage` atravessa a fronteira até `EtapasTable` — mas o quadro do
+ * funil (`kanban-board.tsx`, alimentado por `listarEtapas()` em
+ * `core/pipeline/stages.ts`) ainda recebe `PipelineStage[]` cru, então a
+ * regra não é geral no sistema, é local a este componente. Não é vazamento
+ * de dado sensível — `PipelineStage` não tem coluna que não devesse ir para
+ * o cliente —, mas nenhum outro lugar precisou de um DTO específico até
+ * agora, então este tipo só descreve o que ESTA tela consome.
  */
 export type EtapaNaTela = {
   id: string;

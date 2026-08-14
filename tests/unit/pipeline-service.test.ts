@@ -33,7 +33,11 @@ const criadas: string[] = [];
 
 async function novaEtapa(sufixo: string) {
   const admin = await prisma.user.findFirstOrThrow({ where: { papel: "ADMIN" } });
-  const etapa = await criarEtapa({ nome: `${PREFIXO} ${sufixo}`, cor: "#123456", autorId: admin.id });
+  // Maiúscula de propósito: é a única forma de "nasce ... com a cor
+  // normalizada" (abaixo) provar alguma coisa. "#123456" já é minúscula em
+  // todo caractere — passaria no teste mesmo se `etapaSchema.cor` parasse de
+  // chamar `toLowerCase()`.
+  const etapa = await criarEtapa({ nome: `${PREFIXO} ${sufixo}`, cor: "#12AB56", autorId: admin.id });
   criadas.push(etapa.id);
   return etapa;
 }
@@ -52,7 +56,7 @@ describe("criarEtapa", () => {
     expect(etapa.ordem).toBe((antes._max.ordem ?? -1) + 1);
     expect(etapa.ehGanho).toBe(false);
     expect(etapa.ehPerdido).toBe(false);
-    expect(etapa.cor).toBe("#123456");
+    expect(etapa.cor).toBe("#12ab56");
   });
 
   it("recusa nome repetido, sem diferenciar maiúscula", async () => {
