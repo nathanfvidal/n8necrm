@@ -194,6 +194,14 @@ model LeadNote {
   // Marca que o texto foi corrigido depois de escrito. Sem isto o histórico
   // mente por omissão: o texto muda e nada indica que mudou.
   editadoEm DateTime?
+
+  // As DUAS colunas, não só `leadId`: `listarNotas` filtra por lead E ordena
+  // por `criadoEm desc`, e um índice composto serve as duas coisas na mesma
+  // varredura — com só `leadId`, o Postgres encontra as linhas e depois
+  // ordena à parte. Nesta escala a diferença não é mensurável, e o PR deve
+  // dizer isso em vez de fingir ganho: é seguro barato numa tabela que só
+  // cresce.
+  @@index([leadId, criadoEm])
 }
 
 model Task {

@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { prisma } from "@/lib/prisma";
@@ -53,6 +54,23 @@ import { TaskList, type TaskLinha } from "@/components/tasks/task-list";
  * protege a rota), mas para saber quem é o usuário e computar
  * `souResponsavel` de cada tarefa.
  */
+/**
+ * Uma linha do bloco "Pessoa".
+ *
+ * Campo vazio mostra "—" em vez de sumir: uma grade com buracos variáveis muda
+ * de forma de lead para lead e obriga a pessoa a reler os rótulos toda vez. E
+ * "—" comunica "não temos esse dado", que é informação; a ausência da linha
+ * comunica "este CRM não guarda isso", que é mentira.
+ */
+function DadoDaPessoa({ rotulo, valor }: { rotulo: string; valor: string | null }) {
+  return (
+    <div className="flex gap-2">
+      <dt className="min-w-24 text-muted-foreground">{rotulo}</dt>
+      <dd>{valor ?? "—"}</dd>
+    </div>
+  );
+}
+
 export default async function LeadDetalhePage({
   params,
 }: {
@@ -61,16 +79,53 @@ export default async function LeadDetalhePage({
   const { id } = await params;
   const usuario = await usuarioAtualOuLogin();
 
-  // `responsavel` narrowed para só `id`/`nome` (fix round 1/5, achado do
-  // revisor): `include: { responsavel: true }` carregava a linha inteira de
-  // `User`, `senhaHash` incluído, só para renderizar um nome. `contact` e
-  // `stage` continuam com `include` completo — nenhum dos dois tem campo
-  // sensível (Contact não guarda senha; PipelineStage é config de funil).
+  // `select` campo a campo, sem nenhum `include`.
+  //
+  // A versão anterior usava `include: { contact: true, stage: true }` com a
+  // justificativa de que "nenhum dos dois tem campo sensível". Aquilo era
+  // verdade quando `Contact` era nome, telefone e e-mail — e deixou de ser no
+  // dia em que a pessoa ganhou documento, endereço e observações. O comentário
+  // continuou lá, correto na aparência e desatualizado no que importa: é assim
+  // que uma consulta curinga vira vazamento sem ninguém escrever uma linha
+  // nova. Mesmo mecanismo do funil (`core/leads/queries.ts`).
+  //
+  // ─── O documento NÃO entra aqui, e é decisão, não esquecimento ───
+  //
+  // `Contact.documento` é restrito a GESTOR/ADMIN (`ver_documento_contato`).
+  // Repetir essa checagem nesta tela criaria um SEGUNDO lugar onde a regra
+  // precisa ser lembrada — e "regra numa tela, esquecida na outra" é a
+  // armadilha que mais se repete neste projeto. Em vez disso o CPF não é
+  // buscado nem renderizado aqui: quem precisa dele abre o cadastro completo
+  // em `/contatos/[id]`, onde a permissão já mora e já é testada.
+  //
+  // Travado por `tests/e2e/fronteira-rsc.spec.ts`, que confere a ausência do
+  // documento nesta tela até para ADMIN — quem pode vê-lo na outra.
+  //
+  // Se um dia ele tiver de aparecer aqui, o certo é extrair a decisão para uma
+  // função só, usada nas duas telas, e não copiar o `hasPermission` para cá.
   const lead = await prisma.lead.findUnique({
     where: { id },
-    include: {
-      contact: true,
-      stage: true,
+    select: {
+      id: true,
+      valorEstimado: true,
+      responsavelId: true,
+      stageId: true,
+      arquivadoEm: true,
+      contactId: true,
+      contact: {
+        select: {
+          id: true,
+          nome: true,
+          telefone: true,
+          email: true,
+          empresa: true,
+          cargo: true,
+          cidade: true,
+          uf: true,
+          observacoes: true,
+        },
+      },
+      stage: { select: { nome: true } },
       responsavel: { select: { id: true, nome: true } },
     },
   });
@@ -126,6 +181,56 @@ export default async function LeadDetalhePage({
         </p>
       </div>
 
+      {/* ─── Pessoa ───────────────────────────────────────────────────────
+          Renderizado NO SERVIDOR, como HTML comum: nada aqui é passado para
+          Client Component nenhum, então o cadastro não entra no payload RSC
+          além do texto que a tela de fato desenha.
+
+          Responde a pergunta que o vendedor faz antes de ligar: "quem é essa
+          pessoa, onde trabalha, o que já sei dela". Até esta branch, o detalhe
+          do lead sabia o nome e mais nada — o cadastro existia em
+          `/contatos/[id]` e ninguém cruzava os dois. */}
+      {lead.contact && (
+        <div className="rounded-md border p-4">
+          <div className="mb-3 flex items-center justify-between">
+            <h2 className="text-sm font-medium">Pessoa</h2>
+            {/* O documento e o cadastro completo moram lá, com a permissão que
+                os protege. Este link é o que torna a ausência do CPF aqui uma
+                decisão navegável em vez de um dado que sumiu. */}
+            <Link href={`/contatos/${lead.contact.id}`} className="text-sm text-primary underline">
+              Ver cadastro completo
+            </Link>
+          </div>
+
+          <dl className="grid gap-x-6 gap-y-2 text-sm sm:grid-cols-2">
+            <DadoDaPessoa rotulo="Empresa" valor={lead.contact.empresa} />
+            <DadoDaPessoa rotulo="Cargo" valor={lead.contact.cargo} />
+            <DadoDaPessoa rotulo="Telefone" valor={lead.contact.telefone} />
+            <DadoDaPessoa rotulo="E-mail" valor={lead.contact.email} />
+            <DadoDaPessoa
+              rotulo="Cidade"
+              valor={
+                lead.contact.cidade && lead.contact.uf
+                  ? `${lead.contact.cidade} — ${lead.contact.uf}`
+                  : (lead.contact.cidade ?? lead.contact.uf)
+              }
+            />
+          </dl>
+
+          {lead.contact.observacoes && (
+            <div className="mt-3 border-t pt-3">
+              <p className="text-xs text-muted-foreground">Observações</p>
+              {/* `whitespace-pre-wrap` porque o campo é `<textarea>` e as
+                  quebras de linha que a pessoa digitou são parte do sentido.
+                  `line-clamp-4` porque o texto vai até 4000 caracteres, e uma
+                  observação longa empurraria notas e tarefas para fora da
+                  tela — o cadastro completo está a um clique. */}
+              <p className="line-clamp-4 whitespace-pre-wrap text-sm">{lead.contact.observacoes}</p>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* `valorEstimado` é `Prisma.Decimal` — objeto Decimal.js, NÃO
           serializável para Client Component. Converte para string AQUI, no
           servidor, e nunca com `Number` (ponto flutuante é a origem clássica
@@ -164,7 +269,10 @@ export default async function LeadDetalhePage({
 
       <div className="space-y-2">
         <h2 className="text-lg font-semibold">Tarefas</h2>
-        <TaskForm leadId={id} />
+        {/* O contato do próprio lead já vem escolhido: "ligar para o cliente"
+            criado daqui nasce ligado à pessoa, sem ninguém procurá-la numa
+            lista. É onde a decisão de ligar tarefa a lead E contato paga. */}
+        <TaskForm leadId={id} contactIdPadrao={lead.contactId} />
         <TaskList tasks={tarefasLinhas} />
       </div>
     </div>

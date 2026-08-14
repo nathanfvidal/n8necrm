@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
+import { ConfirmarDialogo } from "@/components/confirmar-dialogo";
 import { EmptyState } from "@/components/empty-state";
 import { editarNotaAction, excluirNotaAction } from "@/core/leads/actions";
 import { formatarDataHoraBR } from "@/lib/date";
@@ -64,9 +65,6 @@ export function LeadNoteList({
   }
 
   async function excluir(notaId: string) {
-    // Nota apagada não volta — o texto fica só na auditoria. Confirmar antes.
-    if (!window.confirm("Excluir esta nota? Isso não pode ser desfeito.")) return;
-
     setErro(null);
     const resultado = await excluirNotaAction({ notaId, leadId });
     if (!resultado.ok) {
@@ -135,13 +133,28 @@ export function LeadNoteList({
                       >
                         Editar
                       </button>
-                      <button
-                        type="button"
-                        className="text-xs text-red-600 underline"
-                        onClick={() => excluir(nota.id)}
-                      >
-                        Excluir
-                      </button>
+                      {/* Nota apagada não volta — o texto fica só na
+                          auditoria. O gatilho se chama "Excluir nota" e a
+                          confirmação "Excluir": rótulos distintos porque os
+                          dois coexistem no DOM com o diálogo aberto, e um
+                          localizador por nome precisa alcançar um sem
+                          esbarrar no outro. Mesma regra do botão de
+                          arquivar. */}
+                      <ConfirmarDialogo
+                        gatilho={(abrir) => (
+                          <button
+                            type="button"
+                            className="text-xs text-red-600 underline"
+                            onClick={abrir}
+                          >
+                            Excluir nota
+                          </button>
+                        )}
+                        titulo="Excluir esta nota?"
+                        descricao="Isso não pode ser desfeito. O texto fica registrado apenas na auditoria."
+                        rotuloConfirmar="Excluir"
+                        onConfirmar={() => excluir(nota.id)}
+                      />
                     </>
                   )}
                 </div>

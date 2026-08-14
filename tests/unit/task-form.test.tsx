@@ -109,3 +109,48 @@ describe("TaskForm", () => {
     expect(screen.queryByRole("alert")).toBeNull();
   });
 });
+
+// ─── contactIdPadrao ────────────────────────────────────────────────────
+//
+// Em `/leads/[id]` o formulário é renderizado SEM a lista de contatos, então
+// o `<select>` não existe naquela tela. O contato do lead chega por
+// `contactIdPadrao` e precisa viajar assim mesmo — via `defaultValues`, sem
+// campo registrado.
+//
+// Isto merece teste próprio e não confiança no comportamento do
+// `react-hook-form`: o MESMO mecanismo (valor padrão de campo não
+// registrado seguir no envio) foi o que apagou o CPF de contatos quando o
+// campo passou a ser escondido por permissão. Lá o comportamento trabalhou
+// contra; aqui trabalha a favor. Nos dois casos, o que decide não é
+// intuição — é a asserção sobre o que chegou na action.
+describe("TaskForm com contato pré-escolhido", () => {
+  it("envia o contactId padrão mesmo sem o <select> na tela", async () => {
+    criarMinhaTaskMock.mockResolvedValue({});
+    render(<TaskForm leadId="lead-1" contactIdPadrao="contato-9" />);
+
+    // Prova de que o select realmente não está lá — se um dia passar a
+    // estar, este teste deixa de cobrir o caminho que diz cobrir.
+    expect(screen.queryByLabelText("Contato")).toBeNull();
+
+    await preencherEEnviar("Ligar pro cliente", "2026-08-05");
+
+    await waitFor(() => expect(criarMinhaTaskMock).toHaveBeenCalledTimes(1));
+    expect(criarMinhaTaskMock.mock.calls[0][0]).toMatchObject({
+      contactId: "contato-9",
+      leadId: "lead-1",
+    });
+  });
+
+  it("lead sem contato identificado não manda contactId vazio", async () => {
+    // `Lead.contactId` é opcional — um lead de WhatsApp pode não ter contato.
+    // Mandar `""` reprovaria no servidor com "Contato inválido" por um campo
+    // que ninguém preencheu.
+    criarMinhaTaskMock.mockResolvedValue({});
+    render(<TaskForm leadId="lead-1" contactIdPadrao={null} />);
+
+    await preencherEEnviar("Ligar pro cliente", "2026-08-05");
+
+    await waitFor(() => expect(criarMinhaTaskMock).toHaveBeenCalledTimes(1));
+    expect(criarMinhaTaskMock.mock.calls[0][0].contactId).toBeUndefined();
+  });
+});

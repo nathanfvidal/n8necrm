@@ -8,6 +8,7 @@ import { useRouter } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
+import { ConfirmarDialogo } from "@/components/confirmar-dialogo";
 import { CampoDinheiro } from "./campo-dinheiro";
 import {
   atualizarLeadAction,
@@ -106,14 +107,6 @@ export function LeadEditForm({
 
   async function alternarArquivamento() {
     const arquivado = lead.arquivadoEm !== null;
-    // Arquivar tira o lead da lista, do kanban e do painel — uma ação que faz
-    // algo sumir merece confirmação. Desarquivar não precisaria, mas confirmar
-    // os dois mantém o botão previsível.
-    const mensagem = arquivado
-      ? "Devolver este lead ao funil?"
-      : "Arquivar este lead? Ele sai da lista, do kanban e do painel, mas continua no histórico do contato.";
-    if (!window.confirm(mensagem)) return;
-
     setErro(null);
     setSucesso(false);
     setArquivando(true);
@@ -184,14 +177,36 @@ export function LeadEditForm({
       </form>
 
       <div className="flex items-center gap-3">
-        <Button
-          type="button"
-          variant="outline"
-          onClick={alternarArquivamento}
-          disabled={arquivando}
-        >
-          {lead.arquivadoEm ? "Desarquivar" : "Arquivar"}
-        </Button>
+        {/* Arquivar tira o lead da lista, do kanban e do painel — uma ação que
+            faz algo sumir de quatro telas merece confirmação. Desarquivar não
+            precisaria, mas confirmar os dois mantém o botão previsível.
+
+            ─── Os dois rótulos NÃO podem ser iguais ───
+
+            `lead-edicao.spec.ts` localiza o gatilho por
+            `getByRole("button", { name: "Arquivar", exact: true })`, e o
+            `exact` existe porque "Arquivar" é substring de "Desarquivar". Com
+            o diálogo aberto, gatilho e confirmação coexistem no DOM: se o
+            botão do diálogo também se chamasse "Arquivar", o localizador
+            passaria a casar com dois elementos e o teste morreria por modo
+            estrito — falha que se parece com defeito de aplicação e não é.
+            Daí "Arquivar lead" / "Devolver ao funil" na confirmação. */}
+        <ConfirmarDialogo
+          gatilho={(abrir) => (
+            <Button type="button" variant="outline" onClick={abrir} disabled={arquivando}>
+              {lead.arquivadoEm ? "Desarquivar" : "Arquivar"}
+            </Button>
+          )}
+          titulo={lead.arquivadoEm ? "Devolver este lead ao funil?" : "Arquivar este lead?"}
+          descricao={
+            lead.arquivadoEm
+              ? "Ele volta a aparecer na lista, no kanban e nas somas do painel."
+              : "Ele sai da lista, do kanban e do painel, mas continua no histórico do contato."
+          }
+          rotuloConfirmar={lead.arquivadoEm ? "Devolver ao funil" : "Arquivar lead"}
+          rotuloConfirmando={lead.arquivadoEm ? "Devolvendo..." : "Arquivando..."}
+          onConfirmar={alternarArquivamento}
+        />
         {lead.arquivadoEm && (
           <span className="text-sm text-muted-foreground">
             Arquivado — fora do funil e das somas do painel.

@@ -122,12 +122,34 @@ test("vendedor registra o valor, arquiva e desarquiva um lead", async ({ page })
   });
 
   await test.step("arquiva", async () => {
-    // Arquivar faz o lead sumir de quatro telas — por isso o `window.confirm`.
-    page.once("dialog", (dialogo) => dialogo.accept());
+    // Arquivar faz o lead sumir de quatro telas — por isso a confirmação.
+    //
+    // Antes isto era `window.confirm`, e este passo dependia de
+    // `page.once("dialog", d => d.accept())`: um canal lateral que precisa ser
+    // armado ANTES do clique e que, se ninguém armar, faz o Playwright
+    // descartar o diálogo sozinho — o clique "funciona", nada acontece, e a
+    // falha aparece na asserção seguinte sem dizer por quê. Com `Dialog` a
+    // confirmação é DOM de verdade: clicável, inspecionável, e um passo que
+    // esqueça de confirmar falha apontando para o botão que não foi clicado.
+    //
     // `exact` de novo, e aqui por um motivo pior: "Arquivar" é substring de
     // "Desarquivar", então sem isto o localizador casaria com o botão do
-    // estado oposto.
+    // estado oposto. É também por isso que o botão do diálogo se chama
+    // "Arquivar lead" e não "Arquivar" — os dois coexistem no DOM enquanto o
+    // diálogo está aberto.
     await page.getByRole("button", { name: "Arquivar", exact: true }).click();
+
+    const dialogo = page.getByRole("dialog");
+    await expect(dialogo).toBeVisible();
+    // Cancelar primeiro: confirmação que não dá para recusar não é
+    // confirmação, e um diálogo que fecha sem agir é o que garante que o
+    // "sim" abaixo é o que de fato arquiva.
+    await dialogo.getByRole("button", { name: "Cancelar" }).click();
+    await expect(dialogo).toBeHidden();
+    await expect(page.getByRole("button", { name: "Arquivar", exact: true })).toBeVisible();
+
+    await page.getByRole("button", { name: "Arquivar", exact: true }).click();
+    await page.getByRole("button", { name: "Arquivar lead" }).click();
     await expect(page.getByRole("button", { name: "Desarquivar", exact: true })).toBeVisible();
   });
 
@@ -168,8 +190,10 @@ test("vendedor registra o valor, arquiva e desarquiva um lead", async ({ page })
     await page.getByRole("link", { name: nome }).click();
     await page.waitForURL(/\/leads\/.+/);
 
-    page.once("dialog", (dialogo) => dialogo.accept());
     await page.getByRole("button", { name: "Desarquivar", exact: true }).click();
+    // "Devolver ao funil", e não "Desarquivar": mesma regra do outro sentido —
+    // gatilho e confirmação coexistem no DOM e precisam de nomes distintos.
+    await page.getByRole("button", { name: "Devolver ao funil" }).click();
     await expect(page.getByRole("button", { name: "Arquivar", exact: true })).toBeVisible();
 
     await page.goto("/leads");
