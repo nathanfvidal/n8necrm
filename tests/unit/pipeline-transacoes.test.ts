@@ -11,6 +11,13 @@ const updateManyMock = vi.fn();
 const findUniqueMock = vi.fn();
 const findFirstMock = vi.fn();
 const transactionMock = vi.fn();
+// `count` de `pipelineStage` e `lead` só existem para que `excluirEtapa`
+// consiga passar das duas primeiras guardas (`ehGanho`, funil com 1 etapa) e
+// chegar na contagem de leads — sem eles, remover a guarda de `ehGanho` na
+// sabotagem produz `TypeError` por método inexistente no mock, em vez de
+// provar que a transação dispararia contra a etapa de fechamento.
+const stageCountMock = vi.fn();
+const leadCountMock = vi.fn();
 
 vi.mock("@/lib/prisma", () => ({
   prisma: {
@@ -19,6 +26,10 @@ vi.mock("@/lib/prisma", () => ({
       updateMany: (...a: unknown[]) => updateManyMock(...a),
       findUnique: (...a: unknown[]) => findUniqueMock(...a),
       findFirst: (...a: unknown[]) => findFirstMock(...a),
+      count: (...a: unknown[]) => stageCountMock(...a),
+    },
+    lead: {
+      count: (...a: unknown[]) => leadCountMock(...a),
     },
     $transaction: (...a: unknown[]) => transactionMock(...a),
   },
@@ -58,6 +69,13 @@ beforeEach(() => {
   findUniqueMock.mockReset();
   findFirstMock.mockReset();
   transactionMock.mockReset();
+  stageCountMock.mockReset();
+  leadCountMock.mockReset();
+  // Valor padrão que deixa `excluirEtapa` passar das guardas sem exigir
+  // destino: funil com mais de uma etapa (`5`) e etapa sem lead nenhum (`0`).
+  // Testes que precisarem de outro cenário sobrescrevem no próprio `it`.
+  stageCountMock.mockResolvedValue(5);
+  leadCountMock.mockResolvedValue(0);
 });
 
 describe("moverNaOrdem — a forma da transação", () => {
