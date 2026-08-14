@@ -45,17 +45,45 @@ beforeEach(() => {
   excluirEtapaMock.mockReset().mockResolvedValue(0);
 });
 
+/** As CINCO actions e o mock do serviço que cada uma chama, para o `it.each` de permissão abaixo. */
+const ACOES_DO_FUNIL = [
+  ["criarEtapaAction", () => acoes.criarEtapaAction({ nome: "Nova", cor: "#0f62fe" }), criarEtapaMock],
+  [
+    "editarEtapaAction",
+    () => acoes.editarEtapaAction({ etapaId: "etapa-1", nome: "Nova", cor: "#0f62fe" }),
+    editarEtapaMock,
+  ],
+  [
+    "moverEtapaNaOrdemAction",
+    () => acoes.moverEtapaNaOrdemAction({ etapaId: "e-1", direcao: "cima" as const }),
+    moverNaOrdemMock,
+  ],
+  ["definirEtapaDeFechamentoAction", () => acoes.definirEtapaDeFechamentoAction("e-1"), definirFechamentoMock],
+  [
+    "excluirEtapaAction",
+    () => acoes.excluirEtapaAction({ etapaId: "e-1", destinoId: "e-2" }),
+    excluirEtapaMock,
+  ],
+] as const;
+
 describe("permissão", () => {
-  it.each([
-    ["GESTOR"],
-    ["VENDEDOR"],
-  ])("%s não gerencia o funil: recusa sem chamar o serviço", async (papel) => {
+  // Antes só `criarEtapaAction` tinha teste de permissão — tirar
+  // `exigirGestorDoFunil()` de qualquer uma das outras quatro passava verde.
+  // Cruza as CINCO actions com os dois papéis sem `gerenciar_funil`, e
+  // confere que cada uma recusa SEM chamar o serviço correspondente — não só
+  // que devolve `{ ok: false }`, que passaria mesmo com a checagem de
+  // permissão removida se o serviço mockado também recusasse por outro motivo.
+  it.each(
+    ACOES_DO_FUNIL.flatMap(([nomeAcao, chamar, mockDoServico]) =>
+      (["GESTOR", "VENDEDOR"] as const).map((papel) => [nomeAcao, papel, chamar, mockDoServico] as const)
+    )
+  )("%s: %s não gerencia o funil — recusa sem chamar o serviço", async (_nomeAcao, papel, chamar, mockDoServico) => {
     usuarioAtualMock.mockResolvedValue({ id: "u-1", papel });
 
-    const resultado = await acoes.criarEtapaAction({ nome: "Nova", cor: "#0f62fe" });
+    const resultado = await chamar();
 
     expect(resultado).toEqual({ ok: false, erro: expect.stringMatching(/permissão/i) });
-    expect(criarEtapaMock).not.toHaveBeenCalled();
+    expect(mockDoServico).not.toHaveBeenCalled();
     expect(revalidatePathMock).not.toHaveBeenCalled();
   });
 });

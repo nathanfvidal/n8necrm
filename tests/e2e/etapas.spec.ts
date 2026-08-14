@@ -1,6 +1,16 @@
+// Mesmo motivo de `tests/e2e/equipe.spec.ts` e `tests/e2e/lead-to-won.spec.ts`
+// para ter um `PrismaClient` PRÓPRIO aqui (não `@/lib/prisma`, que tem
+// `import "server-only"` e quebraria fora do pipeline de build do Next): a
+// limpeza por prefixo abaixo precisa falar com o banco fora do navegador.
+import "dotenv/config";
+import { PrismaClient } from "@prisma/client";
+import { PrismaPg } from "@prisma/adapter-pg";
 import { test, expect, type Page } from "@playwright/test";
 
 import { SESSAO_ADMIN } from "./credenciais";
+
+const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL! });
+const prisma = new PrismaClient({ adapter });
 
 /**
  * Este arquivo toca o MESMO Postgres real e compartilhado que o app usa, e roda
@@ -23,6 +33,53 @@ const SUFIXO = `${Date.now()}${Math.floor(Math.random() * 1000)}`;
 const PRIMEIRA = `ZZ E2E Alfa ${SUFIXO}`;
 const SEGUNDA = `ZZ E2E Beta ${SUFIXO}`;
 
+/** Prefixo comum às duas etapas acima — inclusive depois de renomeadas (o teste só acrescenta " renomeada"). */
+const PREFIXO_ETAPA = "ZZ E2E";
+
+/**
+ * Apaga, por PREFIXO, as etapas que este arquivo cria — e o AuditLog que
+ * aponta para elas. Roda antes (varre resíduo de uma execução anterior que
+ * tenha travado no meio do teste, antes do `for` que remove as duas no fim)
+ * e depois (limpa o que esta execução criou), mesmo padrão de
+ * `tests/e2e/equipe.spec.ts`/`tests/e2e/lead-to-won.spec.ts`.
+ *
+ * Sem isto, uma asserção quebrada no meio do teste deixava "ZZ E2E Alfa
+ * <ts>"/"ZZ E2E Beta <ts>" no funil de PRODUÇÃO — visíveis no kanban, no
+ * painel, no `<select>` de etapa de todo lead — e o estrago é silencioso:
+ * com mais de 5 etapas `seed-demo.test.ts` passa a pular testes para sempre.
+ *
+ * `PipelineStage.id` tem `ON DELETE RESTRICT` em `Lead.stageId` — uma etapa
+ * só pode ser apagada se nenhum lead a referenciar. Este arquivo nunca
+ * deveria deixar lead nenhum numa etapa "ZZ E2E ..." (nenhum teste aqui cria
+ * lead), mas se uma execução anterior travou de um jeito que deixasse um
+ * lead preso a uma delas, a limpeza move esses leads para a PRIMEIRA etapa
+ * do funil (por `ordem`, excluindo as próprias etapas "ZZ E2E") antes de
+ * apagar — em vez de travar para sempre na chave estrangeira.
+ */
+async function limparDadosDeTeste(): Promise<void> {
+  const etapas = await prisma.pipelineStage.findMany({
+    where: { nome: { startsWith: PREFIXO_ETAPA } },
+    select: { id: true },
+  });
+  if (etapas.length === 0) return;
+  const ids = etapas.map((etapa) => etapa.id);
+
+  const leadsPresos = await prisma.lead.count({ where: { stageId: { in: ids } } });
+  if (leadsPresos > 0) {
+    const primeiraEtapaDoFunil = await prisma.pipelineStage.findFirstOrThrow({
+      where: { id: { notIn: ids } },
+      orderBy: { ordem: "asc" },
+    });
+    await prisma.lead.updateMany({
+      where: { stageId: { in: ids } },
+      data: { stageId: primeiraEtapaDoFunil.id },
+    });
+  }
+
+  await prisma.auditLog.deleteMany({ where: { entidade: "PipelineStage", entidadeId: { in: ids } } });
+  await prisma.pipelineStage.deleteMany({ where: { id: { in: ids } } });
+}
+
 /**
  * Linha da tabela pelo nome, por seletor de DOM (`tbody tr`) — não
  * `page.getByRole("row")`.
@@ -39,10 +96,23 @@ function linhaDa(page: Page, nome: string) {
   return page.locator("tbody tr").filter({ hasText: nome });
 }
 
-/** Índice da linha que contém o nome, dentro do corpo da tabela de `/etapas`. */
+/**
+ * Índice da linha que contém o nome, dentro do corpo da tabela de `/etapas`.
+ *
+ * Lança se não encontrar, em vez de devolver `-1`: `findIndex` devolve `-1`
+ * quando não acha nada, e `expect(-1).toBeLessThan(n)` passa para QUALQUER
+ * `n` — as duas asserções que usam esta função são justamente as que provam
+ * a contenção contra `lead-to-won.spec.ts` (que "Fechado" nunca troca de
+ * vizinha enquanto este arquivo roda). Sem isto, renomear "Fechado" faria
+ * essas asserções pararem de provar qualquer coisa sem NUNCA ficar vermelhas.
+ */
 async function posicaoNaTabela(page: Page, nome: string): Promise<number> {
   const linhas = await page.locator("tbody tr").allTextContents();
-  return linhas.findIndex((texto) => texto.includes(nome));
+  const indice = linhas.findIndex((texto) => texto.includes(nome));
+  if (indice === -1) {
+    throw new Error(`Nenhuma linha contendo "${nome}" foi encontrada na tabela de /etapas.`);
+  }
+  return indice;
 }
 
 // Sessão salva por `auth.setup.ts`, e não login por teste: o limite é 10
@@ -54,6 +124,15 @@ test.use({ storageState: SESSAO_ADMIN });
 // arquivos. A contenção contra `lead-to-won.spec.ts` é o desenho das etapas
 // nascerem no fim, não isto.
 test.describe.configure({ mode: "serial" });
+
+test.beforeAll(async () => {
+  await limparDadosDeTeste();
+});
+
+test.afterAll(async () => {
+  await limparDadosDeTeste();
+  await prisma.$disconnect();
+});
 
 test.describe("gestão de etapas do funil", () => {
   test("cria, renomeia, reordena e remove — sem tocar nas etapas semeadas", async ({ page }) => {
@@ -130,47 +209,30 @@ test.describe("gestão de etapas do funil", () => {
     }
   });
 
-  test("a etapa de fechamento não pode ser removida", async ({ page }) => {
-    await page.goto("/etapas");
-
-    // "Fechado", não "Fechamento": TODAS as outras linhas têm o botão "Marcar
-    // como fechamento", e `hasText` é substring case-insensitive — um filtro
-    // por "Fechamento" bate nas cinco linhas ao mesmo tempo (achado ao rodar
-    // este teste). "Fechado" é só o nome da etapa, único nesta tabela.
-    const linhaDeFechamento = linhaDa(page, "Fechado");
-    await linhaDeFechamento.getByLabel("Remover etapa").click();
-
-    // Campos do diálogo buscados DENTRO de `page.getByRole("dialog")`, nunca
-    // soltos — `getByLabel` não respeita o `aria-hidden` que o Base UI aplica
-    // no resto da página com o diálogo aberto (achado ao rodar o teste
-    // anterior: bateu em mais de um campo). O diálogo já nasce com todo o
-    // conteúdo (nada é buscado depois — os dados já vieram do servidor no
-    // carregamento da página), então esperar ele aparecer garante que o
-    // `<select>` condicional, se existir, já está no DOM.
-    const dialogoRemover = page.getByRole("dialog");
-    await expect(dialogoRemover).toBeVisible();
-
-    // "Fechado" pode ter leads DE VERDADE neste banco compartilhado com
-    // produção — nesse caso o diálogo exige um destino antes de habilitar o
-    // botão de confirmar (`ExcluirEtapaDialogo`). A recusa que este teste
-    // prova acontece no servidor, pelo `ehGanho` da etapa, ANTES de
-    // qualquer checagem de destino (`excluirEtapa`, `core/pipeline/
-    // service.ts`) — então qualquer opção válida serve só para habilitar o
-    // botão e disparar a chamada.
-    const selectDestino = dialogoRemover.getByLabel("Mover os leads para");
-    if (await selectDestino.count()) {
-      await selectDestino.selectOption({ index: 1 });
-    }
-
-    await dialogoRemover.getByRole("button", { name: "Remover etapa" }).click();
-
-    // `[role="alert"]` sozinho bate em DOIS elementos: o alerta de erro da
-    // tabela E o `#__next-route-announcer__` que o próprio Next injeta (mesmo
-    // papel ARIA, usado para anunciar navegação a leitor de tela — vazio o
-    // tempo todo aqui, já que não navegamos). `.filter({ hasText })` descarta
-    // o announcer vazio e sobra só o alerta real.
-    await expect(page.locator('[role="alert"]').filter({ hasText: /etapa de fechamento/i })).toBeVisible();
-    // E ela continua lá: a recusa aconteceu antes de qualquer escrita.
-    await expect(linhaDeFechamento).toBeVisible();
-  });
+  // O teste "a etapa de fechamento não pode ser removida" que morava aqui foi
+  // REMOVIDO de propósito — não corrigido para parar antes do clique.
+  //
+  // Ele selecionava um destino e confirmava a exclusão da etapa "Fechado" DE
+  // PRODUÇÃO. Passava hoje só porque `excluirEtapa` (`core/pipeline/
+  // service.ts`) recusa antes de escrever. Se essa guarda regredisse, o
+  // próprio teste executaria a destruição: moveria todos os leads reais de
+  // "Fechado" para uma etapa arbitrária e apagaria a etapa, no MESMO Postgres
+  // compartilhado com produção que o resto deste arquivo evita tocar (ver o
+  // comentário no topo).
+  //
+  // A propriedade que ele provava já está provada DUAS vezes, sem tocar em
+  // nenhuma linha real:
+  // - `tests/unit/pipeline-service.test.ts` ("recusa apagar a etapa de
+  //   fechamento") — contra o Postgres real, mas contra uma etapa `ZZ Teste`
+  //   criada e apagada pelo próprio teste, nunca "Fechado".
+  // - `tests/unit/pipeline-transacoes.test.ts` ("recusa apagar a etapa de
+  //   fechamento, antes de qualquer escrita") — com Prisma MOCKADO, provando
+  //   que a recusa acontece ANTES de `$transaction` ser sequer chamado.
+  //
+  // Mesmo raciocínio já aplicado uma vez nesta branch (Tarefa 8): a sabotagem
+  // equivalente contra a guarda de exclusão foi trocada por prova com Prisma
+  // mockado exatamente para não correr este risco. Repeti-la aqui, contra o
+  // banco real, reintroduziria o problema que aquela decisão fechou — só que
+  // com o raio de explosão de uma regressão não detectada a tempo sendo a
+  // etapa de fechamento real do funil de produção.
 });

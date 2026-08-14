@@ -63,18 +63,32 @@ async function contarLinhasDoSeedBase() {
 }
 
 /**
- * `seedDemo()` exige um funil de exatamente 5 etapas (`seed-demo.ts`), e desde o
- * CRUD de etapas o funil deste banco pode ter qualquer tamanho. Sem esta guarda,
- * a primeira etapa criada pela tela derrubaria o `beforeAll` e, com ele, o
- * arquivo inteiro — deixando `npx vitest run`, que é o portão de merge do
- * projeto, vermelho para sempre por uma razão que não é defeito de ninguém.
+ * `seedDemo()` exige DUAS coisas do funil deste banco, e o CRUD de etapas pode
+ * quebrar cada uma independentemente:
+ *
+ * 1. Exatamente 5 etapas (`seed-demo.ts`) — a tela permite criar e remover, e
+ *    o funil pode ter qualquer tamanho.
+ * 2. A última etapa por `ordem` é a de fechamento — `CONTAGEM_POR_ETAPA` e
+ *    `FAIXA_DIAS_ATRAS` (`seed-demo.ts`) indexam por `ordem`, e o teste de
+ *    taxa de conversão mede os ganhos por `findFirstOrThrow({ ehGanho: true
+ *    })`. Até esta branch essa posição era garantida por construção pelo
+ *    laço do seed; agora a tela deixa o ADMIN marcar QUALQUER etapa como
+ *    fechamento (`definirEtapaDeFechamento`, `core/pipeline/service.ts`),
+ *    sem criar nem remover nada — o caso de uso central desta branch.
+ *
+ * Sem checar as duas, um ADMIN que só move a flag de fechamento (sem mexer no
+ * tamanho do funil) derrubaria o `beforeAll` e, com ele, o arquivo inteiro —
+ * deixando `npx vitest run`, que é o portão de merge do projeto, vermelho
+ * para sempre por uma razão que não é defeito de ninguém. É exatamente o
+ * desfecho que esta guarda existe para evitar.
  *
  * Pulado com motivo impresso é honesto; vermelho permanente treina a equipe a
  * ignorar o portão, que é o pior desfecho possível.
  */
-const funilTemCincoEtapas = (await prisma.pipelineStage.count()) === 5;
+const funilDoSeed = await prisma.pipelineStage.findMany({ orderBy: { ordem: "asc" } });
+const funilEhOSemeado = funilDoSeed.length === 5 && funilDoSeed.at(-1)?.ehGanho === true;
 
-describe.skipIf(!funilTemCincoEtapas)("prisma/seed-demo.ts", () => {
+describe.skipIf(!funilEhOSemeado)("prisma/seed-demo.ts", () => {
   // beforeAll/afterAll únicos para toda a suíte deste arquivo: `seedDemo()`
   // faz ~30 leads x vários round-trips contra o Postgres real — chamar uma
   // vez e reaproveitar entre os `it()`s de leitura é o que mantém a suíte
@@ -230,9 +244,9 @@ describe.skipIf(!funilTemCincoEtapas)("prisma/seed-demo.ts", () => {
 
 // Mesma guarda do describe acima, e pelo mesmo motivo: os `it()`s abaixo
 // também chamam `seedDemo()` diretamente, então também lançam (por sua vez,
-// não pelo `beforeAll`) se o funil deste banco não tiver exatamente 5
-// etapas.
-describe.skipIf(!funilTemCincoEtapas)("prisma/seed-demo-limpar.ts", () => {
+// não pelo `beforeAll`) se o funil deste banco não tiver 5 etapas, ou se a
+// última por `ordem` não for a de fechamento.
+describe.skipIf(!funilEhOSemeado)("prisma/seed-demo-limpar.ts", () => {
   afterAll(async () => {
     await prisma.$disconnect();
   });
