@@ -43,6 +43,7 @@ describe("etapaSchema — cor", () => {
     "#0f62f",
     "#0f62fee",
     "red; background: url(x)",
+    "red; background: url(x)#0f62fe",
     "rgb(0,0,0)",
     "",
   ])("recusa a cor %j", (cor) => {
