@@ -13,7 +13,7 @@ import { marcarComoLida } from "./dispatch";
  * notificações do próprio usuário — mas isso é só a UI não oferecer o botão
  * errado; a barreira real é a checagem de dono dentro de `marcarComoLida`
  * (`dispatch.ts`), que confere `notification.userId === userId` antes de
- * gravar, mesmo padrão de `concluirMinhaTask`/`concluirTask` (Task 18).
+ * gravar, mesmo padrão de `concluirMinhaTaskAction`/`concluirTask` (Task 18).
  *
  * `revalidatePath("/(painel)", "layout")` invalida especificamente
  * `(painel)/layout.tsx` — não uma `page.tsx` qualquer — quem busca a

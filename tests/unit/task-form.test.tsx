@@ -12,7 +12,7 @@ import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/re
 
 const criarMinhaTaskMock = vi.fn();
 vi.mock("@/core/tasks/actions", () => ({
-  criarMinhaTask: (...args: unknown[]) => criarMinhaTaskMock(...args),
+  criarMinhaTaskAction: (...args: unknown[]) => criarMinhaTaskMock(...args),
 }));
 
 const refreshMock = vi.fn();
@@ -36,7 +36,7 @@ async function preencherEEnviar(titulo: string, vencimento: string) {
 
 describe("TaskForm", () => {
   it("converte a string do <input type=\"date\"> num Date ancorado em meia-noite UTC (sem deslocar de dia)", async () => {
-    criarMinhaTaskMock.mockResolvedValue({});
+    criarMinhaTaskMock.mockResolvedValue({ ok: true });
     render(<TaskForm />);
 
     await preencherEEnviar("Ligar pro fornecedor", "2026-08-05");
@@ -47,7 +47,7 @@ describe("TaskForm", () => {
   });
 
   it("propaga leadId à action quando informado via prop (uso na página de detalhe do lead)", async () => {
-    criarMinhaTaskMock.mockResolvedValue({});
+    criarMinhaTaskMock.mockResolvedValue({ ok: true });
     render(<TaskForm leadId="lead-42" />);
 
     await preencherEEnviar("Follow-up", "2026-08-05");
@@ -58,7 +58,7 @@ describe("TaskForm", () => {
   });
 
   it("não envia leadId quando a prop não é passada (uso em /tasks)", async () => {
-    criarMinhaTaskMock.mockResolvedValue({});
+    criarMinhaTaskMock.mockResolvedValue({ ok: true });
     render(<TaskForm />);
 
     await preencherEEnviar("Tarefa sem lead", "2026-08-05");
@@ -76,30 +76,56 @@ describe("TaskForm", () => {
   // defesa em profundidade (chamada direta, outro client, um browser mais
   // permissivo) e está coberto a fundo em tests/unit/date.test.ts.
 
-  it("sessão expirada/usuário desativado: mostra mensagem amigável, não a mensagem crua 'Não autenticado'", async () => {
-    criarMinhaTaskMock.mockRejectedValue(new Error("Não autenticado"));
+  // ─── O erro chega como DADO, não como exceção ─────────────────────────
+  //
+  // Estes dois testes mudaram de assunto quando `criarMinhaTaskAction` passou a
+  // devolver `ResultadoAcao`. Antes eles provavam a ESCADA de comparações
+  // contra `erro.message` que morava neste componente ("Não autenticado" →
+  // frase amigável, resto → fallback genérico). Essa escada era o defeito:
+  // texto produzido no servidor, casado por string no cliente, quebrando em
+  // silêncio se alguém reescrevesse a mensagem em `service.ts`.
+  //
+  // Quem decide a frase agora é a action (`MENSAGENS_MELHORADAS` e
+  // `MENSAGENS_SEGURAS`, em `core/tasks/actions.ts`, com os casos cobertos em
+  // `task-actions.test.ts`). O que sobra para o formulário provar é mais
+  // simples e mais importante: mostra o que veio, sem reescrever, e não joga
+  // fora o que a pessoa digitou.
+  it("mostra a mensagem que a action devolveu, sem reescrever", async () => {
+    criarMinhaTaskMock.mockResolvedValue({
+      ok: false,
+      erro: "Sua sessão expirou. Recarregue a página e entre de novo.",
+    });
     render(<TaskForm />);
 
     await preencherEEnviar("Tarefa qualquer", "2026-08-05");
 
     await waitFor(() => {
-      expect(screen.getByRole("alert").textContent).toMatch(/sessão expirou/i);
+      expect(screen.getByRole("alert").textContent).toBe(
+        "Sua sessão expirou. Recarregue a página e entre de novo."
+      );
     });
   });
 
-  it("erro inesperado (ex.: banco fora do ar): cai no fallback genérico, não vaza detalhe interno", async () => {
-    criarMinhaTaskMock.mockRejectedValue(new Error("Conexão com o banco falhou"));
+  it("falha NÃO limpa o formulário — o que foi digitado continua lá", async () => {
+    criarMinhaTaskMock.mockResolvedValue({ ok: false, erro: "Descrição longa demais." });
     render(<TaskForm />);
 
-    await preencherEEnviar("Tarefa qualquer", "2026-08-05");
+    await preencherEEnviar("Tarefa que falhou", "2026-08-05");
 
-    await waitFor(() => {
-      expect(screen.getByRole("alert").textContent).toMatch(/Não foi possível salvar a tarefa/);
-    });
+    await waitFor(() => expect(screen.getByRole("alert")).toBeTruthy());
+    expect((screen.getByLabelText("Título") as HTMLInputElement).value).toBe("Tarefa que falhou");
+    expect(refreshMock).not.toHaveBeenCalled();
   });
+
+  // NÃO existe teste aqui para "parseDataCivil lançou": o comentário algumas
+  // linhas acima já explica por quê — o `<input type="date">` (nativo, e o
+  // jsdom reproduz) recusa "2026-13-45" antes de o componente ver o valor, e
+  // o schema barra o campo vazio. Escrevi esse teste, ele falhou, e a resposta
+  // certa era a que já estava escrita no arquivo, não insistir. `parseDataCivil`
+  // continua coberto a fundo em `tests/unit/date.test.ts`.
 
   it("sucesso: limpa o formulário e chama router.refresh", async () => {
-    criarMinhaTaskMock.mockResolvedValue({});
+    criarMinhaTaskMock.mockResolvedValue({ ok: true });
     render(<TaskForm />);
 
     await preencherEEnviar("Tarefa concluída no envio", "2026-08-05");
@@ -125,7 +151,7 @@ describe("TaskForm", () => {
 // intuição — é a asserção sobre o que chegou na action.
 describe("TaskForm com contato pré-escolhido", () => {
   it("envia o contactId padrão mesmo sem o <select> na tela", async () => {
-    criarMinhaTaskMock.mockResolvedValue({});
+    criarMinhaTaskMock.mockResolvedValue({ ok: true });
     render(<TaskForm leadId="lead-1" contactIdPadrao="contato-9" />);
 
     // Prova de que o select realmente não está lá — se um dia passar a
@@ -145,7 +171,7 @@ describe("TaskForm com contato pré-escolhido", () => {
     // `Lead.contactId` é opcional — um lead de WhatsApp pode não ter contato.
     // Mandar `""` reprovaria no servidor com "Contato inválido" por um campo
     // que ninguém preencheu.
-    criarMinhaTaskMock.mockResolvedValue({});
+    criarMinhaTaskMock.mockResolvedValue({ ok: true });
     render(<TaskForm leadId="lead-1" contactIdPadrao={null} />);
 
     await preencherEEnviar("Ligar pro cliente", "2026-08-05");

@@ -25,7 +25,8 @@ vi.mock("@/core/tasks/service", () => ({
   concluirTask: (...args: unknown[]) => concluirTaskMock(...args),
 }));
 
-const { criarMinhaTask, concluirMinhaTask } = await import("../../src/core/tasks/actions");
+const { criarMinhaTaskAction, concluirMinhaTaskAction } = await import("../../src/core/tasks/actions");
+const { MENSAGEM_SESSAO_INVALIDA } = await import("../../src/lib/acao");
 
 function usuarioFake(overrides: Partial<User> = {}): User {
   return {
@@ -72,25 +73,29 @@ beforeEach(() => {
 // que descartam o retorno. Era a tarefa do próprio usuário, então não vazava
 // entre pessoas — mas é o mesmo padrão que produziu o vazamento do funil.
 describe("nada da linha do banco atravessa a fronteira", () => {
-  it("criar não devolve a tarefa ao navegador", async () => {
+  // `toEqual({ ok: true })` e não `toBeUndefined()`: as duas actions passaram
+  // a devolver `ResultadoAcao`. A invariante é a mesma e a asserção continua
+  // exata — `toEqual` reprova qualquer chave a mais, então um `{ ok: true,
+  // task }` acrescentado por descuido fica vermelho aqui.
+  it("criar devolve só o resultado, nunca a tarefa", async () => {
     usuarioAtualMock.mockResolvedValue(usuarioFake());
     criarTaskMock.mockResolvedValue(taskFake({ responsavelId: "segredo" }));
 
-    const devolvido = await criarMinhaTask({
+    const devolvido = await criarMinhaTaskAction({
       titulo: "Ligar",
       vencimento: new Date("2026-08-05T00:00:00.000Z"),
     });
 
-    expect(devolvido).toBeUndefined();
+    expect(devolvido).toEqual({ ok: true });
   });
 
-  it("concluir não devolve a tarefa, mas ainda lê o leadId dela por dentro", async () => {
+  it("concluir devolve só o resultado, mas ainda lê o leadId da tarefa por dentro", async () => {
     usuarioAtualMock.mockResolvedValue(usuarioFake());
     concluirTaskMock.mockResolvedValue(taskFake({ leadId: "lead-7" }));
 
-    const devolvido = await concluirMinhaTask("task-1");
+    const devolvido = await concluirMinhaTaskAction("task-1");
 
-    expect(devolvido).toBeUndefined();
+    expect(devolvido).toEqual({ ok: true });
     // A linha continua sendo lida no servidor — é de lá que sai a rota do
     // lead a invalidar. O que mudou é ela não sair de lá.
     expect(revalidatePathMock).toHaveBeenCalledWith("/leads/lead-7");
@@ -102,7 +107,7 @@ describe("invalidação de cache", () => {
     usuarioAtualMock.mockResolvedValue(usuarioFake());
     criarTaskMock.mockResolvedValue(taskFake());
 
-    await criarMinhaTask({ titulo: "Ligar", vencimento: new Date("2026-08-05T00:00:00.000Z") });
+    await criarMinhaTaskAction({ titulo: "Ligar", vencimento: new Date("2026-08-05T00:00:00.000Z") });
 
     expect(revalidatePathMock).toHaveBeenCalledWith("/tasks");
     expect(revalidatePathMock).toHaveBeenCalledWith("/");
@@ -112,7 +117,7 @@ describe("invalidação de cache", () => {
     usuarioAtualMock.mockResolvedValue(usuarioFake());
     criarTaskMock.mockResolvedValue(taskFake({ leadId: "lead-9" }));
 
-    await criarMinhaTask({
+    await criarMinhaTaskAction({
       titulo: "Ligar",
       vencimento: new Date("2026-08-05T00:00:00.000Z"),
       leadId: "lead-9",
@@ -125,32 +130,32 @@ describe("invalidação de cache", () => {
     usuarioAtualMock.mockResolvedValue(usuarioFake());
     concluirTaskMock.mockResolvedValue(taskFake({ concluidaEm: new Date() }));
 
-    await concluirMinhaTask("task-1");
+    await concluirMinhaTaskAction("task-1");
 
     expect(revalidatePathMock).toHaveBeenCalledWith("/tasks");
     expect(revalidatePathMock).toHaveBeenCalledWith("/");
   });
 
   // O `leadId` vem da tarefa DEVOLVIDA pelo serviço, não de um argumento —
-  // `concluirMinhaTask` só recebe o id. Sem isso, concluir uma tarefa a
+  // `concluirMinhaTaskAction` só recebe o id. Sem isso, concluir uma tarefa a
   // partir de `/tasks` deixaria a página do lead vinculado com cache velho.
   it("concluir invalida a página do lead lendo o vínculo da tarefa devolvida", async () => {
     usuarioAtualMock.mockResolvedValue(usuarioFake());
     concluirTaskMock.mockResolvedValue(taskFake({ leadId: "lead-7" }));
 
-    await concluirMinhaTask("task-1");
+    await concluirMinhaTaskAction("task-1");
 
     expect(revalidatePathMock).toHaveBeenCalledWith("/leads/lead-7");
   });
 });
 
-describe("criarMinhaTask", () => {
+describe("criarMinhaTaskAction", () => {
   it("deriva responsavelId da sessão — o input nunca tem esse campo para começo de conversa", async () => {
     const vendedor = usuarioFake({ id: "vendedor-1" });
     usuarioAtualMock.mockResolvedValue(vendedor);
     criarTaskMock.mockResolvedValue(taskFake({ responsavelId: "vendedor-1" }));
 
-    await criarMinhaTask({ titulo: "Ligar", vencimento: new Date("2026-08-05T00:00:00.000Z") });
+    await criarMinhaTaskAction({ titulo: "Ligar", vencimento: new Date("2026-08-05T00:00:00.000Z") });
 
     expect(criarTaskMock).toHaveBeenCalledWith(
       expect.objectContaining({ responsavelId: "vendedor-1", titulo: "Ligar" })
@@ -161,7 +166,7 @@ describe("criarMinhaTask", () => {
     usuarioAtualMock.mockResolvedValue(usuarioFake());
     criarTaskMock.mockResolvedValue(taskFake({ leadId: "lead-1" }));
 
-    await criarMinhaTask({
+    await criarMinhaTaskAction({
       titulo: "Follow-up",
       vencimento: new Date("2026-08-05T00:00:00.000Z"),
       leadId: "lead-1",
@@ -170,44 +175,90 @@ describe("criarMinhaTask", () => {
     expect(criarTaskMock).toHaveBeenCalledWith(expect.objectContaining({ leadId: "lead-1" }));
   });
 
-  it("propaga 'Não autenticado' sem chamar o service quando usuarioAtual rejeita", async () => {
+  it("sessão inválida vira resultado com a mensagem da casa, sem chamar o service", async () => {
     usuarioAtualMock.mockRejectedValue(new Error("Não autenticado"));
 
-    await expect(
-      criarMinhaTask({ titulo: "X", vencimento: new Date("2026-08-05T00:00:00.000Z") })
-    ).rejects.toThrow("Não autenticado");
+    const resultado = await criarMinhaTaskAction({
+      titulo: "X",
+      vencimento: new Date("2026-08-05T00:00:00.000Z"),
+    });
 
+    // A mensagem vem de `MENSAGEM_SESSAO_INVALIDA` (`src/lib/acao.ts`), a
+    // mesma que editar/excluir/reabrir já mostravam. Antes esta action LANÇAVA
+    // e o Next redigia o erro em produção: a pessoa lia um identificador
+    // opaco no lugar de "sua sessão expirou".
+    expect(resultado).toEqual({ ok: false, erro: MENSAGEM_SESSAO_INVALIDA });
     expect(criarTaskMock).not.toHaveBeenCalled();
+  });
+
+  it("nao invalida cache nenhum quando a criacao falha", async () => {
+    // `revalidatePath` fica FORA do `try`. Se a ordem se invertesse, uma
+    // criação recusada ainda derrubaria o cache de três rotas — trabalho
+    // inútil disfarçado de correção.
+    usuarioAtualMock.mockRejectedValue(new Error("Não autenticado"));
+
+    await criarMinhaTaskAction({ titulo: "X", vencimento: new Date("2026-08-05T00:00:00.000Z") });
+
+    expect(revalidatePathMock).not.toHaveBeenCalled();
   });
 });
 
-describe("concluirMinhaTask", () => {
+describe("concluirMinhaTaskAction", () => {
   it("deriva autorId da sessão — a assinatura só aceita taskId, nada de autor vindo do cliente", async () => {
     const vendedor = usuarioFake({ id: "vendedor-2" });
     usuarioAtualMock.mockResolvedValue(vendedor);
     concluirTaskMock.mockResolvedValue(taskFake({ responsavelId: "vendedor-2" }));
 
-    await concluirMinhaTask("task-1");
+    await concluirMinhaTaskAction("task-1");
 
     expect(concluirTaskMock).toHaveBeenCalledWith({ taskId: "task-1", autorId: "vendedor-2" });
   });
 
   it(
-    "propaga 'Tarefa não encontrada' quando o service rejeita — o caso de alguém tentando " +
-      "concluir a tarefa de outra pessoa (checagem real fica em concluirTask, service.ts)",
+    "tarefa de outra pessoa vira resultado com a frase completa — o caso de alguém tentando " +
+      "concluir a tarefa de um colega (checagem real fica em concluirTask, service.ts)",
     async () => {
       usuarioAtualMock.mockResolvedValue(usuarioFake());
       concluirTaskMock.mockRejectedValue(new Error("Tarefa não encontrada"));
 
-      await expect(concluirMinhaTask("task-de-outro-usuario")).rejects.toThrow("Tarefa não encontrada");
+      const resultado = await concluirMinhaTaskAction("task-de-outro-usuario");
+
+      // A frase inteira, e não o "Tarefa não encontrada" cru do serviço: ela
+      // morava dentro de `task-list.tsx` e só valia para quem clicasse
+      // "Concluir" — quem clicasse "Excluir" na MESMA tarefa lia o texto seco.
+      // Agora sai de `MENSAGENS_MELHORADAS` e vale para as cinco actions.
+      //
+      // A frase preserva a ambiguidade de propósito ("não existe mais OU não
+      // pertence a você"): distinguir os dois casos confirmaria, a quem está
+      // adivinhando ids, que aquele id existe.
+      expect(resultado).toEqual({
+        ok: false,
+        erro: "Essa tarefa não existe mais ou não pertence a você. Atualize a página.",
+      });
     }
   );
 
-  it("propaga 'Não autenticado' sem chamar o service quando usuarioAtual rejeita", async () => {
+  it("sessão inválida vira resultado sem chamar o service", async () => {
     usuarioAtualMock.mockRejectedValue(new Error("Não autenticado"));
 
-    await expect(concluirMinhaTask("task-1")).rejects.toThrow("Não autenticado");
+    const resultado = await concluirMinhaTaskAction("task-1");
 
+    expect(resultado).toEqual({ ok: false, erro: MENSAGEM_SESSAO_INVALIDA });
     expect(concluirTaskMock).not.toHaveBeenCalled();
+  });
+
+  it("falha de infraestrutura NAO vaza o motivo para a tela", async () => {
+    // O outro lado da moeda de `MENSAGENS_MELHORADAS`: mensagem de domínio a
+    // pessoa pode ler e agir; "connect ECONNREFUSED 10.0.0.4:5432" é detalhe
+    // de infraestrutura e vai só para o log do servidor.
+    usuarioAtualMock.mockResolvedValue(usuarioFake());
+    concluirTaskMock.mockRejectedValue(new Error("connect ECONNREFUSED 10.0.0.4:5432"));
+
+    const resultado = await concluirMinhaTaskAction("task-1");
+
+    expect(resultado).toEqual({
+      ok: false,
+      erro: "Não foi possível concluir a tarefa. Tente novamente em instantes.",
+    });
   });
 });

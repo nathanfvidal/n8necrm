@@ -48,11 +48,26 @@ export const MENSAGEM_SESSAO_INVALIDA = "Sua sessão expirou. Recarregue a pági
  * pagar aquela dívida (registrada em
  * `docs/superpowers/plans/2026-08-06-whatsapp-fatia-2-pendencias.md`).
  *
- * Cinco componentes de cliente ainda comparam a string por conta própria
- * (`leads/kanban-board.tsx`, `leads/lead-form.tsx`, `tasks/task-form.tsx`,
- * `tasks/task-list.tsx`, `notifications/notification-bell.tsx`) — são outro
- * caminho: recebem um `Error` de uma action que LANÇA, não um `ResultadoAcao`.
- * Uniformizá-los é a mesma dívida do `SessaoInvalidaError`, não esta função.
+ * **Três** componentes de cliente ainda comparam a string por conta própria
+ * (`leads/kanban-board.tsx`, `leads/lead-form.tsx`,
+ * `notifications/notification-bell.tsx`) — são outro caminho: recebem um
+ * `Error` de uma action que LANÇA, não um `ResultadoAcao`. Eram cinco;
+ * `tasks/task-form.tsx` e `tasks/task-list.tsx` saíram da lista quando as
+ * cinco actions de tarefa passaram a devolver resultado (ver o cabeçalho de
+ * `core/tasks/actions.ts`).
+ *
+ * O que sobrou é o mesmo trabalho, um módulo de cada vez: `core/leads/actions.ts`
+ * tem duas que lançam (`criarLeadManual` e `moverLeadDeEtapa`, as duas
+ * `Promise<Lead>`) e `core/notifications/actions.ts` uma
+ * (`marcarNotificacaoComoLidaAction`, `Promise<void>`).
+ *
+ * As duas de lead carregam um segundo problema junto, e vale registrar aqui
+ * para não se perder: devolvem `Lead` INTEIRO, e o retorno de uma Server
+ * Action é serializado para o navegador — `utm`, `sessionId` e `itemId` vão
+ * junto. É o dado do lead que a própria pessoa acabou de criar ou mover, não o
+ * de um colega, então não é vazamento entre usuários; é o mesmo padrão que
+ * produziu o do funil. `concluirMinhaTaskAction` já foi corrigida nesse ponto.
+ * Uniformizá-las é a mesma dívida do `SessaoInvalidaError`, não esta função.
  */
 export function ehSessaoInvalida(erro: unknown): boolean {
   return erro instanceof Error && erro.message === "Não autenticado";
