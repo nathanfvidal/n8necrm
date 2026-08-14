@@ -30,6 +30,8 @@ import { describe, it, expect } from "vitest";
 import { readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 
+import { semComentarios } from "./helpers/codigo-fonte";
+
 const RAIZ = join(process.cwd(), "src");
 
 /**
@@ -49,40 +51,6 @@ const RELACOES_SENSIVEIS: Record<string, string> = {
   atualizadoPor: "User (senhaHash)",
 };
 
-/**
- * Remove comentários para que a PROSA sobre a regra não seja confundida com
- * uma violação dela — os arquivos corrigidos explicam, em comentário, que
- * `include: { user: true }` traria `senhaHash` junto.
- *
- * O `//` só conta como início de comentário quando NÃO vem depois de `:` —
- * senão `"https://..."` seria cortado no meio e levaria embora o resto da
- * linha. É a única ambiguidade que aparece neste código; aspas em geral não
- * são tratadas.
- */
-export function semComentarios(codigo: string): string {
-  return (
-    codigo
-      // CRLF normalizado ANTES de qualquer coisa, e não por gosto de higiene:
-      // este projeto é editado no Windows e os arquivos terminam em `\r\n`.
-      // Com `split("\n")` o `\r` fica pendurado no fim de cada linha, e aí
-      // `/\/\/.*$/` NÃO casa — `.` não atravessa `\r`, e `$` (sem a flag `m`)
-      // só aceita fim de string ou um `\n` final, nunca um `\r`. O resultado é
-      // um removedor de comentários que não remove nada: a primeira versão
-      // deste arquivo reprovou quatro linhas de PROSA que explicavam
-      // justamente esta regra.
-      .replace(/\r\n/g, "\n")
-      .replace(/\/\*[\s\S]*?\*\//g, (bloco) =>
-      // Apagar o bloco inteiro engoliria suas quebras de linha e todo número
-      // de linha reportado abaixo sairia deslocado — apontando para o lugar
-      // errado exatamente quando alguém precisa do apontamento. Trocar por
-      // quebras equivalentes preserva a numeração.
-        "\n".repeat((bloco.match(/\n/g) ?? []).length)
-      )
-      .split("\n")
-      .map((linha) => linha.replace(/(^|[^:])\/\/.*$/, "$1"))
-      .join("\n")
-  );
-}
 
 type Violacao = { arquivo: string; linha: number; campo: string; alvo: string };
 

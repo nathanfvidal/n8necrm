@@ -133,6 +133,50 @@ export async function listarLeadsPorEtapa(opcoes?: {
 }
 
 /**
+ * Quantos leads ativos há em cada etapa. Chaves são `stageId`; etapa sem lead
+ * simplesmente não aparece (quem lê usa `?? 0`).
+ *
+ * ## Por que uma função separada, e não `listarLeadsPorEtapa().length`
+ *
+ * O painel fazia exatamente isso, e estava errado de um jeito caro. Toda
+ * listagem deste sistema tem teto (`LIMITE_LISTAGEM`, 1000 — ver
+ * `core/listagem.ts`), e o teto existe por um bom motivo. Só que o painel
+ * DESCARTAVA o `truncado` que a consulta devolve e contava o tamanho dos
+ * arrays: acima de 1000 leads ele passaria a mostrar "1000" como total, e a
+ * taxa de conversão — o número grande no meio da tela, com uma casa decimal,
+ * a primeira coisa que qualquer pessoa vê ao entrar no CRM — sairia calculada
+ * sobre os 1000 mais RECENTES. Um funil saudável acumula leads ganhos ao
+ * longo do tempo e recebe leads novos ainda não convertidos: cortar pelos
+ * mais recentes enviesa a taxa para BAIXO, e nada na tela avisaria.
+ *
+ * A correção óbvia seria repetir o aviso amarelo que o kanban e `/leads` já
+ * mostram. Seria honesto e ainda assim errado: um painel que estampa uma taxa
+ * inexata com uma nota de rodapé explicando que é inexata não serve para
+ * decidir nada. O painel não precisa de LINHA nenhuma — precisa de contagem,
+ * e contagem o Postgres faz exata, por etapa, sem transferir uma linha
+ * sequer. Some o teto, some o viés, some o aviso, e some também a leitura de
+ * até 1000 leads (com dois joins e o mapeamento para DTO) da página mais
+ * visitada do sistema.
+ *
+ * `arquivadoEm: null` pelo mesmo motivo de todas as outras listagens:
+ * arquivado sai do funil por definição, e as somas do painel são o lugar onde
+ * um arquivado reaparecendo mentiria mais.
+ */
+export async function contarLeadsPorEtapa(): Promise<Record<string, number>> {
+  const grupos = await prisma.lead.groupBy({
+    by: ["stageId"],
+    where: { arquivadoEm: null },
+    _count: { _all: true },
+  });
+
+  const porEtapa: Record<string, number> = {};
+  for (const grupo of grupos) {
+    porEtapa[grupo.stageId] = grupo._count._all;
+  }
+  return porEtapa;
+}
+
+/**
  * Lê leads em lista única (não agrupada por etapa) para a tabela da Task 16,
  * com a etapa (`stage`) incluída — a tabela mostra "Etapa" como coluna, algo
  * que `listarLeadsPorEtapa` não precisa expor porque a etapa já é a própria
