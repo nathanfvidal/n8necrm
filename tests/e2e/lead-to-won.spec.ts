@@ -326,11 +326,15 @@ async function arrastarComTeclado(
 test.use({ storageState: SESSAO_ADMIN });
 
 test("cria um lead manualmente e move até a etapa final do funil", async ({ page }) => {
-  // O quadro (kanban-board.tsx) tem 5 colunas de 288px + 16px de gap dentro
-  // de um container `overflow-x-auto` — 5 colunas cabem em ~1544px, mais que
-  // o viewport padrão de `devices["Desktop Chrome"]` (1280px). Sem alargar,
-  // a coluna "Fechado" fica parcialmente fora da área visível e
-  // `boundingBox()` devolve coordenadas além do viewport.
+  // O quadro (kanban-board.tsx) tem colunas de 288px + 16px de gap dentro de
+  // um container `overflow-x-auto`, mais largo que o viewport padrão de
+  // `devices["Desktop Chrome"]` (1280px). Este valor inicial só cobre as
+  // telas de ANTES do quadro (criar o lead) — depois de navegar para
+  // `/leads/kanban`, o viewport é realargado de novo, conforme o número real
+  // de colunas do funil (ver comentário mais abaixo). Desde o CRUD de etapas
+  // esse número deixou de ser fixo em 5, e um viewport calibrado só para 5
+  // colunas é, ele mesmo, um defeito represado — mesmo raciocínio do
+  // `md:grid-cols-5` do painel, corrigido na Task do CRUD de etapas.
   await page.setViewportSize({ width: 1600, height: 900 });
 
   // Sem passo de login: a sessão vem de `auth.setup.ts` (ver `test.use`
@@ -348,6 +352,22 @@ test("cria um lead manualmente e move até a etapa final do funil", async ({ pag
   });
 
   await page.goto("/leads/kanban");
+
+  // Até o CRUD de etapas o funil tinha cinco colunas fixas e 1600px bastava.
+  // Agora o tamanho do funil é variável, e uma coluna a mais empurra a última
+  // para fora do viewport: `boundingBox()` passa a devolver coordenada fora
+  // da tela, o `autoScroll` do dnd-kit assume o gesto (fica rolando o quadro
+  // enquanto o ponteiro fica parado além da borda — ver `arrastarComPonteiro`
+  // abaixo) e o card cai numa coluna diferente da que o teste mirou. O
+  // viewport passa a acompanhar o funil em vez de presumir cinco colunas.
+  // `304` é `COLUNA_PASSO_PX` (`kanban-board.tsx`: `w-72` = 288px + `gap-4` =
+  // 16px, a distância entre o início de uma coluna e o início da próxima);
+  // `200` é folga para a margem/padding fora do `flex` de colunas em si.
+  const totalDeColunas = await page.getByRole("heading", { name: /^.+ \(\d+\)$/ }).count();
+  await page.setViewportSize({
+    width: Math.max(1600, totalDeColunas * 304 + 200),
+    height: 900,
+  });
 
   const colunaNovo = colunaPorNome(page, "Novo");
   const colunaProposta = colunaPorNome(page, "Proposta");
