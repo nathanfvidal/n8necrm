@@ -1,18 +1,18 @@
 // @vitest-environment jsdom
 //
 // Cobre só a lógica de ramificação do client component (não layout/estilo,
-// por instrução do Task 14): o que é enviado a `criarLeadManual`, como os
+// por instrução do Task 14): o que é enviado a `criarLeadManualAction`, como os
 // dois modos de falha esperados (telefone inválido / sessão-autorização) e
 // um erro genérico viram mensagem em português, que o formulário NÃO perde
 // o que a pessoa digitou quando a submissão falha, e que o dropdown de
 // responsável só aparece para quem pode atribuir a outra pessoa (Task 13:
-// `criarLeadManual` clampa `responsavelId` no servidor para VENDEDOR).
+// `criarLeadManualAction` clampa `responsavelId` no servidor para VENDEDOR).
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
 
 const criarLeadManualMock = vi.fn();
 vi.mock("@/core/leads/actions", () => ({
-  criarLeadManual: (...args: unknown[]) => criarLeadManualMock(...args),
+  criarLeadManualAction: (...args: unknown[]) => criarLeadManualMock(...args),
 }));
 
 const refreshMock = vi.fn();
@@ -58,7 +58,7 @@ describe("LeadForm", () => {
 
   // Esta ramificação foi REMOVIDA, e o teste antigo dizia o contrário do que o
   // sistema faz hoje: até a auditoria de segurança desta branch, um VENDEDOR
-  // via um campo desabilitado com o próprio nome, porque `criarLeadManual`
+  // via um campo desabilitado com o próprio nome, porque `criarLeadManualAction`
   // clampava a escolha no servidor. O clamp não impedia nada — bastava criar
   // o lead e reatribuir no clique seguinte, já que `atualizarLead` aceita
   // qualquer responsável para quem tem `mover_lead`. Decisão do dono: lead é
@@ -74,7 +74,7 @@ describe("LeadForm", () => {
   });
 
   it("submete sem enviar nenhum identificador de autor e usa o responsavelId escolhido", async () => {
-    criarLeadManualMock.mockResolvedValue({ id: "lead-1" });
+    criarLeadManualMock.mockResolvedValue({ ok: true });
     render(
       <LeadForm
         responsavelPadraoId="user-1"
@@ -99,7 +99,7 @@ describe("LeadForm", () => {
     "sem tocar no select, a submissão envia responsavelId === responsavelPadraoId — " +
       "quem não quer mudar o responsável não precisa fazer nada",
     async () => {
-      criarLeadManualMock.mockResolvedValue({ id: "lead-1" });
+      criarLeadManualMock.mockResolvedValue({ ok: true });
       render(<LeadForm responsavelPadraoId="user-2" vendedores={vendedores} />);
 
       await preencher();
@@ -113,7 +113,7 @@ describe("LeadForm", () => {
   );
 
   it("em caso de sucesso, limpa o formulário e atualiza a rota", async () => {
-    criarLeadManualMock.mockResolvedValue({ id: "lead-1" });
+    criarLeadManualMock.mockResolvedValue({ ok: true });
     render(
       <LeadForm
         responsavelPadraoId="user-1"
@@ -131,9 +131,10 @@ describe("LeadForm", () => {
   });
 
   it("telefone inválido: mostra a mensagem do servidor e NÃO apaga o que foi digitado", async () => {
-    criarLeadManualMock.mockRejectedValue(
-      new Error('Telefone inválido: "abc" não contém um número de telefone brasileiro reconhecível')
-    );
+    criarLeadManualMock.mockResolvedValue({
+      ok: false,
+      erro: 'Telefone inválido: "abc" não contém um número de telefone brasileiro reconhecível',
+    });
     render(
       <LeadForm
         responsavelPadraoId="user-1"
@@ -156,8 +157,11 @@ describe("LeadForm", () => {
     expect((screen.getByLabelText("Telefone") as HTMLInputElement).value).toBe("11988887777");
   });
 
-  it("sessão inválida (usuarioAtual rejeitou): mostra mensagem própria, não o erro cru", async () => {
-    criarLeadManualMock.mockRejectedValue(new Error("Não autenticado"));
+  it("sessão inválida: mostra a frase do servidor, sem reescrever", async () => {
+    criarLeadManualMock.mockResolvedValue({
+      ok: false,
+      erro: "Sua sessão expirou. Recarregue a página e entre de novo.",
+    });
     render(
       <LeadForm
         responsavelPadraoId="user-1"
@@ -170,14 +174,20 @@ describe("LeadForm", () => {
 
     await waitFor(() =>
       expect(
-        screen.getByText(
-          "Sua sessão expirou ou sua conta foi desativada. Atualize a página e faça login novamente."
-        )
+        screen.getByText("Sua sessão expirou. Recarregue a página e entre de novo.")
       ).toBeTruthy()
     );
   });
 
-  it("erro inesperado (ex.: banco fora do ar): cai no fallback genérico, sem vazar detalhe interno", async () => {
+  // ─── A falha que o resultado NÃO cobre ────────────────────────────────
+  //
+  // Este teste pegou uma regressão real desta entrega: ao trocar o `catch` por
+  // `if (!resultado.ok)`, o formulário ficou SEM tratamento para a promise
+  // rejeitada. `criarLeadManualAction` não lança — mas a rede lança, e nesse
+  // caso o botão voltava ao normal sem mensagem nenhuma, como se nada tivesse
+  // sido tentado. Ver `registrarFalhaDeRede` em `src/lib/acao.ts`.
+  it("falha de REDE: mostra aviso próprio e NÃO apaga o que foi digitado", async () => {
+    const erroDoConsole = vi.spyOn(console, "error").mockImplementation(() => {});
     criarLeadManualMock.mockRejectedValue(new Error("connection terminated unexpectedly"));
     render(
       <LeadForm
@@ -190,8 +200,11 @@ describe("LeadForm", () => {
     fireEvent.click(screen.getByRole("button", { name: "Adicionar lead" }));
 
     await waitFor(() =>
-      expect(screen.getByText("Não foi possível criar o lead. Tente novamente em instantes.")).toBeTruthy()
+      expect(screen.getByRole("alert").textContent).toMatch(/falar com o servidor/i)
     );
     expect(screen.queryByText("connection terminated unexpectedly")).toBeNull();
+    expect(refreshMock).not.toHaveBeenCalled();
+    expect((screen.getByLabelText("Nome") as HTMLInputElement).value).toBe("Cliente Teste");
+    erroDoConsole.mockRestore();
   });
 });

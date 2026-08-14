@@ -39,7 +39,7 @@ export class LeadInvalidoError extends Error {
  * gravado — o `await` abaixo nunca chega ao `prisma.lead.create` nesse caso.
  * `actions.ts` decide o que fazer com ela na borda pública.
  *
- * `responsavelId` chega, em produção, de `criarLeadManual` (`actions.ts`) —
+ * `responsavelId` chega, em produção, de `criarLeadManualAction` (`actions.ts`) —
  * ou o autor logado, ou (quando quem chama tem permissão) um id escolhido no
  * formulário público, ou seja, um cliente HTTP não confiável, igual
  * `novaStageId` em `moverEtapa` abaixo e `leadId` em `criarTask`
@@ -355,7 +355,7 @@ export async function desarquivarLead(input: {
  * a receita para acertar a interface e errar a regra.
  *
  * Deliberadamente NÃO reusa `criarLead` (acima): aquela função é a camada
- * testável de `criarLeadManual` (`actions.ts`), com um contrato (`canal`
+ * testável de `criarLeadManualAction` (`actions.ts`), com um contrato (`canal`
  * sempre "MANUAL") que várias telas e testes já assumem — bifurcar esse
  * contrato com um parâmetro `canal` opcional trocaria o comportamento de
  * uma função em produção por causa de uma função sem uso ainda. Duplicar a

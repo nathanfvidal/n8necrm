@@ -52,7 +52,35 @@ const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KE
 export async function notificarNovoLead(leadId: string): Promise<void> {
   const lead = await prisma.lead.findUniqueOrThrow({
     where: { id: leadId },
-    include: { contact: true, stage: true, responsavel: true },
+    // `select` explícito, e NUNCA `include: { ... responsavel: true }`.
+    //
+    // Esta consulta era `include: { contact: true, stage: true, responsavel: true }`,
+    // e cada um dos três trazia coisa que este arquivo não usa:
+    //
+    // - `responsavel: true` carregava a linha inteira de `User` — `senhaHash`
+    //   junto — para ler `id` e `email`. Mesma correção que `leads/queries.ts`
+    //   e `tasks/queries.ts` já tinham recebido; esta ficou para trás porque
+    //   ninguém varreu o módulo de notificações na época.
+    // - `contact: true` carregava a linha inteira de `Contact` para ler
+    //   `nome`. Quando essa linha foi escrita, `Contact` era nome, telefone e
+    //   e-mail e o excesso parecia inofensivo. Hoje ela guarda `documento`
+    //   (CPF/CNPJ), `endereco` e `observacoes` — a consulta piorou sozinha,
+    //   sem ninguém tocar nela, que é exatamente o que uma consulta curinga
+    //   faz quando a tabela cresce.
+    // - `stage: true` carregava a etapa inteira para ler `nome`.
+    //
+    // Nada disso vazava para um cliente: este módulo é `server-only`, e o
+    // payload gravado em `Notification` é só `{ leadId, contatoNome }`. O que
+    // se corrige aqui é o raio de explosão — o objeto existe em memória, e
+    // um `console.error` ou um relatório de exceção que serialize o contexto
+    // leva junto o que ele carrega. Buscar o que não se usa é a dívida que
+    // vira vazamento no dia em que alguém passa o objeto um nível adiante.
+    select: {
+      id: true,
+      contact: { select: { nome: true } },
+      stage: { select: { nome: true } },
+      responsavel: { select: { id: true, email: true } },
+    },
   });
 
   // Lead sem responsável atribuído: nada a notificar (ninguém para

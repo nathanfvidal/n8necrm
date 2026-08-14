@@ -26,9 +26,24 @@ vi.mock("@/core/auth/permissions", async (importOriginal) => {
 
 const criarLeadMock = vi.fn();
 const moverEtapaMock = vi.fn();
+
+// `LeadInvalidoError` precisa existir no mock: `paraResultadoErro`
+// (`actions.ts`) faz `erro instanceof LeadInvalidoError`, e as duas actions
+// deste describe lançam essa classe no ramo de "sem permissão". Uma classe
+// substituta serve porque `instanceof` compara contra a MESMA referência que
+// `actions.ts` importa — que é esta, já que o módulo está mockado. Puxar a real
+// com `importOriginal` traria `@/lib/prisma` junto e transformaria este arquivo
+// num teste de integração, que é exatamente o que o comentário do topo diz que
+// ele não é.
+const { LeadInvalidoErrorFake } = vi.hoisted(() => {
+  class LeadInvalidoErrorFake extends Error {}
+  return { LeadInvalidoErrorFake };
+});
+
 vi.mock("@/core/leads/service", () => ({
   criarLead: (...args: unknown[]) => criarLeadMock(...args),
   moverEtapa: (...args: unknown[]) => moverEtapaMock(...args),
+  LeadInvalidoError: LeadInvalidoErrorFake,
 }));
 
 // `actions.ts` passou a importar `./notes` (Task 17) — sem mockar aqui, a
@@ -52,10 +67,11 @@ vi.mock("next/cache", () => ({
   revalidatePath: (...args: unknown[]) => revalidatePathMock(...args),
 }));
 
-const { criarLeadManual, moverLeadDeEtapa, adicionarNotaAction } = await import(
+const { criarLeadManualAction, moverLeadDeEtapaAction, adicionarNotaAction } = await import(
   "../../src/core/leads/actions"
 );
 const { hasPermission } = await import("../../src/core/auth/permissions");
+const { MENSAGEM_SESSAO_INVALIDA } = await import("../../src/lib/acao");
 
 function usuarioFake(overrides: Partial<User>): User {
   return {
@@ -105,16 +121,90 @@ beforeEach(() => {
   revalidatePathMock.mockReset();
 });
 
-describe("criarLeadManual", () => {
-  it("rejeita e NÃO chama o service quando o chamador não tem a permissão criar_lead", async () => {
+describe("criarLeadManualAction", () => {
+  it("recusa e NÃO chama o service quando o chamador não tem a permissão criar_lead", async () => {
     usuarioAtualMock.mockResolvedValue(usuarioFake({ papel: "VENDEDOR" }));
     vi.mocked(hasPermission).mockReturnValueOnce(false); // simula um papel sem criar_lead
 
-    await expect(
-      criarLeadManual({ nome: "X", telefone: "11988880001", responsavelId: "usuario-fake-id" })
-    ).rejects.toThrow("Sem permissão para criar lead");
+    const resultado = await criarLeadManualAction({
+      nome: "X",
+      telefone: "11988880001",
+      responsavelId: "usuario-fake-id",
+    });
 
+    expect(resultado).toEqual({ ok: false, erro: "Você não tem permissão para criar leads." });
     expect(criarLeadMock).not.toHaveBeenCalled();
+  });
+
+  // ─── O que NÃO atravessa a fronteira ──────────────────────────────────
+  //
+  // Esta action devolvia `Lead`. O retorno de uma Server Action é serializado
+  // para o navegador, então `utm` (JSON de rastreio), `sessionId` e `itemId`
+  // viajavam junto — para um `LeadForm` que descarta o retorno. `toEqual`
+  // reprova qualquer chave a mais, então um `{ ok: true, lead }` acrescentado
+  // por descuido fica vermelho aqui.
+  it("sucesso devolve só o resultado, nunca o Lead", async () => {
+    usuarioAtualMock.mockResolvedValue(usuarioFake({ id: "vendedor-8" }));
+    criarLeadMock.mockResolvedValue(
+      leadFake({ utm: { origem: "google", termo: "segredo" }, sessionId: "sess-secreta" })
+    );
+
+    const resultado = await criarLeadManualAction({
+      nome: "X",
+      telefone: "11988880007",
+      responsavelId: "vendedor-8",
+    });
+
+    expect(resultado).toEqual({ ok: true });
+    expect(JSON.stringify(resultado)).not.toContain("sess-secreta");
+  });
+
+  // O texto vem de `dedupe.ts` e é a única mensagem desta action que a pessoa
+  // consegue AGIR sobre: ela corrige o telefone e tenta de novo. Antes chegava
+  // à tela por outro caminho (a action relançava, `lead-form.tsx` reconhecia
+  // por prefixo). Sem `/^Telefone inválido/` em `MENSAGENS_SEGURAS`, cairia no
+  // ramo genérico e a pessoa não saberia qual campo consertar.
+  it("telefone inválido chega à tela com o motivo, não com o genérico", async () => {
+    usuarioAtualMock.mockResolvedValue(usuarioFake({ id: "vendedor-9" }));
+    criarLeadMock.mockRejectedValue(
+      new Error('Telefone inválido: "abc" não contém um número de telefone brasileiro reconhecível.')
+    );
+
+    const resultado = await criarLeadManualAction({
+      nome: "X",
+      telefone: "abc",
+      responsavelId: "vendedor-9",
+    });
+
+    expect(resultado).toEqual({
+      ok: false,
+      erro: 'Telefone inválido: "abc" não contém um número de telefone brasileiro reconhecível.',
+    });
+  });
+
+  it("falha de infraestrutura NÃO vaza o motivo para a tela", async () => {
+    usuarioAtualMock.mockResolvedValue(usuarioFake({ id: "vendedor-10" }));
+    criarLeadMock.mockRejectedValue(new Error("connect ECONNREFUSED 10.0.0.4:5432"));
+
+    const resultado = await criarLeadManualAction({
+      nome: "X",
+      telefone: "11988880008",
+      responsavelId: "vendedor-10",
+    });
+
+    expect(resultado).toEqual({
+      ok: false,
+      erro: "Não foi possível criar o lead. Tente novamente em instantes.",
+    });
+  });
+
+  it("não revalida cache nenhum quando a criação falha", async () => {
+    usuarioAtualMock.mockResolvedValue(usuarioFake({ id: "vendedor-11" }));
+    criarLeadMock.mockRejectedValue(new Error("qualquer coisa"));
+
+    await criarLeadManualAction({ nome: "X", telefone: "11988880009", responsavelId: "vendedor-11" });
+
+    expect(revalidatePathMock).not.toHaveBeenCalled();
   });
 
   // Este teste afirmava o CONTRÁRIO até a auditoria de segurança desta
@@ -133,7 +223,7 @@ describe("criarLeadManual", () => {
       usuarioAtualMock.mockResolvedValue(vendedor);
       criarLeadMock.mockResolvedValue(leadFake({ responsavelId: "outra-pessoa-id" }));
 
-      await criarLeadManual({
+      await criarLeadManualAction({
         nome: "X",
         telefone: "11988880002",
         responsavelId: "outra-pessoa-id",
@@ -156,7 +246,7 @@ describe("criarLeadManual", () => {
       usuarioAtualMock.mockResolvedValue(gestor);
       criarLeadMock.mockResolvedValue(leadFake({ responsavelId: "outra-pessoa-id" }));
 
-      await criarLeadManual({
+      await criarLeadManualAction({
         nome: "X",
         telefone: "11988880003",
         responsavelId: "outra-pessoa-id",
@@ -175,7 +265,7 @@ describe("criarLeadManual", () => {
       usuarioAtualMock.mockResolvedValue(usuarioFake({ id: "vendedor-4" }));
       criarLeadMock.mockResolvedValue(leadFake({ responsavelId: "vendedor-4" }));
 
-      await criarLeadManual({ nome: "X", telefone: "11988880006", responsavelId: "vendedor-4" });
+      await criarLeadManualAction({ nome: "X", telefone: "11988880006", responsavelId: "vendedor-4" });
 
       expect(revalidatePathMock).toHaveBeenCalledWith("/(painel)", "layout");
     }
@@ -186,37 +276,118 @@ describe("criarLeadManual", () => {
     usuarioAtualMock.mockResolvedValue(vendedor);
     criarLeadMock.mockResolvedValue(leadFake({ responsavelId: vendedor.id }));
 
-    await criarLeadManual({ nome: "X", telefone: "11988880004", responsavelId: "vendedor-2" });
+    await criarLeadManualAction({ nome: "X", telefone: "11988880004", responsavelId: "vendedor-2" });
 
     expect(criarLeadMock).toHaveBeenCalledWith(expect.objectContaining({ responsavelId: "vendedor-2" }));
   });
 
   it(
-    "propaga 'Não autenticado' sem chamar hasPermission nem o service quando usuarioAtual rejeita " +
-      "(sessão ausente OU usuário desativado — fix 1: os dois casos chegam aqui do mesmo jeito)",
+    "sessão inválida vira resultado, sem chamar hasPermission nem o service " +
+      "(sessão ausente OU usuário desativado — os dois casos chegam aqui do mesmo jeito)",
     async () => {
       usuarioAtualMock.mockRejectedValue(new Error("Não autenticado"));
 
-      await expect(
-        criarLeadManual({ nome: "X", telefone: "11988880005", responsavelId: "qualquer" })
-      ).rejects.toThrow("Não autenticado");
+      const resultado = await criarLeadManualAction({
+        nome: "X",
+        telefone: "11988880005",
+        responsavelId: "qualquer",
+      });
 
+      // Antes esta action LANÇAVA, e o Next redige erro não tratado de Server
+      // Action em produção: a pessoa lia um identificador opaco no lugar de
+      // "sua sessão expirou".
+      expect(resultado).toEqual({ ok: false, erro: MENSAGEM_SESSAO_INVALIDA });
       expect(hasPermission).not.toHaveBeenCalled();
       expect(criarLeadMock).not.toHaveBeenCalled();
     }
   );
 });
 
-describe("moverLeadDeEtapa", () => {
-  it("rejeita e NÃO chama o service quando o chamador não tem a permissão mover_lead", async () => {
+describe("moverLeadDeEtapaAction", () => {
+  it("recusa e NÃO chama o service quando o chamador não tem a permissão mover_lead", async () => {
     usuarioAtualMock.mockResolvedValue(usuarioFake({ papel: "VENDEDOR" }));
     vi.mocked(hasPermission).mockReturnValueOnce(false); // simula um papel sem mover_lead
 
-    await expect(moverLeadDeEtapa({ leadId: "lead-1", novaStageId: "stage-2" })).rejects.toThrow(
-      "Sem permissão para mover lead"
+    const resultado = await moverLeadDeEtapaAction({ leadId: "lead-1", novaStageId: "stage-2" });
+
+    expect(resultado).toEqual({ ok: false, erro: "Você não tem permissão para mover leads." });
+    expect(moverEtapaMock).not.toHaveBeenCalled();
+  });
+
+  it("sucesso devolve só o resultado, nunca o Lead", async () => {
+    usuarioAtualMock.mockResolvedValue(usuarioFake({ id: "vendedor-12" }));
+    moverEtapaMock.mockResolvedValue(leadFake({ sessionId: "sess-secreta", utm: { t: "x" } }));
+
+    const resultado = await moverLeadDeEtapaAction({ leadId: "lead-1", novaStageId: "stage-2" });
+
+    expect(resultado).toEqual({ ok: true });
+    expect(JSON.stringify(resultado)).not.toContain("sess-secreta");
+  });
+
+  // ─── Mover mudava o banco e deixava quatro telas em cache velho ───────
+  //
+  // Esta action não invalidava NADA. O quadro ficava certo pela atualização
+  // otimista e todo o resto mentia: `/leads` com a etapa anterior na coluna
+  // "Etapa", o histórico do contato idem, e o painel com a contagem por etapa
+  // de antes — logo depois de ele ter passado a calcular a taxa de conversão
+  // com `groupBy` exato. Número exato servido de cache velho parece confiável,
+  // que é o que o torna pior que um aproximado.
+  it("mover invalida as quatro telas que mostram a etapa, mais a do contato", async () => {
+    usuarioAtualMock.mockResolvedValue(usuarioFake({ id: "vendedor-14" }));
+    moverEtapaMock.mockResolvedValue(leadFake({ id: "lead-1", contactId: "contato-9" }));
+
+    await moverLeadDeEtapaAction({ leadId: "lead-1", novaStageId: "stage-2" });
+
+    expect(revalidatePathMock).toHaveBeenCalledWith("/leads");
+    expect(revalidatePathMock).toHaveBeenCalledWith("/leads/kanban");
+    expect(revalidatePathMock).toHaveBeenCalledWith("/leads/lead-1");
+    // `/` é o painel — a razão de esta lacuna ter deixado de ser barata.
+    expect(revalidatePathMock).toHaveBeenCalledWith("/");
+    // `contatos/[id]` renderiza `lead.etapaNome`; sem isto o histórico da
+    // pessoa mostraria a etapa anterior.
+    expect(revalidatePathMock).toHaveBeenCalledWith("/contatos/contato-9");
+  });
+
+  // O `contactId` vem da linha DEVOLVIDA pelo serviço — a action só recebe
+  // `leadId` e `novaStageId`. Um lead de clique de WhatsApp pode não ter
+  // contato ainda (`Lead.contact` é nullable), e aí não existe caminho de
+  // contato para invalidar.
+  it("lead sem contato: invalida o resto sem inventar uma rota de contato", async () => {
+    usuarioAtualMock.mockResolvedValue(usuarioFake({ id: "vendedor-15" }));
+    moverEtapaMock.mockResolvedValue(leadFake({ id: "lead-1", contactId: null }));
+
+    await moverLeadDeEtapaAction({ leadId: "lead-1", novaStageId: "stage-2" });
+
+    expect(revalidatePathMock).toHaveBeenCalledWith("/");
+    const rotas = revalidatePathMock.mock.calls.map((c) => c[0] as string);
+    expect(rotas.some((rota) => rota.startsWith("/contatos/"))).toBe(false);
+  });
+
+  it("mover recusado não invalida cache nenhum", async () => {
+    usuarioAtualMock.mockResolvedValue(usuarioFake({ papel: "VENDEDOR" }));
+    vi.mocked(hasPermission).mockReturnValueOnce(false);
+
+    await moverLeadDeEtapaAction({ leadId: "lead-1", novaStageId: "stage-2" });
+
+    expect(revalidatePathMock).not.toHaveBeenCalled();
+  });
+
+  // `Etapa não encontrada: "<stageId>"` interpolava um cuid interno, e
+  // `MENSAGENS_SEGURAS` o repassava verbatim ao navegador. A pessoa não pode
+  // fazer nada com um id; `MENSAGENS_MELHORADAS` troca por uma frase acionável.
+  it("etapa inexistente vira frase acionável, sem o id interno", async () => {
+    usuarioAtualMock.mockResolvedValue(usuarioFake({ id: "vendedor-13" }));
+    moverEtapaMock.mockRejectedValue(
+      new Error('Etapa não encontrada: "clx9etapa0000segredo" não corresponde a nenhuma etapa do funil.')
     );
 
-    expect(moverEtapaMock).not.toHaveBeenCalled();
+    const resultado = await moverLeadDeEtapaAction({
+      leadId: "lead-1",
+      novaStageId: "clx9etapa0000segredo",
+    });
+
+    expect(resultado).toEqual({ ok: false, erro: "Essa etapa não existe mais. Atualize a página." });
+    expect(JSON.stringify(resultado)).not.toContain("clx9etapa0000segredo");
   });
 
   it("delega ao service com autorId derivado da sessão (nunca do input) quando o chamador tem permissão", async () => {
@@ -224,7 +395,7 @@ describe("moverLeadDeEtapa", () => {
     usuarioAtualMock.mockResolvedValue(vendedor);
     moverEtapaMock.mockResolvedValue(leadFake({ stageId: "stage-2" }));
 
-    await moverLeadDeEtapa({ leadId: "lead-1", novaStageId: "stage-2" });
+    await moverLeadDeEtapaAction({ leadId: "lead-1", novaStageId: "stage-2" });
 
     expect(moverEtapaMock).toHaveBeenCalledWith({
       leadId: "lead-1",
@@ -234,15 +405,14 @@ describe("moverLeadDeEtapa", () => {
   });
 
   it(
-    "propaga 'Não autenticado' sem chamar hasPermission nem o service quando usuarioAtual rejeita " +
+    "sessão inválida vira resultado, sem chamar hasPermission nem o service " +
       "(sessão ausente OU usuário desativado)",
     async () => {
       usuarioAtualMock.mockRejectedValue(new Error("Não autenticado"));
 
-      await expect(moverLeadDeEtapa({ leadId: "lead-1", novaStageId: "stage-2" })).rejects.toThrow(
-        "Não autenticado"
-      );
+      const resultado = await moverLeadDeEtapaAction({ leadId: "lead-1", novaStageId: "stage-2" });
 
+      expect(resultado).toEqual({ ok: false, erro: MENSAGEM_SESSAO_INVALIDA });
       expect(hasPermission).not.toHaveBeenCalled();
       expect(moverEtapaMock).not.toHaveBeenCalled();
     }

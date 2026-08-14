@@ -32,7 +32,7 @@ async function exigirContatoExistente(contactId: string): Promise<void> {
  * `criarLead`/`adicionarNota` (Task 13/17): esta função é a camada testável
  * por Vitest sem precisar de sessão HTTP. Quem chama com um `responsavelId`
  * forjado é responsabilidade de quem chama — a barreira real fica em
- * `criarMinhaTask` (`actions.ts`), que deriva `responsavelId` de
+ * `criarMinhaTaskAction` (`actions.ts`), que deriva `responsavelId` de
  * `usuarioAtual()` e nunca aceita esse campo do cliente.
  *
  * `titulo` é aparado e validado (mesma disciplina de `adicionarNota` para
@@ -115,7 +115,7 @@ export async function criarTask(input: {
  * pessoal ("ligar pro fornecedor às 15h"), e a Fase 1 não tem atribuição de
  * tarefa a outra pessoa (ver comentário em `actions.ts`). Sem esta
  * checagem, qualquer usuário autenticado encerraria a tarefa de qualquer
- * colega só chamando `concluirMinhaTask` com um id adivinhado — não é
+ * colega só chamando `concluirMinhaTaskAction` com um id adivinhado — não é
  * hipotético: nada em `Task.id` (`cuid()`) impede alguém com uma conta
  * legítima de tentar ids vizinhos aos que já viu na própria lista.
  *

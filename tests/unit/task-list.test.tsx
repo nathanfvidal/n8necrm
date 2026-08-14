@@ -2,7 +2,7 @@
 //
 // Cobre só a lógica de ramificação do client component (mesma instrução das
 // outras Tasks): remoção otimista ao clicar "Concluir", rollback + mensagem
-// quando o servidor rejeita (o caso central da Task 18: `concluirMinhaTask`
+// quando o servidor rejeita (o caso central da Task 18: `concluirMinhaTaskAction`
 // lança "Tarefa não encontrada" quando o id não pertence a quem clicou —
 // ver a checagem de dono em `concluirTask`, core/tasks/service.ts), que a
 // data exibida usa `formatarDataCivilBR` (não desloca de dia), e (fix round
@@ -23,7 +23,7 @@ const editarTaskActionMock = vi.fn();
 const excluirTaskActionMock = vi.fn();
 const reabrirTaskActionMock = vi.fn();
 vi.mock("@/core/tasks/actions", () => ({
-  concluirMinhaTask: (...args: unknown[]) => concluirMinhaTaskMock(...args),
+  concluirMinhaTaskAction: (...args: unknown[]) => concluirMinhaTaskMock(...args),
   editarTaskAction: (...args: unknown[]) => editarTaskActionMock(...args),
   excluirTaskAction: (...args: unknown[]) => excluirTaskActionMock(...args),
   reabrirTaskAction: (...args: unknown[]) => reabrirTaskActionMock(...args),
@@ -68,7 +68,7 @@ describe("TaskList", () => {
   });
 
   it("conclusão com sucesso: remove a tarefa da lista (otimista), mantém as demais, sem erro", async () => {
-    concluirMinhaTaskMock.mockResolvedValue({});
+    concluirMinhaTaskMock.mockResolvedValue({ ok: true });
     render(<TaskList tasks={TAREFAS_TESTE} />);
 
     fireEvent.click(screen.getAllByRole("button", { name: "Concluir" })[0]);
@@ -83,7 +83,10 @@ describe("TaskList", () => {
     "conclusão rejeitada pelo servidor ('Tarefa não encontrada' — id de outro dono ou já " +
       "inexistente): reinsere a tarefa (rollback) e mostra mensagem de erro amigável",
     async () => {
-      concluirMinhaTaskMock.mockRejectedValue(new Error("Tarefa não encontrada"));
+      concluirMinhaTaskMock.mockResolvedValue({
+        ok: false,
+        erro: "Essa tarefa não existe mais ou não pertence a você. Atualize a página.",
+      });
       render(<TaskList tasks={TAREFAS_TESTE} />);
 
       fireEvent.click(screen.getAllByRole("button", { name: "Concluir" })[0]);
@@ -95,8 +98,32 @@ describe("TaskList", () => {
     }
   );
 
+  // ─── O teste que a unificação existe para não quebrar ─────────────────
+  //
+  // A recusa do servidor deixou de chegar como EXCEÇÃO e passou a chegar como
+  // `{ ok: false }`. Um `handleConcluir` que só olhasse o `catch` desfaria o
+  // teste acima; um que só olhasse o resultado desfaria este. Os dois precisam
+  // reinserir a tarefa, porque o desfecho de não reinserir é o pior que existe
+  // nesta tela: a tarefa some da lista e continua pendente no banco, e quem
+  // clicou vai embora achando que resolveu.
+  it(
+    "falha de REDE (a action nem chega a responder) também reinsere a tarefa — " +
+      "'não lança' é promessa do código do servidor, não do transporte",
+    async () => {
+      concluirMinhaTaskMock.mockRejectedValue(new TypeError("Failed to fetch"));
+      render(<TaskList tasks={TAREFAS_TESTE} />);
+
+      fireEvent.click(screen.getAllByRole("button", { name: "Concluir" })[0]);
+
+      await waitFor(() => {
+        expect(screen.getByRole("alert").textContent).toMatch(/falar com o servidor/i);
+      });
+      expect(screen.getByText("Ligar pro fornecedor")).toBeTruthy();
+    }
+  );
+
   it("botão 'Dispensar' limpa a mensagem de erro sem afetar a lista", async () => {
-    concluirMinhaTaskMock.mockRejectedValue(new Error("Tarefa não encontrada"));
+    concluirMinhaTaskMock.mockResolvedValue({ ok: false, erro: "Tarefa não encontrada" });
     render(<TaskList tasks={TAREFAS_TESTE} />);
 
     fireEvent.click(screen.getAllByRole("button", { name: "Concluir" })[0]);
@@ -156,7 +183,7 @@ describe("TaskList — tarefa de outra pessoa (seção 'Tarefas' de /leads/[id],
   });
 
   it("clicar no botão de UMA tarefa própria nunca afeta a tarefa do colega ao lado", async () => {
-    concluirMinhaTaskMock.mockResolvedValue({});
+    concluirMinhaTaskMock.mockResolvedValue({ ok: true });
     render(<TaskList tasks={TAREFAS_MISTAS} />);
 
     fireEvent.click(screen.getByRole("button", { name: "Concluir" }));

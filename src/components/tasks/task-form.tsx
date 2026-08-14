@@ -10,7 +10,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { criarMinhaTask } from "@/core/tasks/actions";
+import { criarMinhaTaskAction } from "@/core/tasks/actions";
+import { registrarFalhaDeRede, type ResultadoAcao } from "@/lib/acao";
 import { parseDataCivil } from "@/lib/date";
 
 export type OpcaoDeContato = { id: string; nome: string };
@@ -43,33 +44,26 @@ const schema = z.object({
 type FormValues = z.infer<typeof schema>;
 
 /**
- * Traduz o que `criarMinhaTask`/`parseDataCivil` podem lançar numa mensagem
- * segura para exibir a quem preencheu o formulário, sem vazar detalhe de
- * infraestrutura no caso genérico — mesmo padrão de `mensagemDeErro` em
- * `lead-form.tsx` (Task 14).
+ * Traduz o que `parseDataCivil` lança — e SÓ isso.
+ *
+ * Esta função era uma escada de seis comparações contra `erro.message`:
+ * "Título obrigatório", "Lead não encontrado", "Contato não encontrado",
+ * "Descrição ...", "Não autenticado". Todas essas frases nascem no servidor, e
+ * casá-las por texto aqui significava que renomear uma mensagem em
+ * `service.ts` apagaria a tradução em silêncio — sem erro de tipo, sem teste
+ * vermelho no ponto da mudança, e a pessoa passaria a ler "Não foi possível
+ * salvar a tarefa" para um campo que ela consegue corrigir. Agora
+ * `criarMinhaTaskAction` devolve a mensagem pronta em `resultado.erro`.
+ *
+ * `parseDataCivil` (`src/lib/date.ts`) fica: ele roda AQUI, no navegador,
+ * antes de qualquer chamada — o texto que ele lança é nosso, deste lado, e não
+ * atravessa fronteira nenhuma.
  */
-function mensagemDeErro(erro: unknown): string {
-  if (erro instanceof Error) {
-    if (/^Data inválida/.test(erro.message)) {
-      return erro.message;
-    }
-    if (/^Título obrigatório/.test(erro.message)) {
-      return erro.message;
-    }
-    if (/^Lead não encontrado/.test(erro.message)) {
-      return "Esse lead não existe mais. Atualize a página.";
-    }
-    if (/^Contato não encontrado/.test(erro.message)) {
-      return "Esse contato não existe mais. Atualize a página.";
-    }
-    if (/^Descrição /.test(erro.message)) {
-      return erro.message;
-    }
-    if (erro.message === "Não autenticado") {
-      return "Sua sessão expirou ou sua conta foi desativada. Atualize a página e faça login novamente.";
-    }
+function mensagemDeDataInvalida(erro: unknown): string {
+  if (erro instanceof Error && /^Data inválida/.test(erro.message)) {
+    return erro.message;
   }
-  return "Não foi possível salvar a tarefa. Tente novamente em instantes.";
+  return "Data inválida.";
 }
 
 /**
@@ -78,7 +72,7 @@ function mensagemDeErro(erro: unknown): string {
  * URL da página — não é segredo, mesmo raciocínio de `LeadNoteForm` para
  * `leadId` de nota).
  *
- * `responsavelId` NUNCA é enviado por este formulário: `criarMinhaTask`
+ * `responsavelId` NUNCA é enviado por este formulário: `criarMinhaTaskAction`
  * (Server Action) deriva quem age da sessão (Task 13/18) — não há campo
  * escondido nem `<input type="hidden">` para isso, ao contrário de
  * `LeadForm`, porque a Fase 1 nem oferece a escolha de atribuir a outra
@@ -121,13 +115,23 @@ export function TaskForm({
   async function onSubmit(data: FormValues) {
     setErroEnvio(null);
 
+    // `parseDataCivil` (src/lib/date.ts) ancora a string "AAAA-MM-DD" do
+    // <input type="date"> em meia-noite UTC daquele dia civil — ver o
+    // comentário lá sobre o deslocamento de um dia que essa escolha evita.
+    // PODE lançar (formato inválido, dia que não existe no calendário), e é a
+    // única coisa deste envio que ainda lança — por isso o `try` encolheu para
+    // caber só ela. Mesma forma de `salvarEdicao` em `task-list.tsx`.
+    let vencimento: Date;
     try {
-      // `parseDataCivil` (src/lib/date.ts) ancora a string "AAAA-MM-DD" do
-      // <input type="date"> em meia-noite UTC daquele dia civil — ver o
-      // comentário lá sobre o deslocamento de um dia que essa escolha
-      // evita. PODE lançar (formato inválido, dia que não existe no
-      // calendário) — por isso fica dentro do mesmo try que a action.
-      await criarMinhaTask({
+      vencimento = parseDataCivil(data.vencimento);
+    } catch (erro) {
+      setErroEnvio(mensagemDeDataInvalida(erro));
+      return;
+    }
+
+    let resultado: ResultadoAcao;
+    try {
+      resultado = await criarMinhaTaskAction({
         titulo: data.titulo,
         // `|| undefined` e não a string crua: o `<textarea>` vazio manda `""`,
         // e o `<select>` sem escolha também. Mandar `""` como `contactId`
@@ -135,16 +139,25 @@ export function TaskForm({
         // campo que a pessoa simplesmente não preencheu.
         descricao: data.descricao || undefined,
         contactId: data.contactId || undefined,
-        vencimento: parseDataCivil(data.vencimento),
+        vencimento,
         leadId,
       });
-      reset(vazio);
-      router.refresh();
     } catch (erro) {
+      // A action não lança — a REDE lança. Ver `registrarFalhaDeRede` em
+      // `src/lib/acao.ts`.
+      setErroEnvio(registrarFalhaDeRede("Falha ao criar tarefa", erro));
+      return;
+    }
+
+    if (!resultado.ok) {
       // De propósito NÃO chamamos `reset` aqui: em caso de erro a pessoa
       // não pode perder o que já preencheu.
-      setErroEnvio(mensagemDeErro(erro));
+      setErroEnvio(resultado.erro);
+      return;
     }
+
+    reset(vazio);
+    router.refresh();
   }
 
   return (

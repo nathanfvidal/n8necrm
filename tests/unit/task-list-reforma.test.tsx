@@ -16,7 +16,7 @@ const reabrirTaskActionMock = vi.fn();
 // `task-list.tsx` as IMPORTA, e um mock que devolva objeto sem elas as deixa
 // `undefined`. O render passa, e a falha só aparece no clique.
 vi.mock("@/core/tasks/actions", () => ({
-  concluirMinhaTask: (...args: unknown[]) => concluirMinhaTaskMock(...args),
+  concluirMinhaTaskAction: (...args: unknown[]) => concluirMinhaTaskMock(...args),
   editarTaskAction: (...args: unknown[]) => editarTaskActionMock(...args),
   excluirTaskAction: (...args: unknown[]) => excluirTaskActionMock(...args),
   reabrirTaskAction: (...args: unknown[]) => reabrirTaskActionMock(...args),

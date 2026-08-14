@@ -7,23 +7,37 @@ import { ehSessaoInvalida, MENSAGEM_SESSAO_INVALIDA, type ResultadoAcao } from "
 import { criarTask, concluirTask, editarTask, excluirTask, reabrirTask } from "./service";
 
 /**
- * ⚠️ Este arquivo tem DUAS convenções de erro, e isso é dívida declarada.
+ * Todas as cinco actions deste arquivo devolvem `ResultadoAcao`
+ * (`src/lib/acao.ts`). Não lançam.
  *
- * `criarMinhaTask` e `concluirMinhaTask` LANÇAM; `editarTaskAction`,
- * `excluirTaskAction` e `reabrirTaskAction` devolvem `ResultadoAcao`
- * (`src/lib/acao.ts:50-56`). As que lançam vieram antes de `acao.ts` existir,
- * e o rollback otimista de `useTaskList` (`task-list.tsx`) é dirigido pelo
- * `catch` delas — trocar a convenção mexe no único lugar do sistema onde uma
- * regressão silenciosa significa "a tarefa sumiu da lista sem ter sido
- * concluída".
+ * ## A dívida que isto pagou
  *
- * Unificar é trabalho de branch própria, onde seja O assunto e o rollback
- * possa ser reprovado com atenção inteira. Fica registrado aqui porque
- * inconsistência declarada é dívida; inconsistência silenciosa é armadilha
- * para quem escrever a próxima action e copiar a vizinha errada.
+ * Até aqui `criarMinhaTask` e `concluirMinhaTask` LANÇAVAM — eram anteriores a
+ * `acao.ts` — enquanto editar, excluir e reabrir devolviam resultado. Duas
+ * convenções no mesmo arquivo, com três consequências que só aparecem juntas:
  *
- * Regra para quem chegar agora: **action nova nasce devolvendo
- * `ResultadoAcao`**, como `reabrirTaskAction` faz.
+ * 1. **Mensagem redigida.** O Next redige erro não tratado de Server Action em
+ *    produção. Nas duas que lançavam, "Vencimento inválido" e "banco fora do
+ *    ar" chegavam à tela com a mesma mensagem opaca.
+ * 2. **Texto diferente para o mesmo erro.** Uma tarefa que não é sua dizia
+ *    "Essa tarefa não existe mais ou não pertence a você" ao concluir e
+ *    "Tarefa não encontrada" ao excluir — o mesmo estado, duas frases,
+ *    conforme o botão. As frases boas moravam no cliente, onde só serviam a um
+ *    caminho; agora moram aqui e valem para os cinco.
+ * 3. **Casamento de string no cliente.** `task-list.tsx` e `task-form.tsx`
+ *    comparavam `erro.message` com texto do servidor para decidir o que
+ *    mostrar. Renomear uma mensagem em `service.ts` quebraria isso em
+ *    silêncio, sem erro de tipo e sem teste vermelho no ponto da mudança.
+ *
+ * ## O que exigia cuidado, e como foi tratado
+ *
+ * O rollback otimista de `useTaskList` (`task-list.tsx`) era dirigido pelo
+ * `catch`: a tarefa some da lista antes da confirmação e volta se o servidor
+ * recusar. Com a action devolvendo resultado, o `catch` deixaria de disparar e
+ * a tarefa sumiria da tela sem ter sido concluída — regressão silenciosa, e a
+ * pior possível para quem usa. Por isso o chamador trata os DOIS caminhos:
+ * `!resultado.ok` e a exceção que sobra (falha de rede, `revalidatePath`
+ * quebrando). Ver o comentário em `handleConcluir`.
  */
 
 /**
@@ -42,25 +56,35 @@ import { criarTask, concluirTask, editarTask, excluirTask, reabrirTask } from ".
  * nota, `leads/actions.ts`) — não é segredo, e `criarTask` (service.ts)
  * confere que ele corresponde a um lead real antes de gravar.
  */
-export async function criarMinhaTask(input: {
+export async function criarMinhaTaskAction(input: {
   titulo: string;
   descricao?: string;
   vencimento: Date;
   leadId?: string;
   contactId?: string | null;
-}): Promise<void> {
-  const autor = await usuarioAtual();
-  await criarTask({ ...input, responsavelId: autor.id });
+}): Promise<ResultadoAcao> {
+  try {
+    const autor = await usuarioAtual();
+    await criarTask({ ...input, responsavelId: autor.id });
+  } catch (erro) {
+    return paraResultadoErro(erro, "Não foi possível salvar a tarefa. Tente novamente em instantes.");
+  }
   // `revalidatePath` não é estilo: sem ele, só a aba de quem agiu conserta
   // (via `router.refresh()` no formulário), e o cache de rota fica velho para
   // todo mundo — inclusive para a própria pessoa em outra aba, e para o
   // contador do painel. As actions de editar/excluir já faziam isto; criar e
   // concluir tinham ficado de fora.
+  //
+  // Fora do `try` de propósito: revalidar cache não é parte de "a tarefa foi
+  // criada". Dentro, uma falha de revalidação viraria "não foi possível
+  // salvar" para uma tarefa que ESTÁ no banco — a pessoa tentaria de novo e
+  // criaria a segunda.
   revalidatePath("/tasks");
   revalidatePath("/");
   if (input.leadId) {
     revalidatePath(`/leads/${input.leadId}`);
   }
+  return { ok: true };
 }
 
 /**
@@ -69,21 +93,30 @@ export async function criarMinhaTask(input: {
  * verifica dono; ver o comentário lá sobre por que essa checagem existe e
  * por que difere da decisão de leads (`moverEtapa`, que nunca checa dono).
  */
-export async function concluirMinhaTask(taskId: string): Promise<void> {
-  const autor = await usuarioAtual();
-  // A linha volta do serviço porque `leadId` é preciso para invalidar a
-  // página do lead — mas NÃO atravessa a fronteira: o valor de retorno de uma
-  // Server Action é serializado para o navegador, e devolver `Task` mandava a
-  // linha inteira (`responsavelId`, `contactId`, `criadoEm`) para um chamador
-  // que descarta o retorno. É a tarefa do próprio usuário, então não vazava
-  // entre pessoas — mas é o mesmo padrão que produziu o vazamento do funil, e
-  // a regra da casa passou a ser: só atravessa o que a tela usa.
-  const concluida = await concluirTask({ taskId, autorId: autor.id });
+export async function concluirMinhaTaskAction(taskId: string): Promise<ResultadoAcao> {
+  let leadIdParaRevalidar: string | null = null;
+  try {
+    const autor = await usuarioAtual();
+    // A linha volta do serviço porque `leadId` é preciso para invalidar a
+    // página do lead — mas NÃO atravessa a fronteira: o valor de retorno de
+    // uma Server Action é serializado para o navegador, e devolver `Task`
+    // mandava a linha inteira (`responsavelId`, `contactId`, `criadoEm`) para
+    // um chamador que descarta o retorno. É a tarefa do próprio usuário, então
+    // não vazava entre pessoas — mas é o mesmo padrão que produziu o
+    // vazamento do funil, e a regra da casa passou a ser: só atravessa o que
+    // a tela usa. `ResultadoAcao` continua honrando isso: `{ ok: true }` e
+    // nada mais.
+    const concluida = await concluirTask({ taskId, autorId: autor.id });
+    leadIdParaRevalidar = concluida.leadId;
+  } catch (erro) {
+    return paraResultadoErro(erro, "Não foi possível concluir a tarefa. Tente novamente em instantes.");
+  }
   revalidatePath("/tasks");
   revalidatePath("/");
-  if (concluida.leadId) {
-    revalidatePath(`/leads/${concluida.leadId}`);
+  if (leadIdParaRevalidar) {
+    revalidatePath(`/leads/${leadIdParaRevalidar}`);
   }
+  return { ok: true };
 }
 
 /**
@@ -104,7 +137,36 @@ const MENSAGENS_SEGURAS = [
   /^Contato /,
 ];
 
+/**
+ * Mensagens de domínio que ganham uma frase melhor antes de ir para a tela.
+ *
+ * Estas três frases existiam, palavra por palavra, dentro de `task-list.tsx` e
+ * `task-form.tsx` — os dois componentes comparavam `erro.message` com o texto
+ * do servidor para escolher o que mostrar. Ficavam presas ao caminho que
+ * lançava: quem clicasse "Excluir" na mesma tarefa inexistente lia o "Tarefa
+ * não encontrada" cru. Aqui elas valem para as cinco actions.
+ *
+ * "Tarefa não encontrada" é a mesma resposta para "não existe" e "não é sua",
+ * de propósito (ver `concluirTask`, service.ts) — e a frase melhorada preserva
+ * essa ambiguidade em vez de dedurar qual dos dois casos ocorreu.
+ *
+ * A ordem importa: esta lista é consultada ANTES de `MENSAGENS_SEGURAS`, senão
+ * o repasse cru venceria.
+ */
+const MENSAGENS_MELHORADAS: [RegExp, string][] = [
+  [
+    /^Tarefa não encontrada/,
+    "Essa tarefa não existe mais ou não pertence a você. Atualize a página.",
+  ],
+  [/^Lead não encontrado/, "Esse lead não existe mais. Atualize a página."],
+  [/^Contato não encontrado/, "Esse contato não existe mais. Atualize a página."],
+];
+
 function paraResultadoErro(erro: unknown, mensagemGenerica: string): { ok: false; erro: string } {
+  if (erro instanceof Error) {
+    const melhorada = MENSAGENS_MELHORADAS.find(([padrao]) => padrao.test(erro.message));
+    if (melhorada) return { ok: false, erro: melhorada[1] };
+  }
   if (erro instanceof Error && MENSAGENS_SEGURAS.some((padrao) => padrao.test(erro.message))) {
     return { ok: false, erro: erro.message };
   }

@@ -59,7 +59,7 @@ describe("NotificationBell", () => {
     "marcar como lida com sucesso: remove a notificação da lista (otimista), atualiza a " +
       "contagem e chama router.refresh()",
     async () => {
-      marcarNotificacaoComoLidaActionMock.mockResolvedValue(undefined);
+      marcarNotificacaoComoLidaActionMock.mockResolvedValue({ ok: true });
       render(<NotificationBell notificacoes={NOTIFICACOES_TESTE} />);
       fireEvent.click(screen.getByRole("button", { name: "Notificações" }));
 
@@ -74,23 +74,53 @@ describe("NotificationBell", () => {
   );
 
   it(
-    "marcar como lida rejeitada pelo servidor (checagem de dono, notificação de outra pessoa " +
-      "ou já lida): reinsere a notificação (rollback) e mostra mensagem de erro, sem chamar router.refresh()",
+    "recusada pelo servidor (checagem de dono, notificação de outra pessoa ou já lida): " +
+      "reinsere a notificação (rollback) e mostra a frase do servidor, sem chamar router.refresh()",
     async () => {
-      marcarNotificacaoComoLidaActionMock.mockRejectedValue(new Error("Notificação não encontrada"));
+      // A frase vem de `core/notifications/actions.ts`. Este componente nunca
+      // chegou a traduzir "Notificação não encontrada": a checagem de dono em
+      // `marcarComoLida` produzia esse erro e o sino mostrava o genérico
+      // "Não foi possível marcar como lida" — a pessoa não ficava sabendo que
+      // a notificação simplesmente não existia mais.
+      marcarNotificacaoComoLidaActionMock.mockResolvedValue({
+        ok: false,
+        erro: "Essa notificação não existe mais. Atualize a página.",
+      });
       render(<NotificationBell notificacoes={NOTIFICACOES_TESTE} />);
       fireEvent.click(screen.getByRole("button", { name: "Notificações" }));
 
       fireEvent.click(screen.getAllByRole("button", { name: "Marcar como lida" })[0]);
 
       await waitFor(() => {
-        expect(screen.getByRole("alert").textContent).toMatch(/Não foi possível marcar como lida/);
+        expect(screen.getByRole("alert").textContent).toMatch(/não existe mais/);
       });
       expect(screen.getByText(/Carlos Silva/)).toBeTruthy();
       expect(screen.getByText("2")).toBeTruthy();
       expect(refreshMock).not.toHaveBeenCalled();
     }
   );
+
+  // A outra metade do rollback: a recusa chega como VALOR, a queda de rede
+  // como EXCEÇÃO, e os dois precisam reinserir. Uma notificação sumida da
+  // lista sem ter sido marcada reaparece no próximo carregamento — parece que
+  // o sistema esqueceu.
+  it("falha de REDE: reinsere igual e avisa, sem vazar o erro cru", async () => {
+    const erroDoConsole = vi.spyOn(console, "error").mockImplementation(() => {});
+    marcarNotificacaoComoLidaActionMock.mockRejectedValue(new TypeError("Failed to fetch"));
+    render(<NotificationBell notificacoes={NOTIFICACOES_TESTE} />);
+    fireEvent.click(screen.getByRole("button", { name: "Notificações" }));
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Marcar como lida" })[0]);
+
+    await waitFor(() => {
+      expect(screen.getByRole("alert").textContent).toMatch(/falar com o servidor/i);
+    });
+    expect(screen.getByText(/Carlos Silva/)).toBeTruthy();
+    expect(screen.getByText("2")).toBeTruthy();
+    expect(screen.queryByText(/Failed to fetch/)).toBeNull();
+    expect(refreshMock).not.toHaveBeenCalled();
+    erroDoConsole.mockRestore();
+  });
 
   // Sem `href`/`textoLink` — o caso que `apresentarNotificacoes` produz para
   // payload malformado ou tipo desconhecido — nenhum link é desenhado, e o

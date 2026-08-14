@@ -7,12 +7,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import {
-  concluirMinhaTask,
+  concluirMinhaTaskAction,
   editarTaskAction,
   excluirTaskAction,
   reabrirTaskAction,
 } from "@/core/tasks/actions";
 import { EmptyState } from "@/components/empty-state";
+import { registrarFalhaDeRede } from "@/lib/acao";
 import { ConfirmarDialogo } from "@/components/confirmar-dialogo";
 import type { OpcaoDeContato } from "@/components/tasks/task-form";
 import { formatarDataCivilBR, parseDataCivil } from "@/lib/date";
@@ -48,22 +49,24 @@ export type TaskLinha = {
 };
 
 /**
- * Traduz o que `concluirMinhaTask` pode lançar numa mensagem segura — mesmo
- * padrão de `mensagemDeErroMover` em `kanban-board.tsx` (Task 15). O caso
- * central aqui é "Tarefa não encontrada" (`concluirTask`, service.ts: id
- * inexistente OU tarefa de outro usuário) — ver o comentário lá sobre por
- * que as duas situações têm a MESMA mensagem, de propósito.
+ * Rede de segurança para a falha que NÃO chega como `{ ok: false }`.
+ *
+ * Esta função substituiu um `mensagemDeErroConcluir` que comparava
+ * `erro.message` com "Tarefa não encontrada" e "Não autenticado" — texto
+ * produzido pelo servidor, casado no cliente. Renomear a mensagem em
+ * `service.ts` quebraria o reconhecimento em silêncio, sem erro de tipo e sem
+ * teste vermelho no ponto da mudança. As frases boas viraram
+ * `MENSAGENS_MELHORADAS` em `core/tasks/actions.ts` e agora valem para as
+ * cinco actions, não só para esta.
+ *
+ * O que sobrou aqui é o caso que resultado nenhum cobre: `concluirMinhaTaskAction`
+ * promete não lançar, mas essa é promessa do CÓDIGO do servidor, não do
+ * transporte. Server Action é chamada de rede — conexão que cai entre o clique
+ * e a resposta, deploy no meio do caminho — e aí o `await` rejeita sem nunca
+ * ter entrado no `try` da action.
  */
-function mensagemDeErroConcluir(erro: unknown): string {
-  if (erro instanceof Error) {
-    if (erro.message === "Tarefa não encontrada") {
-      return "Essa tarefa não existe mais ou não pertence a você. Atualize a página.";
-    }
-    if (erro.message === "Não autenticado") {
-      return "Sua sessão expirou ou sua conta foi desativada. Atualize a página e faça login novamente.";
-    }
-  }
-  return "Não foi possível concluir a tarefa. Tente novamente em instantes.";
+function mensagemDeFalhaDeRede(erro: unknown): string {
+  return registrarFalhaDeRede("Falha ao concluir tarefa", erro);
 }
 
 function porVencimentoAsc(a: TaskLinha, b: TaskLinha): number {
@@ -123,14 +126,31 @@ export function useTaskList(tasksIniciais: TaskLinha[]) {
     // confirmação do servidor — "Concluir" precisa parecer instantâneo.
     setTasks((atual) => atual.filter((t) => t.id !== id));
 
-    try {
-      await concluirMinhaTask(id);
-    } catch (erroCapturado) {
-      // Reinsere a tarefa (rollback) se o servidor rejeitou — ex.: o id não
-      // pertence a quem clicou (checagem de dono, `concluirTask`), ou a
-      // sessão expirou entre o clique e a resposta.
+    // ─── DOIS caminhos de rollback, e os dois são obrigatórios ───
+    //
+    // Enquanto `concluirMinhaTask` LANÇAVA, o `catch` sozinho dava conta. Com
+    // a action devolvendo `ResultadoAcao`, a recusa do servidor (id que não é
+    // seu, sessão expirada) passa a chegar como VALOR — e um código que só
+    // olhasse o `catch` deixaria a tarefa sumida da lista sem ter sido
+    // concluída, em silêncio, que é o pior desfecho possível para quem está
+    // usando: some da tela, continua pendente no banco.
+    //
+    // O `catch` continua necessário pelo motivo oposto: a action promete não
+    // lançar, mas a chamada de rede pode falhar antes de alcançá-la.
+    // Arrow em `const`, e não `function desfazer`: declaração de função é
+    // içada para o topo do escopo, e o TypeScript a analisa de lá — onde
+    // `tarefa` ainda é `TaskLinha | undefined`, apesar do `return` acima. A
+    // arrow é criada aqui, com o estreitamento já valendo.
+    const desfazer = (mensagem: string) => {
       setTasks((atual) => [...atual, tarefa].sort(porVencimentoAsc));
-      setErro(mensagemDeErroConcluir(erroCapturado));
+      setErro(mensagem);
+    };
+
+    try {
+      const resultado = await concluirMinhaTaskAction(id);
+      if (!resultado.ok) desfazer(resultado.erro);
+    } catch (erroCapturado) {
+      desfazer(mensagemDeFalhaDeRede(erroCapturado));
     }
   }
 

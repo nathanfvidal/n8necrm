@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const prismaMock = vi.hoisted(() => ({
-  lead: { findUniqueOrThrow: vi.fn(), update: vi.fn(), findMany: vi.fn() },
+  lead: { findUniqueOrThrow: vi.fn(), update: vi.fn(), findMany: vi.fn(), groupBy: vi.fn() },
   pipelineStage: { findMany: vi.fn() },
 }));
 const auditoriaMock = vi.hoisted(() => vi.fn());
@@ -11,13 +11,18 @@ vi.mock("@/core/audit/log", () => ({ registrarAuditoria: auditoriaMock }));
 vi.mock("@/core/notifications/dispatch", () => ({ notificarNovoLead: vi.fn() }));
 
 import { arquivarLead, desarquivarLead } from "../../src/core/leads/service";
-import { listarLeads, listarLeadsPorEtapa } from "../../src/core/leads/queries";
+import {
+  listarLeads,
+  listarLeadsPorEtapa,
+  contarLeadsPorEtapa,
+} from "../../src/core/leads/queries";
 
 beforeEach(() => {
   vi.clearAllMocks();
   prismaMock.lead.findUniqueOrThrow.mockResolvedValue({ id: "lead-1", arquivadoEm: null });
   prismaMock.lead.update.mockImplementation(({ data }) => ({ id: "lead-1", ...data }));
   prismaMock.lead.findMany.mockResolvedValue([]);
+  prismaMock.lead.groupBy.mockResolvedValue([]);
   prismaMock.pipelineStage.findMany.mockResolvedValue([]);
 });
 
@@ -74,9 +79,20 @@ describe("todo caminho de listagem exclui arquivados", () => {
     expect(prismaMock.lead.findMany.mock.calls[0][0].where?.arquivadoEm).toBeUndefined();
   });
 
-  it("listarLeadsPorEtapa (kanban e painel) filtra", async () => {
+  it("listarLeadsPorEtapa (kanban) filtra", async () => {
     await listarLeadsPorEtapa();
     expect(prismaMock.lead.findMany.mock.calls[0][0].where).toMatchObject({
+      arquivadoEm: null,
+    });
+  });
+
+  // Caminho novo, e o mais fácil de esquecer: não devolve linha nenhuma, só
+  // número. Um arquivado contado aqui não aparece em lista alguma para
+  // denunciar o erro — ele só engorda o total do painel e afunda a taxa de
+  // conversão, que é o número que alguém olha para decidir alguma coisa.
+  it("contarLeadsPorEtapa (painel) filtra", async () => {
+    await contarLeadsPorEtapa();
+    expect(prismaMock.lead.groupBy.mock.calls[0][0].where).toMatchObject({
       arquivadoEm: null,
     });
   });

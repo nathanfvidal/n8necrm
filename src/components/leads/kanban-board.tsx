@@ -15,8 +15,9 @@ import {
 import type { PipelineStage } from "@prisma/client";
 
 import { KanbanCard } from "./kanban-card";
-import { moverLeadDeEtapa } from "@/core/leads/actions";
+import { moverLeadDeEtapaAction } from "@/core/leads/actions";
 import { EmptyState } from "@/components/empty-state";
+import { registrarFalhaDeRede } from "@/lib/acao";
 import type { LeadDoQuadro } from "@/core/leads/queries";
 
 type LeadsPorEtapa = Record<string, LeadDoQuadro[]>;
@@ -77,25 +78,23 @@ function moverLeadNoEstadoLocal(
 }
 
 /**
- * Traduz o que `moverLeadDeEtapa` pode lançar (actions.ts/service.ts, Task
- * 13) numa mensagem seguro para quem está arrastando o card. Espelha
- * `mensagemDeErro` de lead-form.tsx (Task 14) — os mesmos três modos de
- * falha esperados (sem permissão, sessão rejeitada, etapa inexistente),
- * dessa vez para mover em vez de criar.
+ * Rede de segurança para a falha que NÃO chega como `{ ok: false }`.
+ *
+ * Substituiu um `mensagemDeErroMover` que comparava `erro.message` com "Sem
+ * permissão para mover lead", "Não autenticado" e `/^Etapa não encontrada/` —
+ * três textos escritos no servidor, reconhecidos por string no cliente.
+ * Renomear qualquer um deles em `actions.ts`/`service.ts` apagaria a tradução
+ * sem produzir erro de tipo nem teste vermelho no ponto da mudança. As frases
+ * moram agora em `MENSAGENS_MELHORADAS`/`MENSAGENS_SEGURAS`
+ * (`core/leads/actions.ts`).
+ *
+ * O que sobra aqui é o caso que resultado nenhum cobre:
+ * `moverLeadDeEtapaAction` promete não lançar, mas isso é promessa do CÓDIGO
+ * do servidor, não do transporte. Arrastar um card é justamente a ação em que
+ * a rede cai no meio — a pessoa está mexendo no quadro, não parada.
  */
-function mensagemDeErroMover(erro: unknown): string {
-  if (erro instanceof Error) {
-    if (erro.message === "Sem permissão para mover lead") {
-      return erro.message;
-    }
-    if (erro.message === "Não autenticado") {
-      return "Sua sessão expirou ou sua conta foi desativada. Atualize a página e faça login novamente.";
-    }
-    if (/^Etapa não encontrada/.test(erro.message)) {
-      return "Essa etapa não existe mais. Atualize a página.";
-    }
-  }
-  return "Não foi possível mover o lead. Tente novamente em instantes.";
+function mensagemDeFalhaDeRede(erro: unknown): string {
+  return registrarFalhaDeRede("Falha ao mover lead", erro);
 }
 
 /**
@@ -153,21 +152,35 @@ export function useKanbanBoard(leadsPorEtapaInicial: LeadsPorEtapa) {
     leadsPorEtapaRef.current = proximo;
     setLeadsPorEtapa(proximo);
 
-    try {
-      // Nenhum identificador de autor é enviado: a action deriva quem age
-      // da sessão (Task 13).
-      await moverLeadDeEtapa({ leadId, novaStageId });
-    } catch (erroCapturado) {
-      // `moverLeadDeEtapa` PODE lançar (sem permissão, etapa inexistente,
-      // sessão rejeitada — ver actions.ts/service.ts, Task 13) — um card
-      // "preso" na coluna nova depois de uma falha real seria pior que uma
-      // reversão visível. Desfaz a partir do ref (o estado mais recente no
-      // momento do erro, não um snapshot capturado antes do `await`) e
-      // avisa por quê.
+    // ─── DOIS caminhos de rollback, e os dois são obrigatórios ───
+    //
+    // Um card "preso" na coluna nova depois de uma falha real é pior que uma
+    // reversão visível: o quadro passa a mentir sobre onde o lead está, e o
+    // funil inteiro é lido por essa posição.
+    //
+    // Enquanto esta action LANÇAVA, o `catch` sozinho dava conta. Com
+    // a action devolvendo `ResultadoAcao`, a recusa do servidor (sem
+    // permissão, etapa que sumiu, sessão expirada) chega como VALOR — um
+    // código que só olhasse o `catch` deixaria o card na coluna errada, em
+    // silêncio. O `catch` continua necessário pelo motivo oposto: a chamada
+    // de rede pode falhar antes de alcançar a action.
+    //
+    // Desfaz sempre a partir do REF, nunca de um snapshot capturado antes do
+    // `await` — ver o comentário longo sobre `leadsPorEtapaRef` acima.
+    const desfazer = (mensagem: string) => {
       const revertido = moverLeadNoEstadoLocal(leadsPorEtapaRef.current, leadId, novaStageId, etapaAtualId);
       leadsPorEtapaRef.current = revertido;
       setLeadsPorEtapa(revertido);
-      setErro(mensagemDeErroMover(erroCapturado));
+      setErro(mensagem);
+    };
+
+    try {
+      // Nenhum identificador de autor é enviado: a action deriva quem age
+      // da sessão (Task 13).
+      const resultado = await moverLeadDeEtapaAction({ leadId, novaStageId });
+      if (!resultado.ok) desfazer(resultado.erro);
+    } catch (erroCapturado) {
+      desfazer(mensagemDeFalhaDeRede(erroCapturado));
     }
   }
 

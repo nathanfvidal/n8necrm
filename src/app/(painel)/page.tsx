@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { usuarioAtualOuLogin } from "@/core/auth/session";
 import { listarEtapas } from "@/core/pipeline/stages";
-import { listarLeadsPorEtapa } from "@/core/leads/queries";
+import { contarLeadsPorEtapa } from "@/core/leads/queries";
 import { listarTasksPendentes } from "@/core/tasks/service";
 import { StageSummary } from "@/components/dashboard/stage-summary";
 import { ConversionChart } from "@/components/dashboard/conversion-chart";
@@ -31,15 +31,19 @@ import { formatarDataHoraBR } from "@/lib/date";
 export default async function DashboardPage() {
   const usuario = await usuarioAtualOuLogin();
 
-  const [etapas, { porEtapa: leadsPorEtapa }, tasksPendentes] = await Promise.all([
+  // `contarLeadsPorEtapa` e não `listarLeadsPorEtapa`: esta página só mostra
+  // NÚMEROS, e contava o tamanho de arrays com teto de 1000 linhas — ver o
+  // comentário da função em `leads/queries.ts` sobre por que isso enviesava a
+  // taxa de conversão para baixo, em silêncio, justamente na base grande.
+  const [etapas, leadsPorEtapa, tasksPendentes] = await Promise.all([
     listarEtapas(),
-    listarLeadsPorEtapa(),
+    contarLeadsPorEtapa(),
     listarTasksPendentes(usuario.id),
   ]);
 
   const resumo = etapas.map((etapa) => ({
     nome: etapa.nome,
-    total: (leadsPorEtapa[etapa.id] ?? []).length,
+    total: leadsPorEtapa[etapa.id] ?? 0,
     cor: etapa.cor,
     ehGanho: etapa.ehGanho,
   }));
@@ -53,7 +57,7 @@ export default async function DashboardPage() {
   // conversões, não como erro, para a página não quebrar num ambiente
   // recém-provisionado.
   const etapaGanho = etapas.find((e) => e.ehGanho);
-  const totalGanhos = etapaGanho ? (leadsPorEtapa[etapaGanho.id] ?? []).length : 0;
+  const totalGanhos = etapaGanho ? (leadsPorEtapa[etapaGanho.id] ?? 0) : 0;
   const taxaConversao = totalLeads > 0 ? ((totalGanhos / totalLeads) * 100).toFixed(1) : "0.0";
 
   // `user` narrowed para `id`/`nome` via `select` explícito (Task 17: toda
