@@ -13,6 +13,7 @@ import {
   MAX_FAQ,
 } from "@/modules/whatsapp/agente-limites";
 import { Button } from "@/components/ui/button";
+import { ConfirmarDialogo } from "@/components/confirmar-dialogo";
 import { cn } from "@/lib/utils";
 
 /**
@@ -92,29 +93,43 @@ export function AgenteForm({ config }: { config: BotConfig }) {
     });
   }
 
-  function restaurar() {
-    // Confirmação porque a ação descarta trabalho e não tem desfazer.
-    if (
-      !window.confirm(
-        "Restaurar persona, regras e FAQ ao padrão do fork? As edições atuais serão perdidas."
-      )
-    ) {
+  // A confirmação é `ConfirmarDialogo` (DOM), não `window.confirm`. Este era o
+  // último `window.confirm` do sistema — os de arquivar lead e excluir tarefa
+  // já tinham caído. O motivo é o mesmo dos outros dois, e está escrito por
+  // inteiro em `components/confirmar-dialogo.tsx`: o diálogo nativo bloqueia a
+  // thread e é invisível para o DOM, então só existe num teste através de
+  // `page.on("dialog")` — um canal lateral que precisa ser armado antes do
+  // clique e que, se ninguém armar, faz o Playwright descartar o diálogo
+  // sozinho. O clique "funciona", nada acontece, e a falha aparece na asserção
+  // seguinte sem dizer por quê.
+  //
+  // O efeito prático já estava registrado no e2e desta tela:
+  // `tests/e2e/whatsapp-agente.spec.ts` diz, na função de limpeza, que "nenhum
+  // teste deste arquivo chama restaurarConfigPadraoAction" — a ação mais
+  // destrutiva do formulário era contornada, e o mock dela existia no teste de
+  // unidade sem nenhum teste que o exercitasse. Confirmação que ninguém
+  // consegue testar sem gambiarra vira funcionalidade que ninguém testa.
+  //
+  // `async` direto, sem `useTransition`: `iniciar()` devolve `void` na hora, e
+  // `ConfirmarDialogo` fecha assim que `onConfirmar` resolve — com a transição
+  // o diálogo sumiria antes da action responder, e "Restaurando..." nunca
+  // apareceria. Quem segura o botão durante a chamada é o estado interno do
+  // próprio diálogo. `processando` continua desabilitando o GATILHO, para não
+  // dar para restaurar no meio de um salvamento; o contrário não é possível
+  // porque o diálogo é modal.
+  async function restaurar() {
+    setErro(null);
+    const resultado = await restaurarConfigPadraoAction();
+    if (!resultado.ok) {
+      setErro(resultado.erro);
       return;
     }
-    setErro(null);
-    iniciar(async () => {
-      const resultado = await restaurarConfigPadraoAction();
-      if (!resultado.ok) {
-        setErro(resultado.erro);
-        return;
-      }
-      // Reload cheio, não `router.refresh()`: os campos deste formulário são
-      // `useState` inicializado a partir de `config` só no mount — trocar a
-      // prop do Server Component pai não remonta este Client Component, e um
-      // `router.refresh()` deixaria a tela mostrando os valores antigos
-      // editados mesmo com a linha já restaurada no banco.
-      window.location.reload();
-    });
+    // Reload cheio, não `router.refresh()`: os campos deste formulário são
+    // `useState` inicializado a partir de `config` só no mount — trocar a
+    // prop do Server Component pai não remonta este Client Component, e um
+    // `router.refresh()` deixaria a tela mostrando os valores antigos
+    // editados mesmo com a linha já restaurada no banco.
+    window.location.reload();
   }
 
   return (
@@ -261,9 +276,23 @@ export function AgenteForm({ config }: { config: BotConfig }) {
           <Button onClick={salvar} disabled={processando}>
             {processando ? "Salvando…" : "Salvar"}
           </Button>
-          <Button variant="outline" onClick={restaurar} disabled={processando}>
-            Voltar ao padrão do fork
-          </Button>
+          {/* Gatilho "Voltar ao padrão do fork", confirmação "Restaurar
+              padrão": rótulos distintos porque os dois coexistem no DOM
+              enquanto o diálogo está aberto, e um localizador por nome
+              precisa alcançar um sem esbarrar no outro. Mesma regra de
+              "Arquivar"/"Arquivar lead" e "Excluir tarefa"/"Excluir". */}
+          <ConfirmarDialogo
+            gatilho={(abrir) => (
+              <Button variant="outline" onClick={abrir} disabled={processando}>
+                Voltar ao padrão do fork
+              </Button>
+            )}
+            titulo="Voltar ao padrão do fork?"
+            descricao="Persona, regras e FAQ voltam ao texto padrão. As edições atuais são perdidas e não há como desfazer."
+            rotuloConfirmar="Restaurar padrão"
+            rotuloConfirmando="Restaurando..."
+            onConfirmar={restaurar}
+          />
         </div>
 
         {salvo && <p className="text-sm text-muted-foreground">Salvo. Vale na próxima resposta.</p>}
