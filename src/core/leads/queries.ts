@@ -49,8 +49,26 @@ export type LeadDoQuadro = {
   valorFormatado: string | null;
 };
 
+/**
+ * O contato, reduzido ao que a tabela e o CSV leem.
+ *
+ * Era `Contact` inteiro (`include: { contact: true }`). Os dois consumidores
+ * de `listarLeads` — `/leads/page.tsx` e `export/leads/route.ts` — projetam
+ * antes da fronteira e só leem `nome` e `telefone`, então nunca vazou. Mas a
+ * rota de exportação chama com `semTeto: true`, a única chamada do sistema
+ * que pede a base inteira: com `Contact` carregando `documento`, `endereco` e
+ * `observacoes` desde a branch 3, o CPF de todo cliente passou a ser lido do
+ * banco e mantido em memória para montar um arquivo que não contém nenhum
+ * deles.
+ *
+ * Mesma lição do funil (ver `LeadDoQuadro` acima): a consulta curinga não
+ * piora quando alguém a edita — piora quando a TABELA cresce, em silêncio, e
+ * nenhum teste fica vermelho.
+ */
+type ContatoDaListagem = Pick<Contact, "id" | "nome" | "telefone">;
+
 export type LeadListado = Lead & {
-  contact: Contact | null;
+  contact: ContatoDaListagem | null;
   responsavel: ResponsavelResumido | null;
   stage: PipelineStage;
 };
@@ -160,7 +178,12 @@ export async function listarLeads(opcoes?: {
     // de omitir, não para o de fazer o lead arquivado reaparecer.
     where: opcoes?.incluirArquivados ? {} : { arquivadoEm: null },
     include: {
-      contact: true,
+      // `select` no contato pelo mesmo motivo de `responsavel` — ver
+      // `ContatoDaListagem`. `stage` continua inteiro: `PipelineStage` é
+      // nome, cor, ordem e os dois marcadores de funil, nada pessoal, e a
+      // tabela usa `stage.nome` enquanto `lead-table.tsx` monta a lista de
+      // filtros a partir dela.
+      contact: { select: { id: true, nome: true, telefone: true } },
       responsavel: { select: { id: true, nome: true } },
       stage: true,
     },
