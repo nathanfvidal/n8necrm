@@ -111,31 +111,47 @@ export async function criarLeadManualAction(input: {
  * Move um lead para outra etapa do funil. Server Action — `autorId` sempre
  * derivado da sessão, nunca aceito do cliente.
  *
- * NÃO invalida caminho nenhum, e isso é uma lacuna conhecida, não uma
- * decisão: quem arrasta vê o quadro certo (atualização otimista em
- * `useKanbanBoard`), mas `/leads` e o painel continuam servindo cache antigo
- * até a próxima navegação completa. Fica registrado aqui em vez de corrigido
- * junto porque muda comportamento de cache, e esta entrega é sobre a
- * convenção de erro. A correção é uma linha:
- * `invalidarCaminhosDeLead(input.leadId)`.
+ * ## Por que esta action invalida cache, e por que isso demorou a existir
+ *
+ * Ela não invalidava nada. Quem arrastava via o quadro certo — atualização
+ * otimista em `useKanbanBoard` — e todo o resto continuava servindo a página
+ * em cache: `/leads` com a etapa velha na coluna "Etapa", `/leads/[id]` idem,
+ * o histórico do contato idem, e o painel com a contagem por etapa anterior.
+ *
+ * O que tornou isso caro foi uma mudança em outro arquivo: o painel passou a
+ * calcular a taxa de conversão com `contarLeadsPorEtapa` (`queries.ts`), um
+ * `groupBy` exato no banco. Mover um lead para "Ganho" muda essa taxa por
+ * definição — e o número ficava velho justamente depois da ação que o muda.
+ * Um número exato servido de um cache velho é pior que um número aproximado:
+ * ele parece confiável.
+ *
+ * `contactId` vem da linha DEVOLVIDA por `moverEtapa`, não de um argumento —
+ * a action só recebe `leadId` e `novaStageId`. A linha é lida no servidor e
+ * fica no servidor: o retorno continua sendo `{ ok: true }` e nada mais.
  */
 export async function moverLeadDeEtapaAction(input: {
   leadId: string;
   novaStageId: string;
 }): Promise<ResultadoAcao> {
+  let contactIdParaRevalidar: string | null = null;
   try {
     const autor = await usuarioAtual();
     if (!hasPermission(autor.papel, "mover_lead")) {
       throw new LeadInvalidoError(MENSAGEM_SEM_PERMISSAO_MOVER);
     }
-    await moverEtapa({
+    const movido = await moverEtapa({
       leadId: input.leadId,
       novaStageId: input.novaStageId,
       autorId: autor.id,
     });
+    contactIdParaRevalidar = movido.contactId;
   } catch (erro) {
     return paraResultadoErro(erro, "Não foi possível mover o lead. Tente novamente em instantes.");
   }
+  // Fora do `try`: invalidar cache não faz parte de "o lead foi movido". Uma
+  // falha de revalidação viraria "não foi possível mover" para um lead que JÁ
+  // mudou de etapa no banco, e a pessoa arrastaria de novo.
+  invalidarCaminhosDeLead(input.leadId, contactIdParaRevalidar);
   return { ok: true };
 }
 

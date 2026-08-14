@@ -324,6 +324,54 @@ describe("moverLeadDeEtapaAction", () => {
     expect(JSON.stringify(resultado)).not.toContain("sess-secreta");
   });
 
+  // ─── Mover mudava o banco e deixava quatro telas em cache velho ───────
+  //
+  // Esta action não invalidava NADA. O quadro ficava certo pela atualização
+  // otimista e todo o resto mentia: `/leads` com a etapa anterior na coluna
+  // "Etapa", o histórico do contato idem, e o painel com a contagem por etapa
+  // de antes — logo depois de ele ter passado a calcular a taxa de conversão
+  // com `groupBy` exato. Número exato servido de cache velho parece confiável,
+  // que é o que o torna pior que um aproximado.
+  it("mover invalida as quatro telas que mostram a etapa, mais a do contato", async () => {
+    usuarioAtualMock.mockResolvedValue(usuarioFake({ id: "vendedor-14" }));
+    moverEtapaMock.mockResolvedValue(leadFake({ id: "lead-1", contactId: "contato-9" }));
+
+    await moverLeadDeEtapaAction({ leadId: "lead-1", novaStageId: "stage-2" });
+
+    expect(revalidatePathMock).toHaveBeenCalledWith("/leads");
+    expect(revalidatePathMock).toHaveBeenCalledWith("/leads/kanban");
+    expect(revalidatePathMock).toHaveBeenCalledWith("/leads/lead-1");
+    // `/` é o painel — a razão de esta lacuna ter deixado de ser barata.
+    expect(revalidatePathMock).toHaveBeenCalledWith("/");
+    // `contatos/[id]` renderiza `lead.etapaNome`; sem isto o histórico da
+    // pessoa mostraria a etapa anterior.
+    expect(revalidatePathMock).toHaveBeenCalledWith("/contatos/contato-9");
+  });
+
+  // O `contactId` vem da linha DEVOLVIDA pelo serviço — a action só recebe
+  // `leadId` e `novaStageId`. Um lead de clique de WhatsApp pode não ter
+  // contato ainda (`Lead.contact` é nullable), e aí não existe caminho de
+  // contato para invalidar.
+  it("lead sem contato: invalida o resto sem inventar uma rota de contato", async () => {
+    usuarioAtualMock.mockResolvedValue(usuarioFake({ id: "vendedor-15" }));
+    moverEtapaMock.mockResolvedValue(leadFake({ id: "lead-1", contactId: null }));
+
+    await moverLeadDeEtapaAction({ leadId: "lead-1", novaStageId: "stage-2" });
+
+    expect(revalidatePathMock).toHaveBeenCalledWith("/");
+    const rotas = revalidatePathMock.mock.calls.map((c) => c[0] as string);
+    expect(rotas.some((rota) => rota.startsWith("/contatos/"))).toBe(false);
+  });
+
+  it("mover recusado não invalida cache nenhum", async () => {
+    usuarioAtualMock.mockResolvedValue(usuarioFake({ papel: "VENDEDOR" }));
+    vi.mocked(hasPermission).mockReturnValueOnce(false);
+
+    await moverLeadDeEtapaAction({ leadId: "lead-1", novaStageId: "stage-2" });
+
+    expect(revalidatePathMock).not.toHaveBeenCalled();
+  });
+
   // `Etapa não encontrada: "<stageId>"` interpolava um cuid interno, e
   // `MENSAGENS_SEGURAS` o repassava verbatim ao navegador. A pessoa não pode
   // fazer nada com um id; `MENSAGENS_MELHORADAS` troca por uma frase acionável.
