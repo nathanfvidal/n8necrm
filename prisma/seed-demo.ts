@@ -40,7 +40,6 @@ import { PrismaClient, Prisma } from "@prisma/client";
 import type { Contact, Lead } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
 
-import { client } from "../config/client";
 import type { NovoLeadPayload } from "../src/core/notifications/types";
 import { telefoneDemo, assertTelefoneCanonico } from "./seed-demo-shared";
 
@@ -269,9 +268,12 @@ export async function seedDemo(): Promise<void> {
   const etapas = await prisma.pipelineStage.findMany({ orderBy: { ordem: "asc" } });
   if (etapas.length !== 5) {
     throw new Error(
-      `seed-demo.ts assume um funil de 5 etapas (client.funil de config/client.ts tem ${client.funil.length}) ` +
-        `— encontrei ${etapas.length} PipelineStage no banco. Rode prisma/seed.ts primeiro, ou ajuste a ` +
-        "distribuição hardcoded (CONTAGEM_POR_ETAPA/FAIXA_DIAS_ATRAS) para o novo tamanho do funil antes de continuar."
+      `seed-demo.ts assume um funil de 5 etapas — encontrei ${etapas.length} PipelineStage no banco. ` +
+        "Duas causas possíveis: (1) o funil nunca foi semeado, e aí rode `npx prisma db seed` primeiro; " +
+        "(2) alguém criou ou removeu etapa pela tela /etapas, e aí a distribuição hardcoded " +
+        "(CONTAGEM_POR_ETAPA/FAIXA_DIAS_ATRAS) precisa ser ajustada para o novo tamanho do funil. " +
+        "O seed de demonstração continua acoplado ao funil de 5 etapas de propósito — ver a § 3 da spec " +
+        "docs/superpowers/specs/2026-08-14-crud-etapas-do-funil-design.md."
     );
   }
 

@@ -21,7 +21,6 @@ vi.mock("server-only", () => ({}));
 import bcrypt from "bcryptjs";
 import { prisma } from "../../src/lib/prisma";
 import { seed, WHATSAPP_SYSTEM_USER_ID } from "../../prisma/seed";
-import { client } from "../../config/client";
 
 // `auth()` (Auth.js) depende de contexto de requisição HTTP real — mockamos
 // só esse ponto de entrada, mesmo padrão de tests/unit/session.test.ts, para
@@ -54,13 +53,15 @@ describe("prisma/seed.ts", () => {
       await expect(seed()).resolves.toBeUndefined();
       const contagemAposSegundaExecucao = await contarLinhasDoSeed();
 
+      // NÃO `client.funil.length`: desde o CRUD de etapas o banco pode
+      // legitimamente ter 6, 3 ou 40 etapas, criadas pela tela. O que este
+      // teste prova é que rodar o seed duas vezes NÃO DUPLICA — não que o
+      // funil tem o tamanho do config.
       expect(contagemAposSegundaExecucao).toEqual(contagemAposPrimeiraExecucao);
-      expect(contagemAposSegundaExecucao).toEqual({
-        stages: client.funil.length,
-        users: 2,
-        contacts: 4,
-        leads: 4,
-      });
+      expect(contagemAposSegundaExecucao.stages).toBeGreaterThanOrEqual(1);
+      expect(contagemAposSegundaExecucao.users).toBe(2);
+      expect(contagemAposSegundaExecucao.contacts).toBe(4);
+      expect(contagemAposSegundaExecucao.leads).toBe(4);
     },
     // seed() faz ~20 round-trips sequenciais contra o Postgres real do
     // Supabase, e este teste chama seed() duas vezes — o timeout padrão do
@@ -71,13 +72,16 @@ describe("prisma/seed.ts", () => {
   describe("contrato ehGanho (Task 20 calcula a taxa de conversão a partir exatamente dessa flag)", () => {
     beforeAll(seed);
 
-    it("marca exatamente a última etapa do funil como ehGanho — e nenhuma outra", async () => {
+    it("marca exatamente UMA etapa como ehGanho — e nenhuma outra", async () => {
       const etapas = await prisma.pipelineStage.findMany({ orderBy: { ordem: "asc" } });
       const marcadasComoGanho = etapas.filter((etapa) => etapa.ehGanho);
 
       expect(marcadasComoGanho).toHaveLength(1);
-      expect(marcadasComoGanho[0]?.ordem).toBe(client.funil.length - 1);
-      expect(marcadasComoGanho[0]?.nome).toBe(client.funil[client.funil.length - 1]);
+      // As asserções `.ordem === client.funil.length - 1` e `.nome ===
+      // client.funil[length - 1]` saíram: a etapa de fechamento passou a ser
+      // escolhida na tela e pode estar em QUALQUER posição, com qualquer nome.
+      // Criar "Negociação" no fim e marcá-la como fechamento é o caso de uso
+      // central do CRUD de etapas, e derrubaria as duas.
     });
 
     it("nenhuma etapa é marcada como ehPerdido pelo seed", async () => {
@@ -101,91 +105,6 @@ describe("prisma/seed.ts", () => {
       expect(admin.senhaHash.length).toBeGreaterThan(0);
     });
   });
-
-  describe(
-    "encolhimento do funil deixa uma etapa órfã (fix round 1/5 — reprodução do achado do revisor: " +
-      "seedar o funil atual, remover uma etapa de client.funil e re-seedar deixava a etapa removida " +
-      "com ehGanho: true para sempre, então findMany({ where: { ehGanho: true } }) passava a devolver " +
-      "2 linhas e listarEtapas() continuava incluindo a órfã, sem nenhum erro em lugar nenhum)",
-    () => {
-      // ordem além do funil atual — simula a etapa que "sobrou" de uma
-      // execução anterior com um client.funil maior (ex.: config tinha 6
-      // etapas, alguém removeu uma, e o seed nunca mais toca em ordem: 5).
-      const ORDEM_ORFA = 5;
-
-      it(
-        "remove uma etapa órfã sem leads e o banco fica com exatamente 1 PipelineStage ehGanho, igual a " +
-          "client.funil[length - 1]",
-        async () => {
-          await seed();
-
-          const orfa = await prisma.pipelineStage.create({
-            data: {
-              nome: "Etapa Órfã Teste (sem lead)",
-              ordem: ORDEM_ORFA,
-              cor: "#000000",
-              ehGanho: true,
-              ehPerdido: false,
-            },
-          });
-
-          await seed();
-
-          const orfaAposSeed = await prisma.pipelineStage.findUnique({ where: { id: orfa.id } });
-          expect(orfaAposSeed).toBeNull();
-
-          const etapasGanhas = await prisma.pipelineStage.findMany({ where: { ehGanho: true } });
-          expect(etapasGanhas).toHaveLength(1);
-          expect(etapasGanhas[0]?.ordem).toBe(client.funil.length - 1);
-          expect(etapasGanhas[0]?.nome).toBe(client.funil[client.funil.length - 1]);
-        },
-        20_000
-      );
-
-      it(
-        "recusa apagar uma etapa órfã que ainda tem lead — falha com uma mensagem acionável, em vez de " +
-          "estourar a violação de FK crua do Postgres ou apagar/mover o lead em silêncio",
-        async () => {
-          await seed();
-
-          const orfa = await prisma.pipelineStage.create({
-            data: {
-              nome: "Etapa Órfã Teste (com lead)",
-              ordem: ORDEM_ORFA,
-              cor: "#000000",
-              ehGanho: true,
-              ehPerdido: false,
-            },
-          });
-          const contato = await prisma.contact.create({
-            data: { nome: "Contato Teste Órfã", telefone: "119999912345" },
-          });
-          const admin = await prisma.user.findUniqueOrThrow({ where: { email: "admin@exemplo.com" } });
-          const lead = await prisma.lead.create({
-            data: { contactId: contato.id, stageId: orfa.id, responsavelId: admin.id, canal: "MANUAL" },
-          });
-
-          await expect(seed()).rejects.toThrow(/Etapa Órfã Teste \(com lead\)/);
-
-          // a etapa órfã e o lead continuam intactos — o seed abortou antes
-          // de tocar neles.
-          const orfaAindaExiste = await prisma.pipelineStage.findUnique({ where: { id: orfa.id } });
-          expect(orfaAindaExiste).not.toBeNull();
-
-          // limpeza (ordem importa: Lead → Contact → PipelineStage, por
-          // causa das FKs) e restauração do estado normal de 5 etapas.
-          await prisma.lead.delete({ where: { id: lead.id } });
-          await prisma.contact.delete({ where: { id: contato.id } });
-          await prisma.pipelineStage.delete({ where: { id: orfa.id } });
-
-          await expect(seed()).resolves.toBeUndefined();
-          const etapasGanhas = await prisma.pipelineStage.count({ where: { ehGanho: true } });
-          expect(etapasGanhas).toBe(1);
-        },
-        20_000
-      );
-    }
-  );
 
   describe(
     "usuário sistema do WhatsApp (Fatia 1: ator de AuditLog para respostas geradas pela IA)",

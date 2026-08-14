@@ -62,7 +62,19 @@ async function contarLinhasDoSeedBase() {
   };
 }
 
-describe("prisma/seed-demo.ts", () => {
+/**
+ * `seedDemo()` exige um funil de exatamente 5 etapas (`seed-demo.ts`), e desde o
+ * CRUD de etapas o funil deste banco pode ter qualquer tamanho. Sem esta guarda,
+ * a primeira etapa criada pela tela derrubaria o `beforeAll` e, com ele, o
+ * arquivo inteiro — deixando `npx vitest run`, que é o portão de merge do
+ * projeto, vermelho para sempre por uma razão que não é defeito de ninguém.
+ *
+ * Pulado com motivo impresso é honesto; vermelho permanente treina a equipe a
+ * ignorar o portão, que é o pior desfecho possível.
+ */
+const funilTemCincoEtapas = (await prisma.pipelineStage.count()) === 5;
+
+describe.skipIf(!funilTemCincoEtapas)("prisma/seed-demo.ts", () => {
   // beforeAll/afterAll únicos para toda a suíte deste arquivo: `seedDemo()`
   // faz ~30 leads x vários round-trips contra o Postgres real — chamar uma
   // vez e reaproveitar entre os `it()`s de leitura é o que mantém a suíte
@@ -216,7 +228,11 @@ describe("prisma/seed-demo.ts", () => {
   );
 });
 
-describe("prisma/seed-demo-limpar.ts", () => {
+// Mesma guarda do describe acima, e pelo mesmo motivo: os `it()`s abaixo
+// também chamam `seedDemo()` diretamente, então também lançam (por sua vez,
+// não pelo `beforeAll`) se o funil deste banco não tiver exatamente 5
+// etapas.
+describe.skipIf(!funilTemCincoEtapas)("prisma/seed-demo-limpar.ts", () => {
   afterAll(async () => {
     await prisma.$disconnect();
   });

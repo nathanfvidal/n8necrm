@@ -47,16 +47,15 @@ const CORES = ["#94A3B8", "#60A5FA", "#FBBF24", "#F97316", "#22C55E"];
  * compartilhado (dev, verificação manual, CI) — sem duplicar linhas e sem
  * quebrar por causa de foreign key. Por isso:
  *
- * - PipelineStage: upsert por `ordem` (já é `@@unique([ordem])` no schema),
- *   nunca `deleteMany()`. `Lead.stageId` é `ON DELETE RESTRICT` (ver
- *   prisma/migrations/20260730211315_init/migration.sql) — como este mesmo
- *   seed cria Leads apontando para a primeira etapa, um `deleteMany()` em
- *   PipelineStage quebraria já na segunda execução, com leads existentes
- *   referenciando as etapas que se está tentando apagar. Depois do upsert,
- *   o seed também reconcilia órfãos (etapas com `ordem >= client.funil.length`
- *   que sobraram de uma execução anterior com um funil maior — ver
- *   `reconciliarEtapasOrfas` abaixo) e confere explicitamente que exatamente
- *   1 etapa ficou com `ehGanho: true` (fix round 1/5: encolher o funil sem
+ * - PipelineStage: `client.funil` só semeia a tabela vazia (primeira
+ *   instalação) — depois disso quem manda é o banco, porque `/etapas`
+ *   (ADMIN) cria, renomeia, recolore, reordena e remove etapa, e este seed
+ *   nunca mais toca numa etapa que já existe. `Lead.stageId` é `ON DELETE
+ *   RESTRICT` (ver prisma/migrations/20260730211315_init/migration.sql), o
+ *   que já bastava para o seed nunca apagar etapa — mas o motivo de não
+ *   reconciliar não é técnico, é de propriedade: a tela é dona do funil, o
+ *   seed é só a semente. O seed confere explicitamente que exatamente 1
+ *   etapa ficou com `ehGanho: true` (fix round 1/5: encolher o funil sem
  *   isso deixava a etapa removida órfã com `ehGanho: true` para sempre,
  *   fazendo `ehGanho` apontar para duas etapas ao mesmo tempo).
  * - User: upsert por `email` (único no schema). `senhaHash` só é regravado
@@ -71,27 +70,30 @@ const CORES = ["#94A3B8", "#60A5FA", "#FBBF24", "#F97316", "#22C55E"];
  *   apontando para ele.
  */
 export async function seed(): Promise<void> {
-  for (const [index, nome] of client.funil.entries()) {
-    const ehUltimaEtapa = index === client.funil.length - 1;
-    await prisma.pipelineStage.upsert({
-      where: { ordem: index },
-      update: {
-        nome,
-        cor: CORES[index % CORES.length],
-        ehGanho: ehUltimaEtapa,
-        ehPerdido: false,
-      },
-      create: {
-        nome,
-        ordem: index,
-        cor: CORES[index % CORES.length],
-        ehGanho: ehUltimaEtapa,
-        ehPerdido: false,
-      },
-    });
+  // O funil só nasce do config na PRIMEIRA vez. Depois disso quem manda é o
+  // banco, porque `/etapas` (ADMIN) cria, renomeia, recolore, reordena e
+  // remove etapa.
+  //
+  // O `upsert` por `ordem` que morava aqui reconciliava a tabela com
+  // `client.funil` a cada execução — e passou a ser destrutivo no dia em que a
+  // tela existiu: renomearia "Negociação" para "Fechado" e recoloriria por
+  // índice. `client.funil` virou SEMENTE de instalação, e é isso que permite
+  // um fork nascer com o funil dele.
+  const etapasExistentes = await prisma.pipelineStage.count();
+  if (etapasExistentes === 0) {
+    for (const [index, nome] of client.funil.entries()) {
+      await prisma.pipelineStage.create({
+        data: {
+          nome,
+          ordem: index,
+          cor: CORES[index % CORES.length],
+          ehGanho: index === client.funil.length - 1,
+          ehPerdido: false,
+        },
+      });
+    }
   }
 
-  await reconciliarEtapasOrfas();
   await confirmarInvarianteEhGanho();
 
   // "senha123" é um literal público (está no repo). Nada nesta função
@@ -158,59 +160,19 @@ export async function seed(): Promise<void> {
 }
 
 /**
- * Remove do banco as `PipelineStage` que sobraram de uma execução anterior
- * com um `client.funil` maior (ex.: funil tinha 5 etapas, alguém removeu uma
- * em `config/client.ts` e reduziu pra 4 — a antiga etapa de `ordem: 4` não é
- * mais tocada pelo loop de upsert em `seed()`, que só cobre
- * `0..client.funil.length - 1`).
+ * Confere que o banco tem exatamente 1 `PipelineStage` com `ehGanho: true` — o
+ * painel calcula a taxa de conversão a partir dessa flag.
  *
- * Fix round 1/5: sem isso, a etapa órfã ficava no banco pra sempre com o
- * `ehGanho: true` que tinha antes de virar órfã (era a última etapa do
- * funil anterior), enquanto a nova última etapa também virava `ehGanho:
- * true` — duas linhas com a flag ligada ao mesmo tempo, silenciosamente.
- * `listarEtapas()` não filtra por comprimento, então também devolveria a
- * órfã pra sempre.
+ * O alvo encolheu com o CRUD de etapas. Antes esta checagem defendia "exatamente
+ * uma, e é a última do funil", garantida pelo laço de upsert acima. A parte "é a
+ * última" foi revogada: a etapa de fechamento passou a ser escolhida na tela e
+ * pode estar em qualquer posição. O dono da invariante hoje é
+ * `core/pipeline/service.ts` (`definirEtapaDeFechamento`, que desliga todas antes
+ * de ligar a escolhida, na mesma transação).
  *
- * `Lead.stageId` é `ON DELETE RESTRICT`, então apagar uma etapa que ainda
- * tem lead não é uma opção silenciosa: mover ou perder leads de um cliente
- * de verdade é pior do que o bug que este fix resolve. Por isso, se algum
- * lead ainda aponta pra uma etapa órfã, o seed falha alto e explica o que
- * o operador precisa fazer antes de rodar de novo — em vez de deixar o
- * Postgres estourar uma violação de FK crua, ou (pior) apagar o lead junto.
- */
-async function reconciliarEtapasOrfas(): Promise<void> {
-  const orfas = await prisma.pipelineStage.findMany({
-    where: { ordem: { gte: client.funil.length } },
-    orderBy: { ordem: "asc" },
-  });
-
-  for (const orfa of orfas) {
-    const leadsNaEtapa = await prisma.lead.count({ where: { stageId: orfa.id } });
-    if (leadsNaEtapa > 0) {
-      throw new Error(
-        `Seed abortado: a etapa "${orfa.nome}" (ordem ${orfa.ordem}, id ${orfa.id}) não existe mais em ` +
-          `client.funil, mas ainda tem ${leadsNaEtapa} lead(s) apontando pra ela. Apagar essa etapa ` +
-          `automaticamente moveria ou descartaria esses leads sem confirmação — o seed não faz isso. ` +
-          `Mova os leads pra uma etapa que continua existindo antes de rodar o seed de novo, por exemplo: ` +
-          `prisma.lead.updateMany({ where: { stageId: "${orfa.id}" }, data: { stageId: <idDaNovaEtapa> } })`
-      );
-    }
-    await prisma.pipelineStage.delete({ where: { id: orfa.id } });
-  }
-}
-
-/**
- * Confere explicitamente, depois do upsert e da reconciliação de órfãs, que
- * o banco tem exatamente 1 `PipelineStage` com `ehGanho: true` — a Task 20
- * calcula a taxa de conversão a partir exatamente dessa flag.
- *
- * Fix round 1/5: o loop de upsert em `seed()` já marca exatamente 1 etapa
- * como `ehGanho` por construção (`index === client.funil.length - 1`), e
- * `reconciliarEtapasOrfas` já remove qualquer etapa fora dessa faixa — mas
- * confiar nisso implicitamente foi exatamente como o bug original passou:
- * o loop "parecia" bastar. Esta checagem é o alarme que dispara se alguma
- * mudança futura nessas duas funções voltar a violar o invariante, em vez
- * de deixar o dado errado seguir silenciosamente pro dashboard da Task 20.
+ * O que sobra aqui é o alarme, e ele continua valendo a pena: se algum caminho
+ * futuro deixar zero ou duas flags ligadas, é aqui que se descobre, em vez de o
+ * dado errado seguir silenciosamente para o dashboard.
  */
 async function confirmarInvarianteEhGanho(): Promise<void> {
   const etapasGanhas = await prisma.pipelineStage.count({ where: { ehGanho: true } });
