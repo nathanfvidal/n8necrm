@@ -24,7 +24,7 @@ export type EtapaResumo = {
  */
 export function StageSummary({ etapas }: { etapas: EtapaResumo[] }) {
   return (
-    <div className="grid grid-cols-2 gap-3 md:grid-cols-[repeat(auto-fit,minmax(9rem,1fr))]">
+    <div className="grid grid-cols-2 gap-3 md:grid-cols-[repeat(auto-fit,minmax(8rem,1fr))]">
       {etapas.map((etapa) => (
         <Card key={etapa.id} data-testid="cartao-de-etapa">
           <CardHeader className="pb-2">
