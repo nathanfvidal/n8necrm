@@ -12,6 +12,7 @@ import { prisma } from "../../src/lib/prisma";
 import {
   criarEtapa,
   editarEtapa,
+  moverNaOrdem,
   EtapaInvalidaError,
 } from "../../src/core/pipeline/service";
 
@@ -120,5 +121,29 @@ describe("editarEtapa", () => {
       autorId: admin.id,
     });
     expect(depois.cor).toBe("#000000");
+  });
+});
+
+describe("moverNaOrdem — contra o banco real", () => {
+  // As DUAS etapas são criadas pelo teste, e nascem no fim do funil. A troca
+  // escreve só linhas que este teste criou: nenhuma etapa semeada é tocada, e a
+  // adjacência das cinco de produção fica intacta durante a execução inteira.
+  it("troca duas etapas de posição sem violar UNIQUE(ordem)", async () => {
+    const primeira = await novaEtapa("troca A");
+    const segunda = await novaEtapa("troca B");
+    const admin = await prisma.user.findFirstOrThrow({ where: { papel: "ADMIN" } });
+
+    await moverNaOrdem({ etapaId: segunda.id, direcao: "cima", autorId: admin.id });
+
+    const depoisPrimeira = await prisma.pipelineStage.findUniqueOrThrow({ where: { id: primeira.id } });
+    const depoisSegunda = await prisma.pipelineStage.findUniqueOrThrow({ where: { id: segunda.id } });
+
+    expect(depoisSegunda.ordem).toBe(primeira.ordem);
+    expect(depoisPrimeira.ordem).toBe(segunda.ordem);
+  });
+
+  it("nenhuma etapa fica na posição de estacionamento depois da troca", async () => {
+    const estacionadas = await prisma.pipelineStage.count({ where: { ordem: { lt: 0 } } });
+    expect(estacionadas).toBe(0);
   });
 });

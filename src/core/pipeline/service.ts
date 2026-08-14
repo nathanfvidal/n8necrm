@@ -112,3 +112,72 @@ export async function editarEtapa(input: {
 
   return depois;
 }
+
+/**
+ * Posição de estacionamento usada durante a troca de duas etapas.
+ *
+ * `PipelineStage_ordem_key` é um índice ÚNICO, e o Postgres o verifica a cada
+ * `UPDATE` — não no fim da transação. Trocar as etapas de ordem 0 e 1 com dois
+ * `UPDATE`s diretos falha no primeiro, porque por um instante duas linhas
+ * teriam a mesma `ordem`.
+ *
+ * Negativo de propósito: nenhuma etapa real ocupa posição negativa, então o
+ * valor nunca colide com uma linha legítima. Ele existe por microssegundos
+ * dentro de uma transação atômica — nenhuma leitura o vê.
+ *
+ * A alternativa idiomática seria uma constraint `DEFERRABLE INITIALLY DEFERRED`,
+ * que o Prisma não representa e que viraria drift no próximo diff. Ver § 5 da
+ * spec.
+ */
+export const ORDEM_ESTACIONAMENTO = -1;
+
+export async function moverNaOrdem(input: {
+  etapaId: string;
+  direcao: "cima" | "baixo";
+  autorId: string;
+}): Promise<void> {
+  const etapa = await prisma.pipelineStage.findUnique({ where: { id: input.etapaId } });
+  if (!etapa) {
+    throw new EtapaInvalidaError("Essa etapa não existe mais. Atualize a página.");
+  }
+
+  // A vizinha é achada por COMPARAÇÃO, não por `ordem ± 1`: buracos em `ordem`
+  // são legais e esperados (apagar a etapa de ordem 2 deixa 0,1,3,4).
+  const subindo = input.direcao === "cima";
+  const vizinha = await prisma.pipelineStage.findFirst({
+    where: subindo ? { ordem: { lt: etapa.ordem } } : { ordem: { gt: etapa.ordem } },
+    orderBy: { ordem: subindo ? "desc" : "asc" },
+  });
+
+  // A tela não desenha ↑ na primeira nem ↓ na última, mas Server Action é
+  // endpoint HTTP público. A página não é a defesa.
+  if (!vizinha) {
+    throw new EtapaInvalidaError(
+      subindo ? "Esta etapa já é a primeira do funil." : "Esta etapa já é a última do funil."
+    );
+  }
+
+  await prisma.$transaction(async (tx) => {
+    await tx.pipelineStage.update({
+      where: { id: etapa.id },
+      data: { ordem: ORDEM_ESTACIONAMENTO },
+    });
+    await tx.pipelineStage.update({
+      where: { id: vizinha.id },
+      data: { ordem: etapa.ordem },
+    });
+    await tx.pipelineStage.update({
+      where: { id: etapa.id },
+      data: { ordem: vizinha.ordem },
+    });
+  });
+
+  await registrarAuditoria({
+    userId: input.autorId,
+    acao: "reordenar_etapa",
+    entidade: "PipelineStage",
+    entidadeId: etapa.id,
+    antes: { nome: etapa.nome, ordem: etapa.ordem },
+    depois: { nome: etapa.nome, ordem: vizinha.ordem },
+  });
+}
