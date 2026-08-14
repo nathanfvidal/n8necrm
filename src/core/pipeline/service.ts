@@ -1,7 +1,8 @@
 import "server-only";
 
 import { prisma } from "@/lib/prisma";
-import { registrarAuditoria } from "@/core/audit/log";
+import { gravarLinhaDeAuditoria, registrarAuditoria } from "@/core/audit/log";
+import { avaliarAtividadeSuspeita } from "@/core/audit/alerta";
 import { etapaSchema } from "./schema";
 import type { PipelineStage } from "@prisma/client";
 
@@ -216,4 +217,111 @@ export async function definirEtapaDeFechamento(input: {
     entidadeId: etapa.id,
     depois: { nome: etapa.nome },
   });
+}
+
+/**
+ * Remove uma etapa, movendo antes todos os leads dela para um destino.
+ *
+ * Devolve quantos leads foram movidos.
+ *
+ * ## Por que a transação é INTERATIVA e não a de array
+ *
+ * Na forma `$transaction([...])` nenhuma operação pode depender do resultado de
+ * outra — e o número de leads movidos só existe depois que o `updateMany` roda.
+ * Auditar um número lido ANTES da transação seria auditar uma estimativa.
+ *
+ * ## Por que a linha de auditoria nasce DENTRO
+ *
+ * Esta é a única entrada forense da operação: não há uma entrada por lead, de
+ * propósito — 40 linhas `mover_etapa` afogariam a que importa. E a etapa de
+ * origem deixa de existir, então não há de onde reconstituir para onde os leads
+ * foram. Ou a etapa some com o rastro, ou nada some. Mesmo raciocínio do
+ * fail-closed da exportação de leads, registrado em `core/audit/log.ts`.
+ *
+ * `avaliarAtividadeSuspeita` fica FORA: ela faz `count`, `findMany` de ADMINs e
+ * `createMany` de notificações, e rodar isso segurando lock em linhas de `Lead`
+ * alonga a transação por trabalho que não é do domínio dela. A falha dela é
+ * engolida, como no funil normal — o registro já está gravado.
+ */
+export async function excluirEtapa(input: {
+  etapaId: string;
+  destinoId: string | null;
+  autorId: string;
+}): Promise<number> {
+  const etapa = await prisma.pipelineStage.findUnique({ where: { id: input.etapaId } });
+  if (!etapa) {
+    throw new EtapaInvalidaError("Essa etapa não existe mais. Atualize a página.");
+  }
+
+  if (etapa.ehGanho) {
+    throw new EtapaInvalidaError(
+      "Esta é a etapa de fechamento. Marque outra etapa como fechamento antes de remover esta."
+    );
+  }
+
+  if ((await prisma.pipelineStage.count()) <= 1) {
+    throw new EtapaInvalidaError("O funil precisa de pelo menos uma etapa.");
+  }
+
+  // Contagem SEM filtro de `arquivadoEm`: é o número que o `ON DELETE RESTRICT`
+  // enxerga. `contarLeadsPorEtapa` (`core/leads/queries.ts`) filtra arquivados e
+  // faria uma etapa com 5 arquivados parecer vazia — o `delete` morreria na FK
+  // e a etapa ficaria indeletável com um erro genérico.
+  const leadsQueSeguram = await prisma.lead.count({ where: { stageId: etapa.id } });
+
+  let destino: PipelineStage | null = null;
+  if (leadsQueSeguram > 0) {
+    if (!input.destinoId) {
+      throw new EtapaInvalidaError(
+        `Esta etapa ainda tem ${leadsQueSeguram} lead(s), incluindo arquivados. ` +
+          "Escolha para onde eles vão."
+      );
+    }
+    destino = await prisma.pipelineStage.findUnique({ where: { id: input.destinoId } });
+    if (!destino || destino.id === etapa.id) {
+      throw new EtapaInvalidaError("Escolha uma etapa de destino diferente desta.");
+    }
+  }
+
+  const leadsMovidos = await prisma.$transaction(async (tx) => {
+    let movidos = 0;
+    if (destino) {
+      // Sem filtro de `arquivadoEm`, e correto assim: a etapa vai deixar de
+      // existir, então quem segura a chave estrangeira tem que sair junto.
+      //
+      // NÃO toca `ultimaInteracaoEm`: mudar a estrutura do funil não é interação
+      // com o lead, e marcar 40 leads como interagidos hoje corromperia a única
+      // coluna que diz o contrário.
+      const resultado = await tx.lead.updateMany({
+        where: { stageId: etapa.id },
+        data: { stageId: destino.id },
+      });
+      movidos = resultado.count;
+    }
+
+    await tx.pipelineStage.delete({ where: { id: etapa.id } });
+
+    await gravarLinhaDeAuditoria(
+      {
+        userId: input.autorId,
+        acao: "excluir_etapa",
+        entidade: "PipelineStage",
+        entidadeId: etapa.id,
+        antes: { nome: etapa.nome, ordem: etapa.ordem, cor: etapa.cor },
+        // O `count` da própria escrita, nunca uma leitura anterior.
+        depois: { destinoId: destino?.id ?? null, leadsMovidos: movidos },
+      },
+      tx
+    );
+
+    return movidos;
+  });
+
+  try {
+    await avaliarAtividadeSuspeita({ userId: input.autorId, acao: "excluir_etapa" });
+  } catch (erro) {
+    console.error("Falha ao avaliar atividade suspeita (auditoria já gravada):", erro);
+  }
+
+  return leadsMovidos;
 }

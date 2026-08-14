@@ -29,7 +29,7 @@ vi.mock("@/core/audit/log", () => ({
   gravarLinhaDeAuditoria: vi.fn(),
 }));
 
-const { moverNaOrdem, ORDEM_ESTACIONAMENTO, definirEtapaDeFechamento } = await import(
+const { moverNaOrdem, ORDEM_ESTACIONAMENTO, definirEtapaDeFechamento, excluirEtapa } = await import(
   "../../src/core/pipeline/service"
 );
 
@@ -145,6 +145,21 @@ describe("definirEtapaDeFechamento — a forma da transação", () => {
     await expect(
       definirEtapaDeFechamento({ etapaId: "some", autorId: "admin-1" })
     ).rejects.toThrow(/não existe mais/i);
+    expect(transactionMock).not.toHaveBeenCalled();
+  });
+});
+
+// Substitui a sabotagem do brief que rodaria contra a etapa "Fechado" REAL de
+// produção: com a guarda removida e a etapa sem leads, o teste real a apagaria
+// do banco de produção. Aqui, com Prisma mockado, a mesma invariante é provada
+// sem tocar em nenhuma linha de verdade.
+describe("excluirEtapa — a forma da transação", () => {
+  it("recusa apagar a etapa de fechamento, antes de qualquer escrita", async () => {
+    findUniqueMock.mockResolvedValue({ id: "etapa-ganho", ordem: 4, nome: "Fechado", ehGanho: true });
+
+    await expect(
+      excluirEtapa({ etapaId: "etapa-ganho", destinoId: null, autorId: "admin-1" })
+    ).rejects.toThrow(/fechamento/i);
     expect(transactionMock).not.toHaveBeenCalled();
   });
 });

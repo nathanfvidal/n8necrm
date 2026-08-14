@@ -13,6 +13,7 @@ import {
   criarEtapa,
   editarEtapa,
   moverNaOrdem,
+  excluirEtapa,
   EtapaInvalidaError,
 } from "../../src/core/pipeline/service";
 
@@ -145,5 +146,108 @@ describe("moverNaOrdem — contra o banco real", () => {
   it("nenhuma etapa fica na posição de estacionamento depois da troca", async () => {
     const estacionadas = await prisma.pipelineStage.count({ where: { ordem: { lt: 0 } } });
     expect(estacionadas).toBe(0);
+  });
+});
+
+describe("excluirEtapa", () => {
+  it("etapa vazia sai sem destino", async () => {
+    const etapa = await novaEtapa("vazia");
+    const admin = await prisma.user.findFirstOrThrow({ where: { papel: "ADMIN" } });
+
+    const movidos = await excluirEtapa({ etapaId: etapa.id, destinoId: null, autorId: admin.id });
+
+    expect(movidos).toBe(0);
+    expect(await prisma.pipelineStage.findUnique({ where: { id: etapa.id } })).toBeNull();
+  });
+
+  // O caso que nenhum outro teste alcança, e o motivo de `contarLeadsQueSeguramEtapa`
+  // existir: arquivar NÃO tira o lead da etapa, e a FK é ON DELETE RESTRICT.
+  it("etapa com lead ARQUIVADO recusa sem destino — com erro de domínio, não P2003", async () => {
+    const etapa = await novaEtapa("so arquivado");
+    const admin = await prisma.user.findFirstOrThrow({ where: { papel: "ADMIN" } });
+    const contato = await prisma.contact.create({
+      data: { nome: "Contato Teste Arquivado", telefone: `5511${Date.now()}`.slice(0, 13) },
+    });
+    const lead = await prisma.lead.create({
+      data: { contactId: contato.id, stageId: etapa.id, canal: "MANUAL", arquivadoEm: new Date() },
+    });
+
+    try {
+      await expect(
+        excluirEtapa({ etapaId: etapa.id, destinoId: null, autorId: admin.id })
+      ).rejects.toBeInstanceOf(EtapaInvalidaError);
+      // E a etapa continua lá — a recusa aconteceu ANTES de qualquer escrita.
+      expect(await prisma.pipelineStage.findUnique({ where: { id: etapa.id } })).not.toBeNull();
+    } finally {
+      await prisma.lead.delete({ where: { id: lead.id } });
+      await prisma.contact.delete({ where: { id: contato.id } });
+    }
+  });
+
+  it("com destino, move o arquivado junto e apaga a etapa", async () => {
+    const origem = await novaEtapa("origem");
+    const destino = await novaEtapa("destino");
+    const admin = await prisma.user.findFirstOrThrow({ where: { papel: "ADMIN" } });
+    const contato = await prisma.contact.create({
+      data: { nome: "Contato Teste Movido", telefone: `5511${Date.now()}`.slice(0, 13) },
+    });
+    const lead = await prisma.lead.create({
+      data: { contactId: contato.id, stageId: origem.id, canal: "MANUAL", arquivadoEm: new Date() },
+    });
+
+    try {
+      const movidos = await excluirEtapa({
+        etapaId: origem.id,
+        destinoId: destino.id,
+        autorId: admin.id,
+      });
+
+      expect(movidos).toBe(1);
+      const depois = await prisma.lead.findUniqueOrThrow({ where: { id: lead.id } });
+      expect(depois.stageId).toBe(destino.id);
+      // Mudar a estrutura do funil não é interação com o lead.
+      expect(depois.arquivadoEm).not.toBeNull();
+      expect(await prisma.pipelineStage.findUnique({ where: { id: origem.id } })).toBeNull();
+    } finally {
+      await prisma.lead.delete({ where: { id: lead.id } });
+      await prisma.contact.delete({ where: { id: contato.id } });
+    }
+  });
+
+  it("a auditoria registra o número REAL de leads movidos, e nasce junto com a exclusão", async () => {
+    const origem = await novaEtapa("auditoria origem");
+    const destino = await novaEtapa("auditoria destino");
+    const admin = await prisma.user.findFirstOrThrow({ where: { papel: "ADMIN" } });
+    const contato = await prisma.contact.create({
+      data: { nome: "Contato Teste Auditoria", telefone: `5511${Date.now()}`.slice(0, 13) },
+    });
+    const lead = await prisma.lead.create({
+      data: { contactId: contato.id, stageId: origem.id, canal: "MANUAL", arquivadoEm: new Date() },
+    });
+
+    try {
+      await excluirEtapa({ etapaId: origem.id, destinoId: destino.id, autorId: admin.id });
+
+      const linha = await prisma.auditLog.findFirstOrThrow({
+        where: { entidadeId: origem.id, acao: "excluir_etapa" },
+      });
+      expect((linha.depois as { leadsMovidos: number }).leadsMovidos).toBe(1);
+      expect((linha.depois as { destinoId: string }).destinoId).toBe(destino.id);
+    } finally {
+      await prisma.lead.delete({ where: { id: lead.id } });
+      await prisma.contact.delete({ where: { id: contato.id } });
+    }
+  });
+
+  it("recusa apagar a etapa de fechamento", async () => {
+    const admin = await prisma.user.findFirstOrThrow({ where: { papel: "ADMIN" } });
+    const fechamento = await prisma.pipelineStage.findFirstOrThrow({ where: { ehGanho: true } });
+
+    await expect(
+      excluirEtapa({ etapaId: fechamento.id, destinoId: null, autorId: admin.id })
+    ).rejects.toThrow(/fechamento/i);
+    // Não escreveu nada: a etapa de produção continua lá, com a flag intacta.
+    const depois = await prisma.pipelineStage.findUniqueOrThrow({ where: { id: fechamento.id } });
+    expect(depois.ehGanho).toBe(true);
   });
 });
