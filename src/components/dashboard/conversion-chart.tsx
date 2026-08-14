@@ -2,7 +2,7 @@
 
 import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Tooltip, Cell } from "recharts";
 
-export type EtapaBarra = { nome: string; total: number; cor: string };
+export type EtapaBarra = { id: string; nome: string; total: number; cor: string };
 
 /**
  * Gráfico de barras "leads por etapa" — Recharts só funciona no navegador
@@ -27,7 +27,7 @@ export function ConversionChart({ dados }: { dados: EtapaBarra[] }) {
         <Tooltip />
         <Bar dataKey="total" radius={[4, 4, 0, 0]}>
           {dados.map((etapa) => (
-            <Cell key={etapa.nome} fill={etapa.cor} />
+            <Cell key={etapa.id} fill={etapa.cor} />
           ))}
         </Bar>
       </BarChart>
