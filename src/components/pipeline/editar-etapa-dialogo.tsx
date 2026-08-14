@@ -37,6 +37,22 @@ export function EditarEtapaDialogo({
   const [cor, setCor] = useState(corAtual);
   const [salvando, setSalvando] = useState(false);
 
+  /**
+   * `useState(nomeAtual)` acima só lê a prop na PRIMEIRA renderização — sem
+   * isto, abrir o diálogo, digitar, Cancelar e reabrir mostrava a edição
+   * abandonada como se fosse o nome atual (o estado de `nome`/`cor` sobrevive
+   * ao fechamento porque o componente nunca desmonta, só o `<Dialog>` some da
+   * tela). Reler as props aqui, no mesmo gesto que abre o diálogo, é o que
+   * garante que ele sempre começa do valor de verdade — mesmo se `nomeAtual`
+   * mudou entre uma abertura e outra (outra pessoa renomeou a etapa nesse meio
+   * tempo e a página revalidou).
+   */
+  function abrir() {
+    setNome(nomeAtual);
+    setCor(corAtual);
+    setAberto(true);
+  }
+
   async function salvar() {
     setSalvando(true);
     try {
@@ -49,7 +65,7 @@ export function EditarEtapaDialogo({
 
   return (
     <>
-      <Button variant="ghost" size="sm" aria-label="Editar etapa" onClick={() => setAberto(true)}>
+      <Button variant="ghost" size="sm" aria-label="Editar etapa" onClick={abrir}>
         Editar
       </Button>
 

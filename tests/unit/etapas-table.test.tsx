@@ -168,6 +168,27 @@ describe("EtapasTable — edição", () => {
     await waitFor(() => expect(screen.queryByLabelText("Nome")).toBeNull());
   });
 
+  // Achado da revisão final: `useState(nomeAtual)` em `EditarEtapaDialogo`
+  // só lia a prop na primeira renderização — abrir, digitar, Cancelar e
+  // reabrir mostrava a edição abandonada como se fosse o nome atual.
+  it("abrir, digitar, Cancelar e reabrir mostra o nome ORIGINAL — não a edição abandonada", async () => {
+    render(<EtapasTable etapas={ETAPAS} />);
+    const linha = screen.getByText("Novo").closest("tr")!;
+
+    fireEvent.click(linha.querySelector('[aria-label="Editar etapa"]')!);
+    const campoNome = await screen.findByLabelText("Nome");
+    fireEvent.change(campoNome, { target: { value: "Edição abandonada" } });
+    fireEvent.click(screen.getByRole("button", { name: "Cancelar" }));
+    await waitFor(() => expect(screen.queryByLabelText("Nome")).toBeNull());
+
+    fireEvent.click(linha.querySelector('[aria-label="Editar etapa"]')!);
+    const campoNomeReaberto = await screen.findByLabelText("Nome");
+    expect((campoNomeReaberto as HTMLInputElement).value).toBe("Novo");
+
+    // A action nunca foi chamada: nada disto foi salvo, é só estado local do diálogo.
+    expect(editarMock).not.toHaveBeenCalled();
+  });
+
   it("editar recusado mantém o diálogo aberto", async () => {
     editarMock.mockResolvedValue({ ok: false, erro: 'Já existe uma etapa chamada "Novo".' });
     render(<EtapasTable etapas={ETAPAS} />);

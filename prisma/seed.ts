@@ -38,7 +38,13 @@ export const WHATSAPP_SYSTEM_USER_ID = ID_SISTEMA_WHATSAPP;
 // funciona mais — por isso reusamos o client singleton de src/lib/prisma.ts
 // (adapter-pg já configurado) em vez de instanciar um novo aqui.
 
-const CORES = ["#94A3B8", "#60A5FA", "#FBBF24", "#F97316", "#22C55E"];
+// Minúsculas: é a única escrita de `cor` do sistema que não passa pela
+// normalização de `etapaSchema` (`core/pipeline/schema.ts`, que faz
+// `toLowerCase()` antes do regex `/^#[0-9a-f]{6}$/`) — este seed grava direto
+// no Prisma, sem passar pelo schema. Sem isto, uma etapa semeada e outra
+// criada pela tela com a "mesma" cor divergiriam por caixa (`#94A3B8` vs
+// `#94a3b8`), quebrando qualquer comparação por igualdade de string.
+const CORES = ["#94a3b8", "#60a5fa", "#fbbf24", "#f97316", "#22c55e"];
 
 /**
  * Seed determinístico do funil, dos usuários de exemplo e de alguns leads.

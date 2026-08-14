@@ -205,6 +205,14 @@ export async function definirEtapaDeFechamento(input: {
     throw new EtapaInvalidaError("Essa etapa não existe mais. Atualize a página.");
   }
 
+  // Lida ANTES da transação: é o único jeito de saber qual etapa PERDEU a
+  // flag. Depois da transação ela já está desligada em todo mundo, e não
+  // sobra de onde reconstituir quem era. Sem isto a auditoria grava só quem
+  // ganhou a flag — contraria o mesmo princípio de `excluirEtapa` logo abaixo
+  // ("ou a etapa some com o rastro, ou nada some"): aqui nada some, mas a
+  // troca ficaria só meio registrada.
+  const etapaAnterior = await prisma.pipelineStage.findFirst({ where: { ehGanho: true } });
+
   await prisma.$transaction(async (tx) => {
     await tx.pipelineStage.updateMany({ where: { ehGanho: true }, data: { ehGanho: false } });
     await tx.pipelineStage.update({ where: { id: etapa.id }, data: { ehGanho: true } });
@@ -215,6 +223,7 @@ export async function definirEtapaDeFechamento(input: {
     acao: "definir_etapa_de_fechamento",
     entidade: "PipelineStage",
     entidadeId: etapa.id,
+    antes: etapaAnterior ? { nome: etapaAnterior.nome } : undefined,
     depois: { nome: etapa.nome },
   });
 }
