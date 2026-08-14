@@ -173,9 +173,15 @@ const TELEFONE_CPF = "11988886404";
 const NOME_CPF = `Contato CPF ${MARCA}`;
 const CPF_SECRETO = "98765432100";
 
+const EMPRESA_CPF = `Acme CPF ${MARCA}`;
+
 let contatoComCpfId = "";
+let leadDoContatoComCpfId = "";
 
 async function limparContatoComCpf(): Promise<void> {
+  await prisma.lead.deleteMany({
+    where: { contact: { nome: { contains: `CPF ${MARCA}` } } },
+  });
   await prisma.contact.deleteMany({
     where: { OR: [{ nome: { contains: `CPF ${MARCA}` } }, { telefone: TELEFONE_CPF }] },
   });
@@ -185,9 +191,19 @@ test.describe("documento do contato na fronteira", () => {
   test.beforeAll(async () => {
     await limparContatoComCpf();
     const criado = await prisma.contact.create({
-      data: { nome: NOME_CPF, telefone: TELEFONE_CPF, documento: CPF_SECRETO },
+      data: {
+        nome: NOME_CPF,
+        telefone: TELEFONE_CPF,
+        documento: CPF_SECRETO,
+        empresa: EMPRESA_CPF,
+      },
     });
     contatoComCpfId = criado.id;
+    const etapa = await prisma.pipelineStage.findFirstOrThrow({ orderBy: { ordem: "asc" } });
+    const lead = await prisma.lead.create({
+      data: { contactId: criado.id, stageId: etapa.id, canal: "MANUAL" },
+    });
+    leadDoContatoComCpfId = lead.id;
   });
 
   test.afterAll(async () => {
@@ -206,6 +222,35 @@ test.describe("documento do contato na fronteira", () => {
         CPF_SECRETO
       );
       await expect(page.getByLabel("Documento")).toHaveValue(CPF_SECRETO);
+    });
+
+    // A invariante da tela de LEAD, e o caso do ADMIN é o que a torna forte.
+    //
+    // Este mesmo usuário acabou de ver o CPF em `/contatos/[id]` no teste
+    // acima. A ausência aqui, portanto, não é efeito de permissão — é decisão
+    // de desenho: o bloco "Pessoa" não busca nem renderiza o documento, para
+    // que a regra de quem pode vê-lo exista em UM lugar só. Duplicá-la numa
+    // segunda tela é como "regra numa tela, esquecida na outra" acontece.
+    //
+    // Se um dia o documento precisar aparecer aqui, este teste fica vermelho e
+    // obriga quem estiver mexendo a decidir de propósito, em vez de herdar o
+    // campo sem perceber.
+    test("a tela do lead mostra a pessoa e NUNCA o documento, nem para ADMIN", async ({ page }) => {
+      await page.goto(`/leads/${leadDoContatoComCpfId}`);
+      await expect(page.getByRole("heading", { name: "Pessoa" })).toBeVisible();
+
+      const payload = await page.content();
+
+      // METADE POSITIVA: o bloco realmente carregou o cadastro desta pessoa.
+      // Sem isto, a ausência do CPF passaria com o bloco vazio ou ausente.
+      expect(payload, "o bloco Pessoa não trouxe o cadastro — a asserção abaixo seria vazia").toContain(
+        EMPRESA_CPF
+      );
+
+      expect(
+        payload,
+        "documento na tela do lead: a regra de permissão mora em /contatos/[id] e não foi repetida aqui de propósito"
+      ).not.toContain(CPF_SECRETO);
     });
   });
 

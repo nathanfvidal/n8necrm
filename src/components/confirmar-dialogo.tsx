@@ -35,6 +35,7 @@ export function ConfirmarDialogo({
   titulo,
   descricao,
   rotuloConfirmar,
+  rotuloConfirmando = "Excluindo...",
   onConfirmar,
 }: {
   /** O botão que abre. Recebe `onClick` por injeção — ver abaixo. */
@@ -42,6 +43,13 @@ export function ConfirmarDialogo({
   titulo: string;
   descricao: string;
   rotuloConfirmar: string;
+  /**
+   * O que o botão diz enquanto a ação corre. O padrão "Excluindo..." serve o
+   * primeiro uso (excluir tarefa) e MENTIRIA em qualquer outro — arquivar um
+   * lead anunciando "Excluindo..." é pior que não anunciar nada, porque a
+   * pessoa acredita que perdeu o registro.
+   */
+  rotuloConfirmando?: string;
   onConfirmar: () => void | Promise<void>;
 }) {
   const [aberto, setAberto] = useState(false);
@@ -74,7 +82,7 @@ export function ConfirmarDialogo({
               Cancelar
             </Button>
             <Button variant="destructive" onClick={confirmar} disabled={confirmando}>
-              {confirmando ? "Excluindo..." : rotuloConfirmar}
+              {confirmando ? rotuloConfirmando : rotuloConfirmar}
             </Button>
           </DialogFooter>
         </DialogContent>
