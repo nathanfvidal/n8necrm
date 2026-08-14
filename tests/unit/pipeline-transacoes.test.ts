@@ -29,7 +29,9 @@ vi.mock("@/core/audit/log", () => ({
   gravarLinhaDeAuditoria: vi.fn(),
 }));
 
-const { moverNaOrdem, ORDEM_ESTACIONAMENTO } = await import("../../src/core/pipeline/service");
+const { moverNaOrdem, ORDEM_ESTACIONAMENTO, definirEtapaDeFechamento } = await import(
+  "../../src/core/pipeline/service"
+);
 
 /** Executa o callback do `$transaction` com um `tx` espião. */
 function transacaoQueRegistra(escritas: unknown[]) {
@@ -118,5 +120,31 @@ describe("moverNaOrdem — a forma da transação", () => {
       where: { ordem: { lt: 4 } },
       orderBy: { ordem: "desc" },
     });
+  });
+});
+
+describe("definirEtapaDeFechamento — a forma da transação", () => {
+  it("desliga TODAS antes de ligar a escolhida, na mesma transação", async () => {
+    findUniqueMock.mockResolvedValue({ id: "etapa-nova", ordem: 3, nome: "Negociação", ehGanho: false });
+
+    const escritas: unknown[] = [];
+    transactionMock.mockImplementation(transacaoQueRegistra(escritas));
+
+    await definirEtapaDeFechamento({ etapaId: "etapa-nova", autorId: "admin-1" });
+
+    expect(escritas).toHaveLength(2);
+    // A ordem importa: ligar antes de desligar deixaria duas flags ativas no
+    // meio da transação, e um erro no segundo passo persistiria as duas — que é
+    // exatamente o bug que `confirmarInvarianteEhGanho` existe para alarmar.
+    expect(escritas[0]).toEqual({ where: { ehGanho: true }, data: { ehGanho: false } });
+    expect(escritas[1]).toEqual({ where: { id: "etapa-nova" }, data: { ehGanho: true } });
+  });
+
+  it("recusa etapa que não existe mais", async () => {
+    findUniqueMock.mockResolvedValue(null);
+    await expect(
+      definirEtapaDeFechamento({ etapaId: "some", autorId: "admin-1" })
+    ).rejects.toThrow(/não existe mais/i);
+    expect(transactionMock).not.toHaveBeenCalled();
   });
 });

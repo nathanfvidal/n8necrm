@@ -181,3 +181,39 @@ export async function moverNaOrdem(input: {
     depois: { nome: etapa.nome, ordem: vizinha.ordem },
   });
 }
+
+/**
+ * Marca UMA etapa como a de fechamento, desligando a anterior no mesmo commit.
+ *
+ * O painel calcula a taxa de conversão a partir de `ehGanho`
+ * (`app/(painel)/page.tsx`), e o sistema depende de existir exatamente uma etapa
+ * com a flag ligada — `confirmarInvarianteEhGanho` (`prisma/seed.ts`) é o alarme
+ * que dispara se isso deixar de valer. Até esta branch a invariante era garantida
+ * por construção pelo laço do seed; agora é garantida aqui.
+ *
+ * Desligar vem ANTES de ligar: na ordem inversa, um erro entre os dois passos
+ * deixaria duas flags ativas — que é exatamente o bug que o alarme foi escrito
+ * para pegar.
+ */
+export async function definirEtapaDeFechamento(input: {
+  etapaId: string;
+  autorId: string;
+}): Promise<void> {
+  const etapa = await prisma.pipelineStage.findUnique({ where: { id: input.etapaId } });
+  if (!etapa) {
+    throw new EtapaInvalidaError("Essa etapa não existe mais. Atualize a página.");
+  }
+
+  await prisma.$transaction(async (tx) => {
+    await tx.pipelineStage.updateMany({ where: { ehGanho: true }, data: { ehGanho: false } });
+    await tx.pipelineStage.update({ where: { id: etapa.id }, data: { ehGanho: true } });
+  });
+
+  await registrarAuditoria({
+    userId: input.autorId,
+    acao: "definir_etapa_de_fechamento",
+    entidade: "PipelineStage",
+    entidadeId: etapa.id,
+    depois: { nome: etapa.nome },
+  });
+}
