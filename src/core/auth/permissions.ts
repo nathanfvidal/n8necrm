@@ -24,7 +24,16 @@ export type Acao =
    *
    * Achado R2 da auditoria da branch de cadastro de contato; decisão do dono.
    */
-  | "ver_documento_contato";
+  | "ver_documento_contato"
+  /**
+   * Criar, renomear, recolorir, reordenar e remover etapas do funil.
+   *
+   * Exclusiva de ADMIN pelo mesmo motivo de `gerenciar_usuarios`: renomear uma
+   * etapa muda o vocabulário de todo mundo que usa o CRM, e remover uma
+   * reescreve `stageId` de leads em massa. Estreitar depois é fácil; alargar
+   * depois de estragar, não.
+   */
+  | "gerenciar_funil";
 
 const matriz: Record<Role, Acao[]> = {
   ADMIN: [
@@ -35,6 +44,7 @@ const matriz: Record<Role, Acao[]> = {
     "exportar_leads",
     "configurar_agente",
     "ver_documento_contato",
+    "gerenciar_funil",
   ],
   GESTOR: [
     "criar_lead",

@@ -1,3 +1,4 @@
+import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { avaliarAtividadeSuspeita } from "./alerta";
 
@@ -22,7 +23,8 @@ import { avaliarAtividadeSuspeita } from "./alerta";
  *   Prisma — a coluna fica com o padrão do banco (NULL), e não sofrem a
  *   coerção acima.
  */
-export async function registrarAuditoria(params: {
+
+export type ParamsDeAuditoria = {
   userId: string;
   acao: string;
   entidade: string;
@@ -30,8 +32,30 @@ export async function registrarAuditoria(params: {
   antes?: unknown;
   depois?: unknown;
   ip?: string;
-}): Promise<void> {
-  await prisma.auditLog.create({
+};
+
+/**
+ * Grava a linha, e só isso.
+ *
+ * Existe separada porque `excluirEtapa` (`core/pipeline/service.ts`) precisa da
+ * linha DENTRO da transação que apaga a etapa: aquela é a única entrada
+ * forense da operação — não há entrada por lead —, e a etapa de origem deixa de
+ * existir, então não há de onde reconstituir para onde os leads foram. Ou a
+ * etapa some com o rastro, ou nada some.
+ *
+ * O que NÃO entra na transação é `avaliarAtividadeSuspeita`: ela faz `count` no
+ * `AuditLog`, `findMany` de ADMINs e `createMany` de notificações, e rodar isso
+ * segurando lock em linhas de `Lead` alonga a transação por trabalho que não é
+ * do domínio dela.
+ *
+ * `cliente` aceita tanto o `prisma` do módulo quanto o `tx` de um
+ * `$transaction` interativo.
+ */
+export async function gravarLinhaDeAuditoria(
+  params: ParamsDeAuditoria,
+  cliente: Prisma.TransactionClient = prisma
+): Promise<void> {
+  await cliente.auditLog.create({
     data: {
       userId: params.userId,
       acao: params.acao,
@@ -42,6 +66,10 @@ export async function registrarAuditoria(params: {
       ip: params.ip,
     },
   });
+}
+
+export async function registrarAuditoria(params: ParamsDeAuditoria): Promise<void> {
+  await gravarLinhaDeAuditoria(params);
 
   // Detecção de rajada destrutiva, avaliada AQUI e não em cada service.
   //
