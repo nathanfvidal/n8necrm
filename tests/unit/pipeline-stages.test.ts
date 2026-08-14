@@ -18,9 +18,9 @@ import { describe, it, expect, beforeAll, vi } from "vitest";
 // lógica testada.
 vi.mock("server-only", () => ({}));
 
-import { listarEtapas } from "../../src/core/pipeline/stages";
+import { listarEtapas, contarLeadsQueSeguramEtapa } from "../../src/core/pipeline/stages";
 import { seed } from "../../prisma/seed";
-import { client } from "../../config/client";
+import { prisma } from "../../src/lib/prisma";
 
 describe("listarEtapas", () => {
   beforeAll(async () => {
@@ -29,12 +29,16 @@ describe("listarEtapas", () => {
     await seed();
   });
 
-  it("retorna as etapas na ordem de `ordem` (crescente), refletindo client.funil (Task 15 renderiza as colunas do kanban nessa ordem)", async () => {
+  it("devolve TODAS as linhas de PipelineStage, na ordem de `ordem`", async () => {
     const etapas = await listarEtapas();
+    const direto = await prisma.pipelineStage.findMany({ orderBy: { ordem: "asc" } });
 
-    expect(etapas).toHaveLength(client.funil.length);
-    expect(etapas.map((e) => e.nome)).toEqual(client.funil);
-    expect(etapas.map((e) => e.ordem)).toEqual(client.funil.map((_, indice) => indice));
+    // Comparação com o banco, e não com `client.funil`: desde o CRUD de etapas
+    // o funil pode ter qualquer tamanho, qualquer nome e `ordem` com buracos
+    // (apagar a etapa de ordem 2 deixa 0,1,3,4 — e isso é correto, ver § 5 da
+    // spec). A asserção antiga exigia `ordem` DENSA, o contrário direto disso.
+    expect(etapas.map((e) => e.id)).toEqual(direto.map((e) => e.id));
+    expect(etapas.length).toBeGreaterThanOrEqual(1);
   });
 
   it("a ordem é por `ordem`, não incidental: chamadas repetidas devolvem exatamente a mesma sequência de ids", async () => {
@@ -53,5 +57,38 @@ describe("listarEtapas", () => {
     const menorOrdem = Math.min(...etapas.map((e) => e.ordem));
 
     expect(etapas[0].ordem).toBe(menorOrdem);
+  });
+});
+
+describe("contarLeadsQueSeguramEtapa", () => {
+  it("conta arquivados junto — é o número que a chave estrangeira enxerga", async () => {
+    const etapa = await prisma.pipelineStage.create({
+      data: { nome: `Etapa Teste Contagem ${Date.now()}`, ordem: 9001, cor: "#123456" },
+    });
+    const contato = await prisma.contact.create({
+      data: { nome: "Contato Teste Contagem", telefone: `5511${Date.now()}`.slice(0, 13) },
+    });
+    const lead = await prisma.lead.create({
+      data: {
+        contactId: contato.id,
+        stageId: etapa.id,
+        canal: "MANUAL",
+        arquivadoEm: new Date(),
+      },
+    });
+
+    try {
+      const { contarLeadsPorEtapa } = await import("../../src/core/leads/queries");
+      const ativos = await contarLeadsPorEtapa();
+      const seguram = await contarLeadsQueSeguramEtapa();
+
+      // A distinção inteira em duas linhas: o funil não vê o arquivado, a FK vê.
+      expect(ativos[etapa.id] ?? 0).toBe(0);
+      expect(seguram[etapa.id]).toBe(1);
+    } finally {
+      await prisma.lead.delete({ where: { id: lead.id } });
+      await prisma.contact.delete({ where: { id: contato.id } });
+      await prisma.pipelineStage.delete({ where: { id: etapa.id } });
+    }
   });
 });
