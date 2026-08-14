@@ -29,6 +29,10 @@ afterEach(() => {
   moverMock.mockReset();
   definirFechamentoMock.mockReset();
   excluirMock.mockReset();
+  // Faltava (rodada de correção 1): sem isto, um `mockResolvedValue` de um
+  // teste de edição vazava para o próximo — foi essa lacuna que deixou
+  // passar o diálogo fechando mesmo quando `editarEtapaAction` recusava.
+  editarMock.mockReset();
   refreshMock.mockReset();
 });
 
@@ -139,5 +143,75 @@ describe("EtapasTable — exclusão", () => {
 
     await screen.findByRole("button", { name: "Remover etapa" });
     expect(screen.queryByLabelText("Mover os leads para")).toBeNull();
+  });
+});
+
+describe("EtapasTable — edição", () => {
+  // Rodada de correção 1, achado 2: nenhum teste abria o diálogo de editar.
+  // Foi essa lacuna que deixou passar o achado 1 (diálogo fechando mesmo
+  // quando a action recusava).
+  it("editar com sucesso chama a action com os dados certos e fecha o diálogo", async () => {
+    editarMock.mockResolvedValue({ ok: true });
+    render(<EtapasTable etapas={ETAPAS} />);
+
+    const linha = screen.getByText("Novo").closest("tr")!;
+    fireEvent.click(linha.querySelector('[aria-label="Editar etapa"]')!);
+
+    const campoNome = await screen.findByLabelText("Nome");
+    fireEvent.change(campoNome, { target: { value: "Novo lead" } });
+    fireEvent.click(screen.getByRole("button", { name: "Salvar" }));
+
+    await waitFor(() =>
+      expect(editarMock).toHaveBeenCalledWith({ etapaId: "e-1", nome: "Novo lead", cor: "#0f62fe" })
+    );
+    // A action deu certo: o diálogo fecha, e o campo "Nome" some da tela.
+    await waitFor(() => expect(screen.queryByLabelText("Nome")).toBeNull());
+  });
+
+  it("editar recusado mantém o diálogo aberto", async () => {
+    editarMock.mockResolvedValue({ ok: false, erro: 'Já existe uma etapa chamada "Novo".' });
+    render(<EtapasTable etapas={ETAPAS} />);
+
+    const linha = screen.getByText("Proposta").closest("tr")!;
+    fireEvent.click(linha.querySelector('[aria-label="Editar etapa"]')!);
+
+    const campoNome = await screen.findByLabelText("Nome");
+    fireEvent.change(campoNome, { target: { value: "Novo" } });
+    fireEvent.click(screen.getByRole("button", { name: "Salvar" }));
+
+    await waitFor(() => expect(editarMock).toHaveBeenCalled());
+    // O diálogo NÃO fechou: o campo "Nome" continua na tela, e a mensagem
+    // de erro aparece — sem os dois, alguém reintroduz o fechamento
+    // prematuro e nenhum teste acusa.
+    expect(screen.getByLabelText("Nome")).not.toBeNull();
+    await waitFor(() =>
+      expect(document.body.textContent).toMatch(/Já existe uma etapa/)
+    );
+  });
+});
+
+describe("EtapasTable — exclusão recusada", () => {
+  it("excluir recusado mantém o diálogo aberto", async () => {
+    excluirMock.mockResolvedValue({
+      ok: false,
+      erro: "Não é possível remover a etapa de fechamento.",
+    });
+    const vazia = [
+      { id: "e-9", nome: "Vazia", cor: "#000000", ehGanho: false, leadsAtivos: 0, leadsTotais: 0 },
+      ...ETAPAS,
+    ];
+    render(<EtapasTable etapas={vazia} />);
+    const linha = screen.getByText("Vazia").closest("tr")!;
+    fireEvent.click(linha.querySelector('[aria-label="Remover etapa"]')!);
+
+    const confirmar = await screen.findByRole("button", { name: "Remover etapa" });
+    fireEvent.click(confirmar);
+
+    await waitFor(() => expect(excluirMock).toHaveBeenCalled());
+    // O diálogo NÃO fechou: o botão "Remover etapa" continua na tela.
+    expect(screen.getByRole("button", { name: "Remover etapa" })).not.toBeNull();
+    await waitFor(() =>
+      expect(document.body.textContent).toMatch(/etapa de fechamento/)
+    );
   });
 });

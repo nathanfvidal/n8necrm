@@ -24,7 +24,13 @@ export function EditarEtapaDialogo({
 }: {
   nomeAtual: string;
   corAtual: string;
-  onSalvar: (dados: { nome: string; cor: string }) => Promise<void>;
+  /**
+   * Devolve se a action deu certo. `false` (recusa ou queda de rede) mantém o
+   * diálogo aberto — fechar mesmo assim faria um "nome duplicado" desaparecer
+   * da tela como se tivesse salvado, e a mensagem de erro ficaria só no
+   * alerta acima da tabela, que a pessoa pode nem estar olhando.
+   */
+  onSalvar: (dados: { nome: string; cor: string }) => Promise<boolean>;
 }) {
   const [aberto, setAberto] = useState(false);
   const [nome, setNome] = useState(nomeAtual);
@@ -34,8 +40,8 @@ export function EditarEtapaDialogo({
   async function salvar() {
     setSalvando(true);
     try {
-      await onSalvar({ nome, cor });
-      setAberto(false);
+      const ok = await onSalvar({ nome, cor });
+      if (ok) setAberto(false);
     } finally {
       setSalvando(false);
     }

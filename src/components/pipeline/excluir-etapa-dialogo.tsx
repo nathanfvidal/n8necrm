@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -31,7 +31,12 @@ export function ExcluirEtapaDialogo({
   leadsAtivos: number;
   leadsTotais: number;
   destinosPossiveis: { id: string; nome: string }[];
-  onConfirmar: (destinoId: string | null) => Promise<void>;
+  /**
+   * Devolve se a action deu certo. `false` (recusa — etapa de fechamento,
+   * destino faltando — ou queda de rede) mantém o diálogo aberto, pelo mesmo
+   * motivo de `EditarEtapaDialogo.onSalvar`.
+   */
+  onConfirmar: (destinoId: string | null) => Promise<boolean>;
 }) {
   const [aberto, setAberto] = useState(false);
   const [destinoId, setDestinoId] = useState("");
@@ -49,8 +54,8 @@ export function ExcluirEtapaDialogo({
   async function confirmar() {
     setConfirmando(true);
     try {
-      await onConfirmar(precisaDeDestino ? destinoId : null);
-      setAberto(false);
+      const ok = await onConfirmar(precisaDeDestino ? destinoId : null);
+      if (ok) setAberto(false);
     } finally {
       setConfirmando(false);
     }

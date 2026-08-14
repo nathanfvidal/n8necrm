@@ -40,18 +40,27 @@ export function EtapasTable({ etapas }: { etapas: EtapaNaTela[] }) {
    * pelo retorno; queda de rede é EXCEÇÃO e rejeita a promise antes de a action
    * entrar no `try`. Tratar só um deixa o botão voltar ao normal sem dizer nada.
    * Ver `src/lib/acao.ts`.
+   *
+   * Devolve `boolean` — `true` só no caminho de sucesso — porque `EditarEtapaDialogo`
+   * e `ExcluirEtapaDialogo` precisam saber se FECHAM ou não. Sem o retorno, os dois
+   * fechavam sempre, e uma recusa da action (nome duplicado, etapa de fechamento sem
+   * destino) desaparecia da tela como se tivesse dado certo — o erro ficava só no
+   * alerta acima da tabela, que a pessoa pode nem estar olhando. Mesmo padrão de
+   * `executar` em `src/components/users/user-table.tsx:45-59`.
    */
-  async function executar(acao: () => Promise<ResultadoAcao>, contexto: string) {
+  async function executar(acao: () => Promise<ResultadoAcao>, contexto: string): Promise<boolean> {
     setErro(null);
     try {
       const resultado = await acao();
       if (!resultado.ok) {
         setErro(resultado.erro);
-        return;
+        return false;
       }
       router.refresh();
+      return true;
     } catch (erroCapturado) {
       setErro(registrarFalhaDeRede(contexto, erroCapturado));
+      return false;
     }
   }
 
