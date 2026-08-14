@@ -106,6 +106,25 @@ describe("TaskForm", () => {
     });
   });
 
+  // A falha que o resultado NÃO cobre. Pegou uma regressão real desta entrega:
+  // ao trocar o `catch` por `if (!resultado.ok)`, o formulário ficou sem
+  // tratamento para a promise rejeitada, e uma queda de rede voltava o botão
+  // ao normal sem mensagem nenhuma. Ver `registrarFalhaDeRede` (`lib/acao.ts`).
+  it("falha de REDE: avisa em vez de ficar em silêncio", async () => {
+    const erroDoConsole = vi.spyOn(console, "error").mockImplementation(() => {});
+    criarMinhaTaskMock.mockRejectedValue(new TypeError("Failed to fetch"));
+    render(<TaskForm />);
+
+    await preencherEEnviar("Tarefa qualquer", "2026-08-05");
+
+    await waitFor(() =>
+      expect(screen.getByRole("alert").textContent).toMatch(/falar com o servidor/i)
+    );
+    expect(screen.queryByText(/Failed to fetch/)).toBeNull();
+    expect(refreshMock).not.toHaveBeenCalled();
+    erroDoConsole.mockRestore();
+  });
+
   it("falha NÃO limpa o formulário — o que foi digitado continua lá", async () => {
     criarMinhaTaskMock.mockResolvedValue({ ok: false, erro: "Descrição longa demais." });
     render(<TaskForm />);

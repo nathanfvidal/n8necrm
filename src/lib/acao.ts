@@ -48,27 +48,58 @@ export const MENSAGEM_SESSAO_INVALIDA = "Sua sessão expirou. Recarregue a pági
  * pagar aquela dívida (registrada em
  * `docs/superpowers/plans/2026-08-06-whatsapp-fatia-2-pendencias.md`).
  *
- * **Três** componentes de cliente ainda comparam a string por conta própria
- * (`leads/kanban-board.tsx`, `leads/lead-form.tsx`,
- * `notifications/notification-bell.tsx`) — são outro caminho: recebem um
- * `Error` de uma action que LANÇA, não um `ResultadoAcao`. Eram cinco;
- * `tasks/task-form.tsx` e `tasks/task-list.tsx` saíram da lista quando as
- * cinco actions de tarefa passaram a devolver resultado (ver o cabeçalho de
- * `core/tasks/actions.ts`).
+ * **Nenhum componente de cliente compara mais essa string.** Eram cinco
+ * (`tasks/task-form.tsx`, `tasks/task-list.tsx`, `leads/kanban-board.tsx`,
+ * `leads/lead-form.tsx`, `notifications/notification-bell.tsx`), e os cinco
+ * saíram quando as actions dos três módulos passaram a devolver
+ * `ResultadoAcao` em vez de lançar. Hoje `ehSessaoInvalida` é chamada só do
+ * lado do servidor, que é onde ela sempre deveria ter estado.
  *
- * O que sobrou é o mesmo trabalho, um módulo de cada vez: `core/leads/actions.ts`
- * tem duas que lançam (`criarLeadManual` e `moverLeadDeEtapa`, as duas
- * `Promise<Lead>`) e `core/notifications/actions.ts` uma
- * (`marcarNotificacaoComoLidaAction`, `Promise<void>`).
+ * O que os cinco tinham em comum, e o que a mudança fechou: cada um repetia,
+ * como literal de string, um texto escrito no `service.ts` do módulo. Renomear a
+ * mensagem na origem apagava a tradução **em silêncio** — sem erro de tipo,
+ * sem teste vermelho no ponto da mudança — e a pessoa passava a ler o fallback
+ * genérico para um problema que ela conseguia corrigir sozinha.
  *
- * As duas de lead carregam um segundo problema junto, e vale registrar aqui
- * para não se perder: devolvem `Lead` INTEIRO, e o retorno de uma Server
- * Action é serializado para o navegador — `utm`, `sessionId` e `itemId` vão
- * junto. É o dado do lead que a própria pessoa acabou de criar ou mover, não o
- * de um colega, então não é vazamento entre usuários; é o mesmo padrão que
- * produziu o do funil. `concluirMinhaTaskAction` já foi corrigida nesse ponto.
- * Uniformizá-las é a mesma dívida do `SessaoInvalidaError`, não esta função.
+ * `criarLeadManualAction` e `moverLeadDeEtapaAction` carregavam um segundo
+ * problema, fechado junto: devolviam `Lead` INTEIRO, e o retorno de uma Server
+ * Action é serializado para o navegador — `utm`, `sessionId` e `itemId` iam
+ * junto, para chamadores que descartam o retorno. Era o lead da própria
+ * pessoa, então nunca foi vazamento entre usuários; era o mesmo padrão que
+ * produziu o do funil.
+ *
+ * Continua de pé a dívida do `SessaoInvalidaError`: a detecção ainda é por
+ * texto, num lugar só. Trocá-la por uma classe de erro é o conserto de
+ * verdade, e não depende mais de mexer em componente nenhum.
  */
 export function ehSessaoInvalida(erro: unknown): boolean {
   return erro instanceof Error && erro.message === "Não autenticado";
+}
+
+/**
+ * A metade do contrato que mora no CLIENTE.
+ *
+ * `ResultadoAcao` promete que a action não lança — e essa é promessa do CÓDIGO
+ * do servidor, não do transporte. Server Action é chamada de rede: conexão que
+ * cai entre o clique e a resposta, aba suspensa, deploy no meio do caminho. Aí
+ * o `await` rejeita sem nunca ter entrado no `try` da action, e nenhum
+ * `resultado.erro` existe para mostrar.
+ *
+ * Todo chamador precisa dos DOIS caminhos. Nos componentes com atualização
+ * otimista (`task-list.tsx`, `kanban-board.tsx`, `notification-bell.tsx`)
+ * esquecer este aqui deixa a linha sumida da tela sem ter sido salva; nos
+ * formulários (`lead-form.tsx`, `task-form.tsx`) deixa o botão voltar ao normal
+ * sem dizer nada, como se nada tivesse sido tentado.
+ *
+ * Este helper existe para a mensagem não ser reescrita cinco vezes com cinco
+ * redações. O `console.error` guarda o detalhe onde ele serve a alguém e não
+ * sai da máquina: não há SDK de Sentry no cliente (`src/instrumentation.ts` só
+ * roda quando `NEXT_RUNTIME === "nodejs"`).
+ */
+export const MENSAGEM_FALHA_DE_REDE =
+  "Não foi possível falar com o servidor. Verifique a conexão e tente de novo.";
+
+export function registrarFalhaDeRede(contexto: string, erro: unknown): string {
+  console.error(`${contexto}:`, erro);
+  return MENSAGEM_FALHA_DE_REDE;
 }

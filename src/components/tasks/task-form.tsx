@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { criarMinhaTaskAction } from "@/core/tasks/actions";
+import { registrarFalhaDeRede, type ResultadoAcao } from "@/lib/acao";
 import { parseDataCivil } from "@/lib/date";
 
 export type OpcaoDeContato = { id: string; nome: string };
@@ -128,17 +129,25 @@ export function TaskForm({
       return;
     }
 
-    const resultado = await criarMinhaTaskAction({
-      titulo: data.titulo,
-      // `|| undefined` e não a string crua: o `<textarea>` vazio manda `""`,
-      // e o `<select>` sem escolha também. Mandar `""` como `contactId`
-      // reprovaria na validação do servidor ("Contato inválido") por um
-      // campo que a pessoa simplesmente não preencheu.
-      descricao: data.descricao || undefined,
-      contactId: data.contactId || undefined,
-      vencimento,
-      leadId,
-    });
+    let resultado: ResultadoAcao;
+    try {
+      resultado = await criarMinhaTaskAction({
+        titulo: data.titulo,
+        // `|| undefined` e não a string crua: o `<textarea>` vazio manda `""`,
+        // e o `<select>` sem escolha também. Mandar `""` como `contactId`
+        // reprovaria na validação do servidor ("Contato inválido") por um
+        // campo que a pessoa simplesmente não preencheu.
+        descricao: data.descricao || undefined,
+        contactId: data.contactId || undefined,
+        vencimento,
+        leadId,
+      });
+    } catch (erro) {
+      // A action não lança — a REDE lança. Ver `registrarFalhaDeRede` em
+      // `src/lib/acao.ts`.
+      setErroEnvio(registrarFalhaDeRede("Falha ao criar tarefa", erro));
+      return;
+    }
 
     if (!resultado.ok) {
       // De propósito NÃO chamamos `reset` aqui: em caso de erro a pessoa

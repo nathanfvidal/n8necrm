@@ -6,6 +6,7 @@ import Link from "next/link";
 import { Bell } from "lucide-react";
 
 import { marcarNotificacaoComoLidaAction } from "@/core/notifications/actions";
+import { registrarFalhaDeRede } from "@/lib/acao";
 
 /**
  * O que o sino precisa para desenhar uma linha — e nada além disso.
@@ -33,16 +34,19 @@ export type NotificacaoApresentada = {
 };
 
 /**
- * Traduz o que `marcarNotificacaoComoLidaAction` pode lançar numa mensagem
- * segura — mesmo padrão de `mensagemDeErroConcluir` (`tasks/task-list.tsx`,
- * Task 18). O caso central é "Notificação não encontrada" (checagem de dono
- * em `marcarComoLida`, `notifications/dispatch.ts`).
+ * Rede de segurança para a falha que NÃO chega como `{ ok: false }`.
+ *
+ * Substituiu um `mensagemDeErroMarcarLida` que comparava `erro.message` com
+ * "Não autenticado" — texto do servidor, casado por string aqui. A frase mora
+ * agora em `core/notifications/actions.ts`, junto com a de "notificação não
+ * encontrada", que este componente nunca chegou a traduzir: a checagem de dono
+ * em `marcarComoLida` produzia esse erro e o sino mostrava o genérico.
+ *
+ * O que sobra é o transporte: a action promete não lançar, a rede não promete
+ * nada.
  */
-function mensagemDeErroMarcarLida(erro: unknown): string {
-  if (erro instanceof Error && erro.message === "Não autenticado") {
-    return "Sua sessão expirou ou sua conta foi desativada. Atualize a página e faça login novamente.";
-  }
-  return "Não foi possível marcar como lida. Tente novamente em instantes.";
+function mensagemDeFalhaDeRede(erro: unknown): string {
+  return registrarFalhaDeRede("Falha ao marcar notificação como lida", erro);
 }
 
 /**
@@ -67,8 +71,8 @@ function mensagemDeErroMarcarLida(erro: unknown): string {
  * Ressincroniza `notificacoes` (estado local) sempre que `iniciais` (a PROP)
  * muda — bug real encontrado ao verificar ao vivo contra o dev server: sem
  * isto, `useState(iniciais)` só lê o valor inicial UMA VEZ, no primeiro
- * mount. Criar um lead atualiza a contagem no banco e `criarLeadManual`
- * (`leads/actions.ts`) já chama `revalidatePath("/", "layout")` para
+ * mount. Criar um lead atualiza a contagem no banco e `criarLeadManualAction`
+ * (`leads/actions.ts`) já chama `revalidatePath("/(painel)", "layout")` para
  * invalidar o cache do servidor, e `LeadForm` chama `router.refresh()` — mas
  * isso só faz o Next mesclar uma PROP nova no componente já montado; sem
  * ressincronizar o estado, o sino continuava mostrando a contagem antiga do
@@ -97,14 +101,26 @@ export function NotificationBell({ notificacoes: iniciais }: { notificacoes: Not
     // Remoção otimista: some da lista antes da confirmação do servidor.
     setNotificacoes((atual) => atual.filter((n) => n.id !== id));
 
+    // Rollback pelos DOIS caminhos: a recusa do servidor (id de outra pessoa,
+    // ou que já não existe — mesma checagem de dono de `concluirTask`) chega
+    // como `{ ok: false }`, e a falha de rede como exceção. Um sino que só
+    // olhasse o `catch` deixaria a notificação sumida da lista sem ter sido
+    // marcada — ela reapareceria no próximo carregamento de página, o que é
+    // pior que nunca ter sumido: parece que o sistema esqueceu.
+    const desfazer = (mensagem: string) => {
+      setNotificacoes(anterior);
+      setErro(mensagem);
+    };
+
     try {
-      await marcarNotificacaoComoLidaAction(id);
+      const resultado = await marcarNotificacaoComoLidaAction(id);
+      if (!resultado.ok) {
+        desfazer(resultado.erro);
+        return;
+      }
       router.refresh();
     } catch (erroCapturado) {
-      // Rollback: reinsere se o servidor rejeitou (ex.: id de outra pessoa,
-      // ou já não existe mais — mesma checagem de dono de `concluirTask`).
-      setNotificacoes(anterior);
-      setErro(mensagemDeErroMarcarLida(erroCapturado));
+      desfazer(mensagemDeFalhaDeRede(erroCapturado));
     }
   }
 

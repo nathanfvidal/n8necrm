@@ -27,7 +27,7 @@ import type { LeadDoQuadro } from "../../src/core/leads/queries";
 
 const moverLeadDeEtapaMock = vi.fn();
 vi.mock("@/core/leads/actions", () => ({
-  moverLeadDeEtapa: (...args: unknown[]) => moverLeadDeEtapaMock(...args),
+  moverLeadDeEtapaAction: (...args: unknown[]) => moverLeadDeEtapaMock(...args),
 }));
 
 const { useKanbanBoard, KanbanBoard } = await import("../../src/components/leads/kanban-board");
@@ -65,6 +65,14 @@ function eventoFake(
   };
 }
 
+// As mensagens são as que `core/leads/actions.ts` devolve. Repeti-las aqui é
+// deliberado: o teste do CLIENTE prova que o texto chega intacto à tela, e o
+// teste do SERVIDOR (`lead-actions.test.ts`) prova que é esse o texto
+// produzido. Quem quebrar um dos dois lados vê um vermelho no lado certo.
+const SEM_PERMISSAO = "Você não tem permissão para mover leads.";
+const ETAPA_SUMIU = "Essa etapa não existe mais. Atualize a página.";
+const SESSAO_EXPIROU = "Sua sessão expirou. Recarregue a página e entre de novo.";
+
 const etapasFake = [
   { id: "etapa-1", nome: "Novo", ordem: 0, cor: "#94A3B8", ehGanho: false, ehPerdido: false },
   { id: "etapa-2", nome: "Contato feito", ordem: 1, cor: "#60A5FA", ehGanho: false, ehPerdido: false },
@@ -80,7 +88,7 @@ afterEach(() => {
 
 describe("useKanbanBoard", () => {
   it("move otimisticamente o lead para a nova etapa quando a action resolve", async () => {
-    moverLeadDeEtapaMock.mockResolvedValue(leadFake());
+    moverLeadDeEtapaMock.mockResolvedValue({ ok: true });
     const { result } = renderHook(() => useKanbanBoard({ "etapa-1": [leadFake()], "etapa-2": [] }));
 
     await act(async () => {
@@ -96,7 +104,7 @@ describe("useKanbanBoard", () => {
   });
 
   it("sem permissão mover_lead: desfaz a movimentação e mostra a mensagem do servidor", async () => {
-    moverLeadDeEtapaMock.mockRejectedValue(new Error("Sem permissão para mover lead"));
+    moverLeadDeEtapaMock.mockResolvedValue({ ok: false, erro: SEM_PERMISSAO });
     const { result } = renderHook(() => useKanbanBoard({ "etapa-1": [leadFake()], "etapa-2": [] }));
 
     await act(async () => {
@@ -105,13 +113,11 @@ describe("useKanbanBoard", () => {
 
     expect(result.current.leadsPorEtapa["etapa-1"]).toHaveLength(1);
     expect(result.current.leadsPorEtapa["etapa-2"]).toHaveLength(0);
-    expect(result.current.erro).toBe("Sem permissão para mover lead");
+    expect(result.current.erro).toBe(SEM_PERMISSAO);
   });
 
-  it("etapa inexistente: desfaz a movimentação e mostra mensagem própria", async () => {
-    moverLeadDeEtapaMock.mockRejectedValue(
-      new Error('Etapa não encontrada: "x" não corresponde a nenhuma etapa do funil.')
-    );
+  it("etapa inexistente: desfaz a movimentação e mostra a frase do servidor", async () => {
+    moverLeadDeEtapaMock.mockResolvedValue({ ok: false, erro: ETAPA_SUMIU });
     const { result } = renderHook(() => useKanbanBoard({ "etapa-1": [leadFake()], "etapa-2": [] }));
 
     await act(async () => {
@@ -119,11 +125,11 @@ describe("useKanbanBoard", () => {
     });
 
     expect(result.current.leadsPorEtapa["etapa-1"]).toHaveLength(1);
-    expect(result.current.erro).toBe("Essa etapa não existe mais. Atualize a página.");
+    expect(result.current.erro).toBe(ETAPA_SUMIU);
   });
 
-  it("sessão rejeitada (sem sessão OU usuário desativado): desfaz e mostra mensagem própria", async () => {
-    moverLeadDeEtapaMock.mockRejectedValue(new Error("Não autenticado"));
+  it("sessão rejeitada (sem sessão OU usuário desativado): desfaz e mostra a frase do servidor", async () => {
+    moverLeadDeEtapaMock.mockResolvedValue({ ok: false, erro: SESSAO_EXPIROU });
     const { result } = renderHook(() => useKanbanBoard({ "etapa-1": [leadFake()], "etapa-2": [] }));
 
     await act(async () => {
@@ -131,12 +137,18 @@ describe("useKanbanBoard", () => {
     });
 
     expect(result.current.leadsPorEtapa["etapa-1"]).toHaveLength(1);
-    expect(result.current.erro).toBe(
-      "Sua sessão expirou ou sua conta foi desativada. Atualize a página e faça login novamente."
-    );
+    expect(result.current.erro).toBe(SESSAO_EXPIROU);
   });
 
-  it("erro inesperado: desfaz e cai no fallback genérico, sem vazar detalhe interno", async () => {
+  // ─── O caminho que a unificação criou, e que precisa não ter sumido ───
+  //
+  // Os três testes acima cobrem a recusa que chega como VALOR. Este cobre a
+  // falha que chega como EXCEÇÃO: a rede caindo entre o clique e a resposta,
+  // antes de a action rodar. Sem o `catch`, o card ficaria preso na coluna nova
+  // — o quadro passaria a mentir sobre onde o lead está, que é a única coisa
+  // que o funil serve para dizer.
+  it("falha de REDE: desfaz igual, e o erro cru não chega à tela", async () => {
+    const erroDoConsole = vi.spyOn(console, "error").mockImplementation(() => {});
     moverLeadDeEtapaMock.mockRejectedValue(new Error("connection terminated unexpectedly"));
     const { result } = renderHook(() => useKanbanBoard({ "etapa-1": [leadFake()], "etapa-2": [] }));
 
@@ -145,8 +157,14 @@ describe("useKanbanBoard", () => {
     });
 
     expect(result.current.leadsPorEtapa["etapa-1"]).toHaveLength(1);
-    expect(result.current.erro).toBe("Não foi possível mover o lead. Tente novamente em instantes.");
+    expect(result.current.leadsPorEtapa["etapa-2"]).toHaveLength(0);
+    expect(result.current.erro).toMatch(/falar com o servidor/i);
     expect(result.current.erro).not.toContain("connection terminated");
+    // O detalhe vai para o console do navegador, que é onde ele serve para
+    // alguém — e não sai da máquina: não há SDK de Sentry no cliente
+    // (`src/instrumentation.ts` só roda no runtime nodejs).
+    expect(erroDoConsole).toHaveBeenCalled();
+    erroDoConsole.mockRestore();
   });
 
   it("solto fora de qualquer coluna (over null): não chama a action nem muda o estado", async () => {
@@ -176,7 +194,7 @@ describe("useKanbanBoard", () => {
       "entre elas, não podem deixar o board e o servidor em desacordo — a segunda precisa " +
       "enxergar o efeito da primeira, não a foto antiga do estado capturada no fechamento",
     async () => {
-      moverLeadDeEtapaMock.mockResolvedValue(leadFake());
+      moverLeadDeEtapaMock.mockResolvedValue({ ok: true });
       const { result } = renderHook(() =>
         useKanbanBoard({ "etapa-1": [leadFake()], "etapa-2": [], "etapa-3": [] })
       );
@@ -223,7 +241,7 @@ describe("useKanbanBoard", () => {
   );
 
   it("limparErro apaga a mensagem de erro exibida", async () => {
-    moverLeadDeEtapaMock.mockRejectedValue(new Error("Sem permissão para mover lead"));
+    moverLeadDeEtapaMock.mockResolvedValue({ ok: false, erro: SEM_PERMISSAO });
     const { result } = renderHook(() => useKanbanBoard({ "etapa-1": [leadFake()], "etapa-2": [] }));
 
     await act(async () => {

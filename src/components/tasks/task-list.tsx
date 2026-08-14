@@ -13,6 +13,7 @@ import {
   reabrirTaskAction,
 } from "@/core/tasks/actions";
 import { EmptyState } from "@/components/empty-state";
+import { registrarFalhaDeRede } from "@/lib/acao";
 import { ConfirmarDialogo } from "@/components/confirmar-dialogo";
 import type { OpcaoDeContato } from "@/components/tasks/task-form";
 import { formatarDataCivilBR, parseDataCivil } from "@/lib/date";
@@ -65,8 +66,7 @@ export type TaskLinha = {
  * ter entrado no `try` da action.
  */
 function mensagemDeFalhaDeRede(erro: unknown): string {
-  console.error("Falha ao concluir tarefa:", erro);
-  return "Não foi possível falar com o servidor. Verifique a conexão e tente de novo.";
+  return registrarFalhaDeRede("Falha ao concluir tarefa", erro);
 }
 
 function porVencimentoAsc(a: TaskLinha, b: TaskLinha): number {

@@ -37,26 +37,33 @@ import type { Lead } from "@prisma/client";
  * vistos por todos daquela empresa". Criar e editar passam a concordar.
  * Quem atribuiu fica registrado na auditoria dos dois lados.
  */
-export async function criarLeadManual(input: {
+export async function criarLeadManualAction(input: {
   nome: string;
   telefone: string;
   email?: string;
   responsavelId: string;
-}): Promise<Lead> {
-  const autor = await usuarioAtual();
-
-  if (!hasPermission(autor.papel, "criar_lead")) {
-    throw new Error("Sem permissão para criar lead");
-  }
-
+}): Promise<ResultadoAcao> {
   try {
-    const lead = await criarLead({
+    const autor = await usuarioAtual();
+
+    // DENTRO do `try`, junto com `usuarioAtual()`. Fora dele, uma sessão
+    // expirada rejeitaria a promise sem produzir `ResultadoAcao` e a tela não
+    // mostraria nem sucesso nem erro — o mesmo achado que `exigirEdicaoDeLead`
+    // (abaixo) já documenta. Nesta action os dois estavam fora.
+    if (!hasPermission(autor.papel, "criar_lead")) {
+      throw new LeadInvalidoError(MENSAGEM_SEM_PERMISSAO_CRIAR);
+    }
+
+    await criarLead({
       nome: input.nome,
       telefone: input.telefone,
       email: input.email,
       responsavelId: input.responsavelId,
       autorId: autor.id,
     });
+  } catch (erro) {
+    return paraResultadoErro(erro, "Não foi possível criar o lead. Tente novamente em instantes.");
+  }
 
     // `criarLead` (service.ts, Task 19) já grava uma notificação in-app para
     // `responsavelId` — mas o sino que a exibe (`NotificationBell`, dentro de
@@ -88,46 +95,48 @@ export async function criarLeadManual(input: {
     // ancestral de `/login` também) nem qualquer cache futuro fora do
     // painel. Verificado ao vivo: o sino ainda atualiza a contagem sem
     // reload de página inteira com este escopo mais estreito.
-    revalidatePath("/(painel)", "layout");
+  revalidatePath("/(painel)", "layout");
 
-    return lead;
-  } catch (erro) {
-    // `criarLead` (via encontrarOuCriarContact, Task 12) lança quando
-    // `telefone` não é um número brasileiro reconhecível — uma falha
-    // ESPERADA de validação de formulário, não um bug. A mensagem já é
-    // segura para exibir a quem preencheu o formulário (não vaza detalhe
-    // de infraestrutura), então deixamos o texto passar, mas relançamos
-    // como um Error isolado — não a exceção original, seja lá o que for —
-    // para garantir que o que atravessa esta borda pública é sempre um
-    // erro classificado e limpo, nunca algo cru de uma camada interna.
-    // Qualquer OUTRO erro (banco fora do ar, etc.) segue sem modificação:
-    // não é papel desta action disfarçar um bug de "erro esperado".
-    if (erro instanceof Error && /^Telefone inválido/.test(erro.message)) {
-      throw new Error(erro.message);
-    }
-    throw erro;
-  }
+  // `{ ok: true }`, e NUNCA o `Lead`. A versão anterior devolvia a linha
+  // inteira — e o retorno de uma Server Action é serializado para o
+  // navegador, então `utm` (JSON de rastreio), `sessionId` e `itemId` iam
+  // junto, para um chamador (`LeadForm`) que descarta o retorno. Era o lead
+  // que a própria pessoa acabou de criar, não o de um colega, então nunca foi
+  // vazamento entre usuários; era o mesmo padrão que produziu o vazamento do
+  // funil, e a regra da casa é: só atravessa o que a tela usa.
+  return { ok: true };
 }
 
 /**
  * Move um lead para outra etapa do funil. Server Action — `autorId` sempre
  * derivado da sessão, nunca aceito do cliente.
+ *
+ * NÃO invalida caminho nenhum, e isso é uma lacuna conhecida, não uma
+ * decisão: quem arrasta vê o quadro certo (atualização otimista em
+ * `useKanbanBoard`), mas `/leads` e o painel continuam servindo cache antigo
+ * até a próxima navegação completa. Fica registrado aqui em vez de corrigido
+ * junto porque muda comportamento de cache, e esta entrega é sobre a
+ * convenção de erro. A correção é uma linha:
+ * `invalidarCaminhosDeLead(input.leadId)`.
  */
-export async function moverLeadDeEtapa(input: {
+export async function moverLeadDeEtapaAction(input: {
   leadId: string;
   novaStageId: string;
-}): Promise<Lead> {
-  const autor = await usuarioAtual();
-
-  if (!hasPermission(autor.papel, "mover_lead")) {
-    throw new Error("Sem permissão para mover lead");
+}): Promise<ResultadoAcao> {
+  try {
+    const autor = await usuarioAtual();
+    if (!hasPermission(autor.papel, "mover_lead")) {
+      throw new LeadInvalidoError(MENSAGEM_SEM_PERMISSAO_MOVER);
+    }
+    await moverEtapa({
+      leadId: input.leadId,
+      novaStageId: input.novaStageId,
+      autorId: autor.id,
+    });
+  } catch (erro) {
+    return paraResultadoErro(erro, "Não foi possível mover o lead. Tente novamente em instantes.");
   }
-
-  return moverEtapa({
-    leadId: input.leadId,
-    novaStageId: input.novaStageId,
-    autorId: autor.id,
-  });
+  return { ok: true };
 }
 
 export type SalvarNotaState = { erro: string | null };
@@ -199,13 +208,19 @@ export async function adicionarNotaAction(
 }
 
 /* ------------------------------------------------------------------ *
- * Edição, arquivamento e correção de nota — Server Actions que devolvem
- * `ResultadoAcao` em vez de lançar. As três actions antigas acima lançam;
- * uniformizá-las é dívida registrada em `src/lib/acao.ts`, não tarefa desta
- * entrega.
+ * Daqui para baixo mora o maquinário de erro que TODAS as actions deste
+ * arquivo usam.
+ *
+ * `criarLeadManualAction` e `moverLeadDeEtapaAction` (acima) lançavam e
+ * devolviam `Lead`; hoje devolvem `ResultadoAcao` como as outras. A única
+ * assinatura diferente que sobrou é `adicionarNotaAction`, e ela é diferente
+ * por um motivo de verdade: `useActionState` exige a forma
+ * `(prevState, formData)`. Isso não é inconsistência, é outro contrato.
  * ------------------------------------------------------------------ */
 
 const MENSAGEM_SEM_PERMISSAO = "Você não tem permissão para editar leads.";
+const MENSAGEM_SEM_PERMISSAO_CRIAR = "Você não tem permissão para criar leads.";
+const MENSAGEM_SEM_PERMISSAO_MOVER = "Você não tem permissão para mover leads.";
 
 /**
  * Mensagens de domínio escritas para quem preencheu o formulário ler. São
@@ -222,11 +237,47 @@ const MENSAGENS_SEGURAS = [
   /^Etapa não encontrada:/,
   /^Este lead (já está|não está) arquivado/,
   /^Nota (não encontrada|vazia|muito longa)/,
+  // `criarLead` → `encontrarOuCriarContact` (`dedupe.ts`) rejeita telefone que
+  // não é número brasileiro reconhecível. É falha ESPERADA de formulário, e a
+  // mensagem já vem escrita para quem digitou. Antes desta entrega ela chegava
+  // à tela por outro caminho: `criarLeadManual` a relançava e `lead-form.tsx`
+  // a reconhecia por prefixo do lado do cliente. Sem esta linha, o mesmo texto
+  // cairia no ramo genérico e a pessoa leria "não foi possível criar o lead"
+  // sem saber que o problema é o telefone que ela consegue corrigir.
+  /^Telefone inválido/,
+];
+
+/**
+ * Mensagens de domínio que ganham uma frase melhor antes de ir para a tela —
+ * mesmo mecanismo de `core/tasks/actions.ts`, e consultado ANTES de
+ * `MENSAGENS_SEGURAS`, senão o repasse cru venceria.
+ *
+ * O critério é o que o texto INTERPOLA, não o texto em si. Quatro mensagens de
+ * `service.ts`/`dedupe.ts` embutem um valor, e elas não são iguais:
+ *
+ * - `Etapa não encontrada: "<stageId>"` e `Responsável não encontrado:
+ *   "<responsavelId>"` embutem **id interno**. A pessoa não pode fazer nada
+ *   com um cuid, e ele não tem por que atravessar a fronteira. Vão para a
+ *   lista abaixo.
+ * - `Responsável desativado: "<nome>"` embute o **nome que a pessoa acabou de
+ *   escolher no `<select>`**. Trocá-lo por uma frase genérica tiraria
+ *   informação útil sem esconder nada — continua passando verbatim.
+ * - `Telefone inválido: "<telefone>"` devolve **o que a própria pessoa
+ *   digitou**. Mesmo caso: passa verbatim (React escapa o texto na
+ *   renderização).
+ */
+const MENSAGENS_MELHORADAS: [RegExp, string][] = [
+  [/^Etapa não encontrada/, "Essa etapa não existe mais. Atualize a página."],
+  [/^Responsável não encontrado/, "Esse responsável não existe mais. Atualize a página."],
 ];
 
 function paraResultadoErro(erro: unknown, mensagemGenerica: string): { ok: false; erro: string } {
   if (erro instanceof LeadInvalidoError) {
     return { ok: false, erro: erro.message };
+  }
+  if (erro instanceof Error) {
+    const melhorada = MENSAGENS_MELHORADAS.find(([padrao]) => padrao.test(erro.message));
+    if (melhorada) return { ok: false, erro: melhorada[1] };
   }
   if (erro instanceof Error && MENSAGENS_SEGURAS.some((padrao) => padrao.test(erro.message))) {
     return { ok: false, erro: erro.message };
