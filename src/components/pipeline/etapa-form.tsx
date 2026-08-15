@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
@@ -16,6 +16,11 @@ export function EtapaForm() {
   const [cor, setCor] = useState(COR_PADRAO);
   const [erro, setErro] = useState<string | null>(null);
   const [salvando, setSalvando] = useState(false);
+  // O `finally` abaixo desliga `salvando` assim que a action responde, mas a
+  // tabela de etapas só muda quando o render do servidor chega — e é ele que
+  // demora. Sem esta transição, o botão anuncia "Adicionar etapa" de volta
+  // enquanto a etapa recém-criada ainda não apareceu na lista.
+  const [atualizando, iniciarAtualizacao] = useTransition();
 
   async function enviar(evento: React.FormEvent) {
     evento.preventDefault();
@@ -30,7 +35,7 @@ export function EtapaForm() {
       }
       setNome("");
       setCor(COR_PADRAO);
-      router.refresh();
+      iniciarAtualizacao(() => router.refresh());
     } catch (erroCapturado) {
       setErro(registrarFalhaDeRede("Falha ao criar a etapa", erroCapturado));
     } finally {
@@ -65,8 +70,8 @@ export function EtapaForm() {
         />
       </div>
 
-      <Button type="submit" disabled={salvando}>
-        {salvando ? "Criando..." : "Adicionar etapa"}
+      <Button type="submit" disabled={salvando || atualizando}>
+        {salvando || atualizando ? "Criando..." : "Adicionar etapa"}
       </Button>
 
       {erro && (

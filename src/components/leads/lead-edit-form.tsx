@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useTransition } from "react";
 import { useForm, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -70,6 +70,20 @@ export function LeadEditForm({
   const [erro, setErro] = useState<string | null>(null);
   const [sucesso, setSucesso] = useState(false);
   const [arquivando, setArquivando] = useState(false);
+  /**
+   * Uma transição só para os dois caminhos (salvar e arquivar): enquanto o
+   * servidor não devolve a tela nova, NENHUM dos dois botões deve convidar a
+   * um segundo clique — arquivar em cima de um salvamento que ainda está
+   * chegando é justamente a corrida que a tela não sabe resolver.
+   *
+   * Só o `disabled` do botão de arquivar entra nisso; o RÓTULO dele não pode
+   * mudar. `lead-edicao.spec.ts` o localiza por
+   * `getByRole("button", { name: "Arquivar", exact: true })`, e o `exact`
+   * existe porque "Arquivar" é substring de "Desarquivar" — trocar o texto
+   * por "Arquivando..." quebraria a busca. Botão desabilitado o Playwright
+   * espera ficar disponível; botão renomeado ele nunca acha.
+   */
+  const [atualizando, iniciarAtualizacao] = useTransition();
 
   const {
     control,
@@ -102,7 +116,7 @@ export function LeadEditForm({
       return;
     }
     setSucesso(true);
-    router.refresh();
+    iniciarAtualizacao(() => router.refresh());
   }
 
   async function alternarArquivamento() {
@@ -119,7 +133,7 @@ export function LeadEditForm({
       setErro(resultado.erro);
       return;
     }
-    router.refresh();
+    iniciarAtualizacao(() => router.refresh());
   }
 
   return (
@@ -171,8 +185,8 @@ export function LeadEditForm({
           {errors.stageId && <p className="text-xs text-red-600">{errors.stageId.message}</p>}
         </div>
 
-        <Button type="submit" disabled={isSubmitting}>
-          {isSubmitting ? "Salvando..." : "Salvar"}
+        <Button type="submit" disabled={isSubmitting || atualizando}>
+          {isSubmitting || atualizando ? "Salvando..." : "Salvar"}
         </Button>
       </form>
 
@@ -193,7 +207,7 @@ export function LeadEditForm({
             Daí "Arquivar lead" / "Devolver ao funil" na confirmação. */}
         <ConfirmarDialogo
           gatilho={(abrir) => (
-            <Button type="button" variant="outline" onClick={abrir} disabled={arquivando}>
+            <Button type="button" variant="outline" onClick={abrir} disabled={arquivando || atualizando}>
               {lead.arquivadoEm ? "Desarquivar" : "Arquivar"}
             </Button>
           )}

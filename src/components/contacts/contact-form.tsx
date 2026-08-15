@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useTransition } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -121,6 +121,7 @@ export function ContactForm({
   const router = useRouter();
   const [erroEnvio, setErroEnvio] = useState<string | null>(null);
   const [salvo, setSalvo] = useState(false);
+  const [atualizando, iniciarAtualizacao] = useTransition();
 
   const {
     register,
@@ -170,7 +171,9 @@ export function ContactForm({
 
     if (!contato) reset(VAZIO);
     setSalvo(true);
-    router.refresh();
+    // Na transição: sem ela o botão volta a "Adicionar contato" antes de a
+    // linha nova aparecer na agenda. Ver `lead-form.tsx`.
+    iniciarAtualizacao(() => router.refresh());
   }
 
   return (
@@ -252,8 +255,12 @@ export function ContactForm({
       </FieldGroup>
 
       <div className="flex flex-wrap items-center gap-3">
-        <Button type="submit" disabled={isSubmitting}>
-          {isSubmitting ? "Salvando..." : contato ? "Salvar alterações" : "Adicionar contato"}
+        <Button type="submit" disabled={isSubmitting || atualizando}>
+          {isSubmitting || atualizando
+            ? "Salvando..."
+            : contato
+              ? "Salvar alterações"
+              : "Adicionar contato"}
         </Button>
 
         {erroEnvio && (

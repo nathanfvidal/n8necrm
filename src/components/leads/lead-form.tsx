@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useTransition } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -64,6 +64,18 @@ export function LeadForm({
   const router = useRouter();
   const [erroEnvio, setErroEnvio] = useState<string | null>(null);
   const [sucesso, setSucesso] = useState(false);
+  /**
+   * `router.refresh()` devolve `void` e não dá para aguardar. Sem a
+   * transição, `onSubmit` retornava no instante seguinte à chamada,
+   * `isSubmitting` virava `false`, o botão voltava a "Adicionar lead" — e a
+   * tabela só mudava quando o servidor respondesse, quase um segundo depois.
+   * A pessoa lia "pronto" olhando para a lista velha.
+   *
+   * Dentro de `startTransition`, `isPending` só cai quando o render do
+   * servidor chega. É a única forma de o botão contar a verdade sobre uma
+   * atualização que não é síncrona.
+   */
+  const [atualizando, iniciarAtualizacao] = useTransition();
 
   const {
     register,
@@ -121,7 +133,7 @@ export function LeadForm({
 
     reset({ nome: "", telefone: "", email: "", responsavelId: responsavelPadraoId });
     setSucesso(true);
-    router.refresh();
+    iniciarAtualizacao(() => router.refresh());
   }
 
   return (
@@ -162,8 +174,8 @@ export function LeadForm({
         )}
       </div>
 
-      <Button type="submit" disabled={isSubmitting}>
-        {isSubmitting ? "Salvando..." : "Adicionar lead"}
+      <Button type="submit" disabled={isSubmitting || atualizando}>
+        {isSubmitting || atualizando ? "Salvando..." : "Adicionar lead"}
       </Button>
 
       {erroEnvio && (

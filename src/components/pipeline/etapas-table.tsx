@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowDown, ArrowUp } from "lucide-react";
 
@@ -40,6 +40,20 @@ export type EtapaNaTela = {
 export function EtapasTable({ etapas }: { etapas: EtapaNaTela[] }) {
   const router = useRouter();
   const [erro, setErro] = useState<string | null>(null);
+  /**
+   * Vale sobretudo pelas setas de reordenar.
+   *
+   * `router.refresh()` não é aguardável, então até aqui as setas voltavam a
+   * aceitar clique no instante em que a action respondia — mas a tabela só se
+   * redesenha quando o render do servidor chega, quase um segundo depois.
+   * Nessa janela a etapa aparece na posição ANTIGA, e o segundo clique de
+   * quem achou que o primeiro não pegou move a etapa duas casas.
+   *
+   * Dentro de `startTransition`, `atualizando` só cai quando a tela nova
+   * existe. Os diálogos de editar e excluir ficam de fora: eles fecham no
+   * sucesso, então não há botão pendurado convidando ao segundo clique.
+   */
+  const [atualizando, iniciarAtualizacao] = useTransition();
 
   /**
    * Todo chamador precisa dos DOIS caminhos: `{ ok: false }` é VALOR e chega
@@ -62,7 +76,7 @@ export function EtapasTable({ etapas }: { etapas: EtapaNaTela[] }) {
         setErro(resultado.erro);
         return false;
       }
-      router.refresh();
+      iniciarAtualizacao(() => router.refresh());
       return true;
     } catch (erroCapturado) {
       setErro(registrarFalhaDeRede(contexto, erroCapturado));
@@ -123,6 +137,7 @@ export function EtapasTable({ etapas }: { etapas: EtapaNaTela[] }) {
                         variant="ghost"
                         size="sm"
                         aria-label="Subir etapa"
+                        disabled={atualizando}
                         onClick={() =>
                           executar(
                             () => moverEtapaNaOrdemAction({ etapaId: etapa.id, direcao: "cima" }),
@@ -138,6 +153,7 @@ export function EtapasTable({ etapas }: { etapas: EtapaNaTela[] }) {
                         variant="ghost"
                         size="sm"
                         aria-label="Descer etapa"
+                        disabled={atualizando}
                         onClick={() =>
                           executar(
                             () => moverEtapaNaOrdemAction({ etapaId: etapa.id, direcao: "baixo" }),
@@ -161,6 +177,7 @@ export function EtapasTable({ etapas }: { etapas: EtapaNaTela[] }) {
                       <Button
                         variant="ghost"
                         size="sm"
+                        disabled={atualizando}
                         onClick={() =>
                           executar(
                             () => definirEtapaDeFechamentoAction(etapa.id),
