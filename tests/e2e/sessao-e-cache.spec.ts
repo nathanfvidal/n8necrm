@@ -41,6 +41,13 @@ test("depois de sair, o botão voltar não traz o painel de volta", async ({ pag
   await page.getByLabel("Senha").fill(senhaE2e());
   await page.getByRole("button", { name: "Entrar" }).click();
   await page.waitForURL("/");
+  // Espera a hidratacao antes de clicar na barra lateral. Sem isto, sob
+  // carga, o clique chega antes de o React assumir o <Link> e o navegador faz
+  // uma navegacao de PAGINA INTEIRA em vez de client-side -- outro caminho de
+  // render, com outro comportamento de esqueleto e de cache. E a mesma
+  // armadilha ja documentada em auth.setup.ts (clicar antes da hidratacao
+  // recarrega a pagina em vez de submeter o formulario).
+  await page.waitForLoadState("networkidle");
 
   // Duas telas com dado real, para que exista MESMO algo em cache quando o
   // logout acontecer. Sem visitar nada, o teste passaria por não haver o que
@@ -87,6 +94,13 @@ test("com sessão viva, voltar para uma aba recente não recarrega do servidor",
   await page.getByLabel("Senha").fill(senhaE2e());
   await page.getByRole("button", { name: "Entrar" }).click();
   await page.waitForURL("/");
+  // Espera a hidratacao antes de clicar na barra lateral. Sem isto, sob
+  // carga, o clique chega antes de o React assumir o <Link> e o navegador faz
+  // uma navegacao de PAGINA INTEIRA em vez de client-side -- outro caminho de
+  // render, com outro comportamento de esqueleto e de cache. E a mesma
+  // armadilha ja documentada em auth.setup.ts (clicar antes da hidratacao
+  // recarrega a pagina em vez de submeter o formulario).
+  await page.waitForLoadState("networkidle");
 
   await page.getByRole("link", { name: "Leads", exact: true }).first().click();
   await expect(page.getByRole("heading", { name: "Leads", exact: true })).toBeVisible();
@@ -191,6 +205,13 @@ test("desativado no meio da sessão não escreve nem alcança tela nova, mesmo c
   await page.getByLabel("Senha").fill(senhaE2e());
   await page.getByRole("button", { name: "Entrar" }).click();
   await page.waitForURL("/");
+  // Espera a hidratacao antes de clicar na barra lateral. Sem isto, sob
+  // carga, o clique chega antes de o React assumir o <Link> e o navegador faz
+  // uma navegacao de PAGINA INTEIRA em vez de client-side -- outro caminho de
+  // render, com outro comportamento de esqueleto e de cache. E a mesma
+  // armadilha ja documentada em auth.setup.ts (clicar antes da hidratacao
+  // recarrega a pagina em vez de submeter o formulario).
+  await page.waitForLoadState("networkidle");
 
   // Aquece o cache: `/leads` passa a existir na memória do navegador. Sem
   // este passo o teste passaria por não haver nada em cache — verde sem

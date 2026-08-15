@@ -264,6 +264,41 @@ criada por mim enquanto eu corrigia o R2.
 
 Ficam registrados.
 
+## R6 — achado NOVO da Fase 3: o `loading.tsx` não atende a troca de aba
+
+A reverificação dos fluxos críticos derrubou uma afirmação que eu tinha feito no relatório,
+nos comentários do código e na mensagem de commit da Branch 1.
+
+O teste *"o esqueleto aparece enquanto a próxima aba não chega"* falhou em **2 de 3**
+execuções da suíte completa. Duas hipóteses minhas foram testadas e descartadas antes da
+certa: hidratação tardia (adicionei espera, continuou falhando) e atraso do `reload`
+(passou a falhar em 3 de 3, porque `page.route` segura o **início** da resposta e não o
+render do servidor).
+
+A causa está numa frase do doc do `loading.js` que eu tinha lido sem entender —
+seção "Navigation": *"The Fallback UI is **prefetched**, making navigation immediate unless
+prefetching hasn't completed."* Toda navegação deste painel é `prefetch={false}`. Sem
+prefetch, o roteador não tem o fallback em mãos no momento do clique: ele busca o segmento,
+e quando a resposta chega, o conteúdo já vem junto. O esqueleto só aparecia quando o render
+do servidor demorava o bastante para o fallback ser pintado no meio do streaming — sorte,
+não garantia.
+
+**O que isso muda, e o que não muda.** O desenho está certo e nada precisou ser removido:
+`loading.tsx` atende o **carregamento completo** (primeiro acesso, F5, link colado), que era
+o pior número da medição — 1738 ms de tela em branco no F5 de `/leads`. Quem dá sinal na
+**troca de aba** é o `IndicadorDeLink` (`useLinkStatus`), e o doc daquele hook recomenda
+exatamente esse par para o caso `prefetch={false}`. Eu tinha atribuído o benefício ao
+mecanismo errado.
+
+**Correções:** o teste passou a afirmar uma propriedade estável do documento — que o
+marcador do esqueleto sai no HTML **antes** da `<table>` —, e o comentário de
+`(painel)/loading.tsx` foi reescrito para dizer qual caminho ele atende e qual não atende.
+Três execuções determinísticas, e **sabotado**: apagando `loading.tsx`, o marcador some do
+HTML e o teste fica vermelho.
+
+A mensagem do commit `026b38f` continua afirmando o benefício errado. Não reescrevo
+histórico (regra 6 da skill); fica corrigido aqui e no código.
+
 ## Verificação da Fase 2
 
 | | |
@@ -271,7 +306,7 @@ Ficam registrados.
 | `npm run typecheck` | 0 erros |
 | `npm run lint` | 0 erros, 2 warnings pré-existentes |
 | `npx vitest run` | 933/933 em 94 arquivos, duas execuções consecutivas |
-| `npm run test:e2e` | 42/42 |
+| `npm run test:e2e` | 42/42, tres execucoes consecutivas apos o R6 |
 
 ### Nota operacional — reincidência a NÃO descartar
 

@@ -23,21 +23,31 @@ import { LoadingState } from "@/components/loading-state";
  * viagem de rede, não trabalho de banco. Este arquivo NÃO reduz nada disso;
  * ele faz o mesmo segundo ser um segundo em que a tela responde.
  *
- * ## Por que funciona apesar de o layout ser `force-dynamic`
+ * ## Qual caminho isto atende — e qual NÃO atende
  *
- * O doc do `loading.js` avisa que dado de runtime lido **no layout** não
- * ganha fallback — sem Cache Components, a navegação bloqueia até o layout
- * terminar. `(painel)/layout.tsx` lê `usuarioAtual()`, notificações e
- * `headers()`, então a ressalva se aplicaria.
+ * Atende o **carregamento completo**: primeiro acesso, F5, link colado. O SSR
+ * streama o shell e este esqueleto no primeiro pedaço, antes de as consultas
+ * terminarem. É onde estava o pior número da medição — F5 em `/leads` levava
+ * 1738 ms, e até aqui eram 1738 ms de tela em branco.
  *
- * Ela não morde aqui porque o layout compartilhado não é refeito em
- * navegação client-side — *"shared layouts won't automatically be refetched
- * on every navigation, only the page segment that changes"*
- * (.../05-config/01-next-config-js/staleTimes.md). Isso foi confirmado na
- * medição, não presumido do doc: a troca de aba emite 6 consultas e um F5
- * emite 8, e as duas de diferença são exatamente as do layout (o `User`
- * duplicado e a de `Notification`). Em troca de aba o layout não roda, e o
- * que bloqueia é a página — que é o que este `<Suspense>` cobre.
+ * **NÃO atende a troca de aba**, e essa correção custou caro para ser
+ * aprendida. O doc do `loading.js` diz, na seção "Navigation": *"The Fallback
+ * UI is **prefetched**, making navigation immediate unless prefetching hasn't
+ * completed."* Toda navegação deste painel é `prefetch={false}` — correção de
+ * segurança do logout, que não se mexe —, então no clique o roteador **não
+ * tem o fallback em mãos**: ele busca o segmento, e quando a resposta chega,
+ * o conteúdo vem junto. O esqueleto só aparecia nas vezes em que o render do
+ * servidor demorava o bastante para o fallback ser pintado no meio do
+ * streaming, o que é sorte, não garantia — o teste que afirmava isso falhou
+ * em 2 de 3 execuções da suíte até a causa ser entendida.
+ *
+ * Quem dá sinal na troca de aba é o `IndicadorDeLink` (`useLinkStatus`), e o
+ * doc daquele hook recomenda exatamente esse par para o caso `prefetch=false`.
+ * Os dois mecanismos existem porque cobrem caminhos diferentes.
+ *
+ * `tests/e2e/transicao.spec.ts` trava cada um no seu caminho: aqui, que o
+ * marcador do esqueleto sai no HTML ANTES da `<table>`; lá, que o link acende
+ * enquanto a navegação está a caminho.
  */
 export default function CarregandoPainel() {
   return <LoadingState />;
