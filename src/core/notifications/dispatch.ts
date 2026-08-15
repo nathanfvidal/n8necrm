@@ -155,25 +155,33 @@ export async function listarNotificacoesNaoLidas(userId: string): Promise<Notifi
  * (node_modules/next/dist/docs/01-app/03-api-reference/04-functions/after.md),
  * que é literalmente o desenho que aquele comentário já descrevia.
  *
- * ## Por que o `try`
+ * ## Por que o `try`, e o que ele NÃO é
  *
- * `after()` só existe dentro de contexto de requisição. `tests/unit/
- * notifications.test.ts` chama `listarNotificacoesNaoLidas` direto, sob
- * Vitest, onde esse contexto não existe — sem o `try`, a chamada lançaria e
- * derrubaria testes que não têm nada a ver com poda.
+ * A primeira versão deste comentário afirmava que `after()` lança fora de
+ * contexto de requisição e que sem o `try` os testes de unidade quebrariam.
+ * **Isso não foi verificado, e é falso.** Medido: com o filtro do `catch`
+ * trocado por um padrão que nunca casa, `tests/unit/notifications.test.ts`
+ * (que chama `listarNotificacoesNaoLidas` direto, sob Vitest, sem requisição
+ * nenhuma) roda 6/6 sem imprimir uma linha sequer — `after()` simplesmente
+ * não lança ali.
  *
- * Perder a poda nesses casos é aceitável e não silencia nada que importe: ela
- * é oportunista por construção (roda por sorteio, ver `CHANCE_DE_PODA`), o
- * próximo carregamento real do painel volta a sorteá-la, e `podarNotificacoes`
- * tem testes próprios que a exercitam diretamente
- * (`tests/unit/notificacoes-poda.test.ts`).
+ * O `try` fica, mas como seguro, não como necessidade conhecida: se algum
+ * runtime futuro passar a lançar, o sino de notificações não pode cair junto.
+ * E o `catch` REGISTRA, em vez de engolir — um `catch` vazio faria a poda
+ * sumir sem ninguém notar, e `Notification` voltaria a crescer sem teto em
+ * silêncio. Como hoje nenhum caminho conhecido lança, qualquer linha que
+ * apareça neste log é surpresa de verdade, e merece ser lida.
+ *
+ * Perder a poda numa chamada é aceitável: ela é oportunista por construção
+ * (roda por sorteio, ver `CHANCE_DE_PODA`), o próximo carregamento do painel
+ * volta a sorteá-la, e `podarNotificacoes` tem testes que a exercitam
+ * diretamente (`tests/unit/notificacoes-poda.test.ts`).
  */
 function agendarPoda(): void {
   try {
     after(() => podarDeVezEmQuando());
-  } catch {
-    // Sem contexto de requisição. Ver acima: a poda simplesmente não acontece
-    // nesta chamada, e nenhuma decisão de produto depende disso.
+  } catch (erro) {
+    console.error("Falha ao agendar a poda de notificações:", erro);
   }
 }
 

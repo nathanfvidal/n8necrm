@@ -1,3 +1,10 @@
+// `dotenv/config` primeiro, e `PrismaClient` próprio em vez de `@/lib/prisma`
+// (que tem `import "server-only"` e quebraria fora do pipeline de build do
+// Next) — mesmo padrão de `equipe.spec.ts`, pelo mesmo motivo.
+import "dotenv/config";
+import { PrismaClient } from "@prisma/client";
+import { PrismaPg } from "@prisma/adapter-pg";
+import bcrypt from "bcryptjs";
 import { test, expect } from "@playwright/test";
 
 import { EMAIL_ADMIN_E2E, senhaE2e } from "./credenciais";
@@ -101,4 +108,124 @@ test("com sessão viva, voltar para uma aba recente não recarrega do servidor",
     foiAoServidor,
     "voltar para /leads dentro da janela de 30 s foi ao servidor — staleTimes.dynamic não está valendo"
   ).toBe(false);
+});
+
+/**
+ * O que a janela de 30 s NÃO pode custar: desativar alguém precisa continuar
+ * revogando o que importa, na hora.
+ *
+ * ## O buraco que este teste fecha
+ *
+ * A auditoria (`docs/auditorias/2026-08-15-tempo-de-resposta-do-painel.md`,
+ * R1) mediu que, com `staleTimes.dynamic: 30`, uma pessoa desativada no meio
+ * da sessão CONTINUA vendo, por até 30 segundos, as telas que já tinha
+ * aberto: a navegação client-side é servida do cache do próprio navegador e
+ * nunca chama o servidor, logo nunca passa por `usuarioAtual()`.
+ *
+ * Isso é decisão registrada do dono, não descuido — e o alcance é estreito
+ * porque o payload daquelas telas já estava na memória do navegador dela
+ * antes da desativação. Quem apenas não fechasse a aba veria o mesmo, e isso
+ * sempre foi verdade.
+ *
+ * `equipe.spec.ts` já prova a revogação, mas só pelo caminho fácil: ele usa
+ * `page.goto("/leads")`, carregamento completo, que sempre bate no servidor.
+ * Ele passaria verde mesmo que o cache tivesse aberto um buraco de verdade.
+ * Este teste cobre o caminho que faltava.
+ *
+ * ## Por que ele afirma as GARANTIAS, e não a janela
+ *
+ * Seria fácil (e errado) escrever "a aba em cache ainda renderiza". Essa
+ * asserção ficaria vermelha no dia em que alguém baixasse `staleTimes` para
+ * 0 — ou seja, ficaria vermelha por o sistema ter ficado MAIS seguro. Um
+ * teste que pune o conserto é pior que nenhum.
+ *
+ * O que precisa valer para qualquer valor de `staleTimes` é o que está aqui:
+ * quem foi desativado não ESCREVE e não alcança tela nova.
+ */
+const EMAIL_REVOGACAO = "e2e-revogacao-cache@teste.invalid";
+
+const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL! });
+const prisma = new PrismaClient({ adapter });
+
+/**
+ * A conta de teste nasce e morre DENTRO do teste, não num `beforeAll`.
+ *
+ * `playwright.config.ts` usa `fullyParallel: true`, então os testes deste
+ * arquivo se espalham entre workers — e cada worker executa o `beforeAll` do
+ * arquivo por conta própria. Com a fixture lá fora, dois workers disputavam o
+ * mesmo e-mail único e o Postgres respondia
+ * `Unique constraint failed on the fields: (email)`, derrubando inclusive o
+ * teste vizinho, que não tem nada a ver com esta conta.
+ *
+ * `finally` e não `afterAll`: garante a limpeza mesmo com asserção quebrada,
+ * e mantém o ciclo de vida no único lugar que sabe que a conta existe.
+ */
+async function comContaDescartavel(corpo: () => Promise<void>) {
+  await prisma.user.deleteMany({ where: { email: EMAIL_REVOGACAO } });
+  await prisma.user.create({
+    data: {
+      nome: "E2E Revogacao Cache",
+      email: EMAIL_REVOGACAO,
+      // Custo 10, o mesmo de `core/auth/credenciais.ts` — um custo diferente
+      // aqui faria o login falhar por motivo que não tem nada a ver com o
+      // que este teste mede.
+      senhaHash: await bcrypt.hash(senhaE2e(), 10),
+      papel: "VENDEDOR",
+      ativo: true,
+    },
+  });
+  try {
+    await corpo();
+  } finally {
+    await prisma.user.deleteMany({ where: { email: EMAIL_REVOGACAO } });
+  }
+}
+
+test("desativado no meio da sessão não escreve nem alcança tela nova, mesmo com o cache quente", async ({
+  page,
+}) => {
+  await comContaDescartavel(async () => {
+  await page.goto("/login");
+  await page.waitForLoadState("networkidle");
+  await page.getByLabel("E-mail").fill(EMAIL_REVOGACAO);
+  await page.getByLabel("Senha").fill(senhaE2e());
+  await page.getByRole("button", { name: "Entrar" }).click();
+  await page.waitForURL("/");
+
+  // Aquece o cache: `/leads` passa a existir na memória do navegador. Sem
+  // este passo o teste passaria por não haver nada em cache — verde sem
+  // exercitar a situação que ele descreve.
+  await page.getByRole("link", { name: "Leads", exact: true }).first().click();
+  await expect(page.getByRole("heading", { name: "Leads", exact: true })).toBeVisible();
+
+  // Desativada AGORA, com a sessão viva e o cache quente. O cookie dela
+  // continua no navegador, intacto e não expirado.
+  await prisma.user.update({ where: { email: EMAIL_REVOGACAO }, data: { ativo: false } });
+
+  // ─── Garantia 1: não escreve ───────────────────────────────────────────
+  // Tudo dentro da janela de 30 s, de propósito: esperar ela expirar faria o
+  // teste provar decurso de prazo em vez de revogação.
+  const TELEFONE = "11955559876";
+  await page.getByLabel("Nome").fill("E2E Revogacao Escrita");
+  await page.getByLabel("Telefone").fill(TELEFONE);
+  await page.getByRole("button", { name: "Adicionar lead" }).click();
+  // Pelo TEXTO, não por `getByRole("alert")`: o Next mantém um
+  // `<div role="alert" id="__next-route-announcer__">` permanente e vazio no
+  // documento para anunciar troca de rota a leitor de tela, então a busca por
+  // papel casa com dois elementos e morre em modo estrito.
+  await expect(page.getByText(/sua sessão expirou/i)).toBeVisible();
+
+  // A régua final é o BANCO, não a mensagem na tela: um alerta bonito sobre
+  // uma linha que foi gravada seria o pior dos dois mundos.
+  expect(
+    await prisma.lead.count({ where: { contact: { telefone: { contains: "955559876" } } } }),
+    "usuário desativado conseguiu gravar um lead a partir da tela em cache"
+  ).toBe(0);
+
+  // ─── Garantia 2: não alcança tela nova ─────────────────────────────────
+  // "Tarefas" nunca foi visitada nesta sessão, então não há cache para servir
+  // e a navegação precisa ir ao servidor — onde `usuarioAtual()` rejeita.
+  await page.getByRole("link", { name: "Tarefas", exact: true }).first().click();
+  await expect(page).toHaveURL(/\/login/);
+  });
 });
