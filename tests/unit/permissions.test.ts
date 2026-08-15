@@ -39,3 +39,11 @@ describe("hasPermission", () => {
     expect(hasPermission("VENDEDOR", "configurar_agente")).toBe(false);
   });
 });
+
+describe("gerenciar_funil", () => {
+  it("só ADMIN gerencia o funil — GESTOR e VENDEDOR não", () => {
+    expect(hasPermission("ADMIN", "gerenciar_funil")).toBe(true);
+    expect(hasPermission("GESTOR", "gerenciar_funil")).toBe(false);
+    expect(hasPermission("VENDEDOR", "gerenciar_funil")).toBe(false);
+  });
+});

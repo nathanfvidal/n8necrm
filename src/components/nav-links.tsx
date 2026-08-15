@@ -4,11 +4,12 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   LayoutDashboard, Target, Columns3, Users, ListChecks, MessageSquare, UserCog,
+  SlidersHorizontal,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
 export type IconeDoPainel =
-  | "dashboard" | "leads" | "funil" | "contatos" | "tarefas" | "conversas" | "equipe";
+  | "dashboard" | "leads" | "funil" | "contatos" | "tarefas" | "conversas" | "equipe" | "etapas";
 
 export type LinkDoPainel = { href: string; label: string; icone: IconeDoPainel };
 
@@ -27,6 +28,7 @@ const ICONES: Record<IconeDoPainel, LucideIcon> = {
   tarefas: ListChecks,
   conversas: MessageSquare,
   equipe: UserCog,
+  etapas: SlidersHorizontal,
 };
 
 /**

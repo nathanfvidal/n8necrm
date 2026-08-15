@@ -48,6 +48,10 @@ export type { AlertaAtividadePayload };
  * ignorar o sino, que é o pior resultado possível para um detector.
  *
  * `desarquivar_lead` não entra: desfazer é reparo, não estrago.
+ *
+ * `excluir_etapa` entra: destrói estrutura do funil e reescreve `stageId` de
+ * leads em massa. As outras operações de funil (`criar_etapa`, `editar_etapa`,
+ * `reordenar_etapa`) ficam de fora, junto com o trabalho normal.
  */
 export const ACOES_SENSIVEIS = [
   "excluir_task",
@@ -55,6 +59,7 @@ export const ACOES_SENSIVEIS = [
   "arquivar_lead",
   "desativar_usuario",
   "redefinir_senha",
+  "excluir_etapa",
   "exportar_leads",
 ] as const;
 

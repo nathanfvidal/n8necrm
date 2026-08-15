@@ -1,0 +1,29 @@
+-- Índice de `AuditLog` para o detector de rajada destrutiva.
+--
+-- `avaliarAtividadeSuspeita` (`core/audit/alerta.ts`) roda a cada ação sensível
+-- e faz `count(*) WHERE userId = ? AND acao IN (...) AND criadoEm >= agora-5min`.
+-- Igualdade primeiro, faixa depois — é a ordem que a coluna líder exige para
+-- que a varredura comece já no usuário certo.
+--
+-- De quebra, cobre a chave estrangeira `AuditLog_userId_fkey`. O Postgres NÃO
+-- indexa FK sozinho, e esta era a única do CRM sem índice numa tabela que só
+-- cresce (`AuditLog` nunca é podada).
+--
+-- ## Honestidade sobre o ganho
+--
+-- Medido antes de escrever isto: `AuditLog` tem 241 linhas em 352 kB, e o
+-- planejador escolhe varredura sequencial porque a tabela cabe em uma página.
+-- Hoje o ganho é ZERO e afirmar o contrário seria inventar justificativa.
+--
+-- O que justifica mesmo assim: é a ÚNICA tabela do sistema com crescimento
+-- monotônico — toda ação auditável acrescenta uma linha, nada nunca sai — e já
+-- é a mais varrida sequencialmente do banco (15.269 varreduras contra 1 uso de
+-- índice). O custo é uma estrutura pequena e um `INSERT` marginalmente mais
+-- lento; a alternativa é descobrir a falta dele no dia em que a tabela já
+-- estiver grande e a consulta estiver no caminho de toda exclusão.
+--
+-- Sem coluna nova, sem tabela nova: sem `NOT NULL` a acertar (ver
+-- `tests/unit/migracoes-seguras.test.ts`) e sem migração companheira de
+-- RLS/REVOKE.
+
+CREATE INDEX "AuditLog_userId_criadoEm_idx" ON "AuditLog"("userId", "criadoEm");

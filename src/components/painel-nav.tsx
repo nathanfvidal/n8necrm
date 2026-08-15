@@ -42,6 +42,9 @@ export function PainelNav({
     ...(papelUsuario && hasPermission(papelUsuario, "gerenciar_usuarios")
       ? [{ href: "/usuarios", label: "Equipe", icone: "equipe" as const }]
       : []),
+    ...(papelUsuario && hasPermission(papelUsuario, "gerenciar_funil")
+      ? [{ href: "/etapas", label: "Etapas", icone: "etapas" as const }]
+      : []),
   ];
 
   const grupos = [GRUPO_TRABALHO, grupoExtra];

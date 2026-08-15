@@ -82,11 +82,15 @@ async function limpar(): Promise<void> {
 test.describe.configure({ mode: "serial" });
 test.use({ storageState: SESSAO_ADMIN });
 
+/** Nome da etapa onde o lead marcado foi semeado — metade positiva de `/etapas`. */
+let nomeDaPrimeiraEtapa = "";
+
 test.beforeAll(async () => {
   await limpar();
   // Primeira etapa do funil: o lead precisa cair numa coluna que o quadro
   // desenha. Qualquer etapa serve, e `ordem: asc` é a que existe sempre.
   const etapa = await prisma.pipelineStage.findFirstOrThrow({ orderBy: { ordem: "asc" } });
+  nomeDaPrimeiraEtapa = etapa.nome;
   const contato = await prisma.contact.create({
     data: { nome: NOME_CONTATO, telefone: TELEFONE, email: EMAIL_SECRETO },
   });
@@ -169,6 +173,56 @@ test("o payload do funil carrega o que o cartão desenha, e nada além", async (
 // `Acme ZZE2EFronteira|null` — o CPF APAGADO do banco por um vendedor que só
 // queria corrigir o nome da empresa. Esse teste não é sobre privacidade, é
 // sobre não perder dado do cliente.
+// ─── A gestão do funil na fronteira ─────────────────────────────────────
+//
+// Achado R6 da auditoria da branch do CRUD de etapas: `/etapas` monta um DTO
+// (`EtapaNaTela`) no `.map()` da página, e nada falhava se alguém trocasse esse
+// `.map()` por `etapas` cru. Não era defeito — o payload foi medido e estava
+// limpo. Era a ausência da trava, no mesmo lugar exato onde este arquivo já
+// documenta o defeito que ESTEVE no ar.
+//
+// A asserção que faz o trabalho é a de `ehPerdido`: é a única coluna que
+// `PipelineStage` tem e `EtapaNaTela` não, então ela é a impressão digital da
+// linha crua. Diferente das chaves citadas no cabeçalho deste arquivo, buscar
+// o identificador NU (sem aspas) atravessa o escape do payload RSC sem
+// problema — o que não funciona é procurar `"ehPerdido"` com as aspas.
+//
+// Sabotagem conferida: espalhar `...etapa` dentro do `.map()` da página deixa
+// este teste vermelho, na asserção de `ehPerdido`, com a mensagem certa.
+//
+// As três marcas de lead reaproveitam o registro semeado no `beforeAll` do topo,
+// que vive até o `afterAll` do arquivo (`mode: "serial"`). Elas NÃO têm sabotagem
+// própria, e isso é honesto em vez de omitido: o erro que elas miram —
+// `listarEtapas()` ganhar `include: { leads: true }` e o lead atravessar junto —
+// não é alcançável hoje sem também mudar o tipo de retorno da consulta e o de
+// `EtapaNaTela`, então não há como reproduzi-lo com uma linha. Elas ficam como
+// rede para o dia em que essa mudança de forma acontecer.
+test.describe("gestão do funil na fronteira", () => {
+  test.use({ storageState: SESSAO_ADMIN });
+
+  test("o payload de /etapas carrega o DTO da tela, e nenhuma linha crua", async ({ page }) => {
+    await page.goto("/etapas");
+    await expect(page.getByRole("heading", { name: "Etapas", exact: true })).toBeVisible();
+    await expect(page.getByRole("table")).toBeVisible();
+
+    const payload = await page.content();
+
+    // METADE POSITIVA: sem isto, tudo abaixo passa com a tabela vazia.
+    expect(payload, "a tabela de etapas não chegou ao payload — as asserções abaixo seriam vazias").toContain(
+      nomeDaPrimeiraEtapa
+    );
+
+    expect(
+      payload,
+      "linha crua de PipelineStage no payload de /etapas: o .map() para EtapaNaTela deixou de ser a fronteira"
+    ).not.toContain("ehPerdido");
+
+    expect(payload, "e-mail de contato no payload de /etapas").not.toContain(EMAIL_SECRETO);
+    expect(payload, "sessionId de lead no payload de /etapas").not.toContain(SESSION_SECRETO);
+    expect(payload, "utm (rastreio de campanha) no payload de /etapas").not.toContain(UTM_SECRETO);
+  });
+});
+
 const TELEFONE_CPF = "11988886404";
 const NOME_CPF = `Contato CPF ${MARCA}`;
 const CPF_SECRETO = "98765432100";

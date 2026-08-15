@@ -33,9 +33,17 @@ export type ResultadoLimpezaDemo = {
 
 /**
  * Remove exatamente o que `seedDemo()` (prisma/seed-demo.ts) cria, devolvendo
- * o banco ao estado do seed base (5 etapas, 4 leads, 4 contatos, 2 usuários,
- * 0 notas/tarefas/notificações) — nunca toca etapa, usuário, ou qualquer
- * Contact/Lead fora da faixa de telefone reservada para demo.
+ * o banco ao estado do seed base (as etapas semeadas por `prisma/seed.ts`,
+ * mais 4 leads, 4 contatos, 2 usuários, 0 notas/tarefas/notificações) — nunca
+ * toca etapa, usuário, ou qualquer Contact/Lead fora da faixa de telefone
+ * reservada para demo.
+ *
+ * "As etapas semeadas", não "5 etapas": `seed.ts` semeia 5 a partir de
+ * `client.funil` na primeira instalação, mas desde o CRUD de etapas o funil
+ * pode ter qualquer tamanho — a tela cria e remove etapa. `limparDemo` nunca
+ * toca `PipelineStage` de qualquer forma, então o número exato não importa
+ * para esta função; a contagem antiga no comentário só descrevia um estado
+ * que deixou de ser garantido.
  *
  * Ordem de apagar respeita as FKs do schema (prisma/schema.prisma):
  * Task.leadId e AuditLog/Notification (sem FK real, ligados por id em JSON)

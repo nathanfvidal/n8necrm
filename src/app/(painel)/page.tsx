@@ -42,6 +42,7 @@ export default async function DashboardPage() {
   ]);
 
   const resumo = etapas.map((etapa) => ({
+    id: etapa.id,
     nome: etapa.nome,
     total: leadsPorEtapa[etapa.id] ?? 0,
     cor: etapa.cor,
@@ -50,12 +51,15 @@ export default async function DashboardPage() {
 
   const totalLeads = resumo.reduce((soma, e) => soma + e.total, 0);
 
-  // A etapa "ganha" é SEMPRE a última do funil e SEMPRE única — invariante
-  // garantida por `confirmarInvarianteEhGanho()` (prisma/seed.ts, Task 9) a
-  // cada execução do seed. `etapaGanho` pode ainda vir `undefined` aqui só
-  // num banco que nunca rodou o seed (funil vazio) — tratado como 0
-  // conversões, não como erro, para a página não quebrar num ambiente
-  // recém-provisionado.
+  // A etapa de fechamento é ÚNICA, mas não é mais "a última do funil": desde o
+  // CRUD de etapas ela é escolhida na tela (`/etapas`) e pode estar em qualquer
+  // posição. Quem garante a unicidade é `definirEtapaDeFechamento`
+  // (`core/pipeline/service.ts`), que desliga todas antes de ligar a escolhida na
+  // mesma transação; `confirmarInvarianteEhGanho()` (prisma/seed.ts) continua
+  // como alarme, checando só "exatamente uma".
+  //
+  // `etapaGanho` pode vir `undefined` num banco recém-criado, antes do primeiro
+  // seed — daí o `?? 0` abaixo.
   const etapaGanho = etapas.find((e) => e.ehGanho);
   const totalGanhos = etapaGanho ? (leadsPorEtapa[etapaGanho.id] ?? 0) : 0;
   const taxaConversao = totalLeads > 0 ? ((totalGanhos / totalLeads) * 100).toFixed(1) : "0.0";

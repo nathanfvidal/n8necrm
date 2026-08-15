@@ -1,6 +1,7 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 export type EtapaResumo = {
+  id: string;
   nome: string;
   total: number;
   cor: string;
@@ -16,16 +17,16 @@ export type EtapaResumo = {
  * Server Component (Next 16 só exige a diretiva para o que realmente
  * precisa de runtime de cliente — ver `node_modules/next/dist/docs`).
  *
- * A etapa `ehGanho` (Task 9: exatamente uma, sempre a última do funil)
- * ganha um rótulo "Ganho" ao lado do nome — é a etapa que alimenta a taxa
+ * A etapa `ehGanho` (exatamente uma; a posição dela no funil é escolhida em
+ * `/etapas`) ganha um rótulo "Ganho" ao lado do nome — é a etapa que alimenta a taxa
  * de conversão logo abaixo (`page.tsx`), então vale marcar visualmente qual
  * cartão é essa, em vez de deixar a pessoa que olha o dashboard adivinhar.
  */
 export function StageSummary({ etapas }: { etapas: EtapaResumo[] }) {
   return (
-    <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
+    <div className="grid grid-cols-2 gap-3 md:grid-cols-[repeat(auto-fit,minmax(8rem,1fr))]">
       {etapas.map((etapa) => (
-        <Card key={etapa.nome}>
+        <Card key={etapa.id} data-testid="cartao-de-etapa">
           <CardHeader className="pb-2">
             <CardTitle className="flex items-center gap-1.5 text-sm font-medium" style={{ color: etapa.cor }}>
               {etapa.nome}
