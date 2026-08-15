@@ -112,7 +112,24 @@ describe("LeadForm", () => {
     }
   );
 
-  it("em caso de sucesso, limpa o formulário e atualiza a rota", async () => {
+  /**
+   * A asserção `expect(refreshMock).toHaveBeenCalledTimes(1)` virou o
+   * OPOSTO, e isso é a mudança, não um teste enfraquecido.
+   *
+   * `criarLeadManualAction` chama `revalidatePath("/(painel)", "layout")`, e
+   * o Next devolve a árvore re-renderizada junto da resposta da própria
+   * action. O `router.refresh()` que existia aqui pagava um SEGUNDO render
+   * completo da rota em cima disso — medido: criar um lead custava 25
+   * consultas ao Postgres e ~3,8 s, com a mesma consulta de `PipelineStage`
+   * aparecendo quatro vezes.
+   *
+   * Quem prova que a tabela CONTINUA atualizando é `lead-to-won.spec.ts`, e
+   * só ele pode: clica em "Adicionar lead" e exige a linha nova na tela sem
+   * nenhum `goto` nem `reload` no meio. Um teste de unidade não enxerga
+   * revalidação de servidor — o máximo que ele pode fazer é o que faz aqui,
+   * travar que o componente não dispara um segundo render por conta própria.
+   */
+  it("em caso de sucesso, limpa o formulário e NÃO pede um segundo render", async () => {
     criarLeadManualMock.mockResolvedValue({ ok: true });
     render(
       <LeadForm
@@ -125,7 +142,7 @@ describe("LeadForm", () => {
     fireEvent.click(screen.getByRole("button", { name: "Adicionar lead" }));
 
     await waitFor(() => expect(screen.getByText("Lead criado com sucesso.")).toBeTruthy());
-    expect(refreshMock).toHaveBeenCalledTimes(1);
+    expect(refreshMock).not.toHaveBeenCalled();
     expect((screen.getByLabelText("Nome") as HTMLInputElement).value).toBe("");
     expect((screen.getByLabelText("Telefone") as HTMLInputElement).value).toBe("");
   });

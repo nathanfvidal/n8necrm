@@ -1,10 +1,9 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { useRouter } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -61,21 +60,8 @@ export function LeadForm({
   responsavelPadraoId: string;
   vendedores: Vendedor[];
 }) {
-  const router = useRouter();
   const [erroEnvio, setErroEnvio] = useState<string | null>(null);
   const [sucesso, setSucesso] = useState(false);
-  /**
-   * `router.refresh()` devolve `void` e não dá para aguardar. Sem a
-   * transição, `onSubmit` retornava no instante seguinte à chamada,
-   * `isSubmitting` virava `false`, o botão voltava a "Adicionar lead" — e a
-   * tabela só mudava quando o servidor respondesse, quase um segundo depois.
-   * A pessoa lia "pronto" olhando para a lista velha.
-   *
-   * Dentro de `startTransition`, `isPending` só cai quando o render do
-   * servidor chega. É a única forma de o botão contar a verdade sobre uma
-   * atualização que não é síncrona.
-   */
-  const [atualizando, iniciarAtualizacao] = useTransition();
 
   const {
     register,
@@ -133,7 +119,32 @@ export function LeadForm({
 
     reset({ nome: "", telefone: "", email: "", responsavelId: responsavelPadraoId });
     setSucesso(true);
-    iniciarAtualizacao(() => router.refresh());
+    /**
+     * Sem `router.refresh()` aqui — e isso foi PROVADO, não deduzido.
+     *
+     * `criarLeadManualAction` chama `revalidatePath("/(painel)", "layout")`,
+     * e o Next devolve a árvore já re-renderizada junto da resposta da própria
+     * action. O `router.refresh()` que morava aqui pagava um SEGUNDO render
+     * completo da rota em cima disso.
+     *
+     * O comentário em `core/leads/actions.ts` afirmava o contrário — que o
+     * refresh era o que atualizava a TABELA e o `revalidatePath` só o sino.
+     * Era verdade quando foi escrito, contra o dev server e com outro escopo
+     * de revalidação. Não é mais: removido o refresh, o e2e
+     * `lead-to-won.spec.ts` continua verde, e ele afirma exatamente isto —
+     * clica em "Adicionar lead" e exige a linha nova na tela SEM nenhum
+     * `goto` nem `reload` no meio.
+     *
+     * Medido antes de mexer: criar um lead custava 25 consultas e ~3,8 s,
+     * com a mesma consulta de `PipelineStage` e de `User` aparecendo QUATRO
+     * vezes — a assinatura de a rota inteira ser renderizada várias vezes.
+     *
+     * Os outros pontos que ainda chamam `router.refresh()` continuam como
+     * estão de propósito: cada um precisa da própria prova, e um deles tem
+     * história registrada de a tela não atualizar sem ele
+     * (`task-list.tsx`, sobre criar tarefa). Isto aqui é um ponto, não uma
+     * regra nova.
+     */
   }
 
   return (
@@ -174,8 +185,8 @@ export function LeadForm({
         )}
       </div>
 
-      <Button type="submit" disabled={isSubmitting || atualizando}>
-        {isSubmitting || atualizando ? "Salvando..." : "Adicionar lead"}
+      <Button type="submit" disabled={isSubmitting}>
+        {isSubmitting ? "Salvando..." : "Adicionar lead"}
       </Button>
 
       {erroEnvio && (

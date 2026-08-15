@@ -6,6 +6,7 @@
 // uma garantia.
 import "server-only";
 
+import { after } from "next/server";
 import { Resend } from "resend";
 
 import { prisma } from "@/lib/prisma";
@@ -133,11 +134,47 @@ export async function listarNotificacoesNaoLidas(userId: string): Promise<Notifi
     orderBy: { criadoEm: "desc" },
   });
 
-  // Higiene DEPOIS da leitura, nunca antes: a poda não pode atrasar nem
-  // influenciar o que o sino mostra.
-  await podarDeVezEmQuando();
+  agendarPoda();
 
   return naoLidas;
+}
+
+/**
+ * Manda a poda para DEPOIS da resposta, em vez de esperá-la aqui.
+ *
+ * O comentário que morava aqui dizia que a higiene vem "depois da leitura,
+ * nunca antes: a poda não pode atrasar nem influenciar o que o sino mostra".
+ * Influenciar ela nunca influenciou; **atrasar, atrasava** — era um
+ * `await podarDeVezEmQuando()` no caminho crítico do layout do painel, ou
+ * seja, no meio de todo carregamento completo de toda tela. Nas vezes em que
+ * o sorteio dá poda, é um `DELETE` inteiro de espera antes de a página
+ * começar a existir, e o banco está em `sa-east-1` (85 ms de mediana por
+ * viagem, medido na Tarefa 0).
+ *
+ * `after()` roda o callback depois de a resposta terminar
+ * (node_modules/next/dist/docs/01-app/03-api-reference/04-functions/after.md),
+ * que é literalmente o desenho que aquele comentário já descrevia.
+ *
+ * ## Por que o `try`
+ *
+ * `after()` só existe dentro de contexto de requisição. `tests/unit/
+ * notifications.test.ts` chama `listarNotificacoesNaoLidas` direto, sob
+ * Vitest, onde esse contexto não existe — sem o `try`, a chamada lançaria e
+ * derrubaria testes que não têm nada a ver com poda.
+ *
+ * Perder a poda nesses casos é aceitável e não silencia nada que importe: ela
+ * é oportunista por construção (roda por sorteio, ver `CHANCE_DE_PODA`), o
+ * próximo carregamento real do painel volta a sorteá-la, e `podarNotificacoes`
+ * tem testes próprios que a exercitam diretamente
+ * (`tests/unit/notificacoes-poda.test.ts`).
+ */
+function agendarPoda(): void {
+  try {
+    after(() => podarDeVezEmQuando());
+  } catch {
+    // Sem contexto de requisição. Ver acima: a poda simplesmente não acontece
+    // nesta chamada, e nenhuma decisão de produto depende disso.
+  }
 }
 
 /**

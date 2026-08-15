@@ -68,6 +68,39 @@ const nextConfig: NextConfig = {
     root: path.join(__dirname),
   },
 
+  /**
+   * Voltar para uma aba visitada há pouco não paga viagem nenhuma.
+   *
+   * O padrão do `dynamic` é 0 desde o Next 15 (antes era 30), ou seja: hoje
+   * TODA volta para uma aba já vista refaz a página inteira no servidor. Como
+   * o painel é `force-dynamic` e o Postgres está em `sa-east-1`, cada uma
+   * dessas voltas custa a rodada de consultas medida na Tarefa 0 — 85 ms de
+   * mediana por consulta, 6 consultas em `/leads`.
+   *
+   * ## O que fica velho, e o que não fica
+   *
+   * As próprias ações de quem está usando NUNCA ficam velhas: toda action
+   * chama `revalidatePath` e os formulários chamam `router.refresh()`, e as
+   * duas coisas limpam este cache. A janela de 30 s só alcança mudança feita
+   * por OUTRA pessoa — numa revenda pequena, alguém cadastrar um lead e o
+   * colega demorar meio minuto para vê-lo é troca que o dono aceitou
+   * explicitamente ao aprovar o plano.
+   *
+   * `static` fica no padrão de propósito: não há rota estática sob sessão
+   * neste app, e mexer nele mudaria o comportamento de `/login` sem motivo.
+   *
+   * ## A trava que isto exige
+   *
+   * Cache de cliente é exatamente o tipo de mecanismo que pode ressuscitar,
+   * por outro caminho, o defeito de logout que este projeto já teve (ver
+   * AGENTS.md). Por isso `tests/e2e/sessao-e-cache.spec.ts` prova que depois
+   * de "Sair" o botão voltar do navegador não mostra dado real do painel.
+   * Se aquele arquivo for apagado, esta linha aqui deixa de ter guarda.
+   */
+  experimental: {
+    staleTimes: { dynamic: 30 },
+  },
+
   // Remove o `X-Powered-By: Next.js`. Não é vulnerabilidade por si — dá para
   // descobrir o framework de outros jeitos — mas anunciar a stack é entregar
   // de graça a lista de CVEs que vale a pena tentar.

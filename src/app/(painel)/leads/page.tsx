@@ -22,8 +22,6 @@ export default async function LeadsPage({
 }: {
   searchParams: Promise<{ arquivados?: string }>;
 }) {
-  const usuario = await usuarioAtualOuLogin();
-
   // Sem este alternador, arquivar seria mão única: o lead some das quatro
   // listagens e não existe caminho para encontrá-lo e chamar
   // `desarquivarLead`. A autorrevisão da spec pegou justamente isso.
@@ -34,41 +32,66 @@ export default async function LeadsPage({
   const mostrarArquivados = (await searchParams).arquivados === "1";
 
 
+  /**
+   * As três de uma vez, e não em fila.
+   *
+   * Nenhuma delas depende do resultado das outras: a lista de vendedores e a
+   * de leads não olham para `usuario`. Enfileiradas, esta página pagava três
+   * viagens até o Postgres em sequência.
+   *
+   * Medido contra o build de produção, com login real, antes e depois:
+   * `/leads` e `/tasks` emitem exatamente as MESMAS 6 consultas, e `/tasks`
+   * levava 403 ms contra 1002 ms daqui. A única diferença estrutural entre as
+   * duas telas era este `Promise.all`, que `tasks/page.tsx` já tinha. A
+   * mediana de uma consulta é 85 ms — o tempo é viagem de rede até
+   * `sa-east-1`, não trabalho de banco, então o que importa é quantas
+   * acontecem ao mesmo tempo.
+   *
+   * ## O que isto muda para a segurança, dito na cara
+   *
+   * As duas consultas passam a COMEÇAR antes de a sessão estar confirmada.
+   * Nada vaza: `usuarioAtualOuLogin()` chama `redirect()`, que lança antes de
+   * qualquer render, e o `src/proxy.ts` já barrou quem não tem cookie nenhum.
+   * O que muda é que uma requisição com cookie de usuário DESATIVADO passa a
+   * executar dois `SELECT` inócuos antes de ser mandada ao login — trabalho
+   * jogado fora, não dado entregue. Troca consciente, registrada aqui para a
+   * Fase 1 da auditoria olhar de frente em vez de descobrir.
+   */
+  const [usuario, vendedores, { itens: leads, truncado }] = await Promise.all([
+    usuarioAtualOuLogin(),
+    // Lista para TODO papel, sem gate — mesma consulta e mesmo motivo de
+    // `leads/[id]/page.tsx`. Lead é colaborativo: qualquer vendedor atende o
+    // cliente de qualquer colega, e agora também cadastra em nome dele. Só
+    // usuários ATIVOS, e `criarLead` recusa responsável desativado — tela e
+    // servidor concordam. `select` explícito para `senhaHash` nunca sair do
+    // banco só para preencher um `<select>`.
+    prisma.user.findMany({
+      where: { ativo: true },
+      select: { id: true, nome: true },
+      orderBy: { nome: "asc" },
+    }),
+    // Fix round 1/5: a versão original desta página restringia `listarLeads`
+    // por `responsavelId` para quem não tem `ver_dashboard_geral` (VENDEDOR).
+    // O revisor achou que essa restrição era genuína dentro de `/leads`, mas
+    // inútil na prática — `/leads/kanban` (Task 15) já lista TODO lead para
+    // TODO papel sem filtro nenhum, e `moverEtapa` (service.ts) nunca checou
+    // dono, então qualquer VENDEDOR conseguia ver e mover o lead "escondido"
+    // pelo board, a um clique de distância da tabela. Uma barreira que existe
+    // numa tela e não na outra não é controle, é falsa confiança. Decisão de
+    // produto (não deste código): esta é uma revenda pequena, a equipe
+    // trabalha de forma colaborativa, e qualquer vendedor pode precisar do
+    // histórico de um lead que "pertence" a outro para atender um cliente que
+    // chegou na loja. `listarLeads()` voltou a listar todo lead para todo
+    // papel — mesmo comportamento do kanban, sem escopo por responsável.
+    listarLeads({ incluirArquivados: mostrarArquivados }),
+  ]);
+
   // `GET /export/leads` (Task 21) já checa `exportar_leads` no servidor
   // independente do que acontece aqui — este flag só decide se o botão
   // aparece. ADMIN e GESTOR têm a permissão; VENDEDOR não (ver matriz em
   // core/auth/permissions.ts). Sem essa checagem, um VENDEDOR veria um link
   // que sempre resolve em 403 — pior que não oferecer a ação.
   const podeExportar = hasPermission(usuario.papel, "exportar_leads");
-
-  // Lista para TODO papel, sem gate — mesma consulta e mesmo motivo de
-  // `leads/[id]/page.tsx`. Lead é colaborativo: qualquer vendedor atende o
-  // cliente de qualquer colega, e agora também cadastra em nome dele. Só
-  // usuários ATIVOS, e `criarLead` recusa responsável desativado — tela e
-  // servidor concordam. `select` explícito para `senhaHash` nunca sair do
-  // banco só para preencher um `<select>`.
-  const vendedores = await prisma.user.findMany({
-    where: { ativo: true },
-    select: { id: true, nome: true },
-    orderBy: { nome: "asc" },
-  });
-
-  // Fix round 1/5: a versão original desta página restringia `listarLeads`
-  // por `responsavelId` para quem não tem `ver_dashboard_geral` (VENDEDOR).
-  // O revisor achou que essa restrição era genuína dentro de `/leads`, mas
-  // inútil na prática — `/leads/kanban` (Task 15) já lista TODO lead para
-  // TODO papel sem filtro nenhum, e `moverEtapa` (service.ts) nunca checou
-  // dono, então qualquer VENDEDOR conseguia ver e mover o lead "escondido"
-  // pelo board, a um clique de distância da tabela. Uma barreira que existe
-  // numa tela e não na outra não é controle, é falsa confiança. Decisão de
-  // produto (não deste código): esta é uma revenda pequena, a equipe
-  // trabalha de forma colaborativa, e qualquer vendedor pode precisar do
-  // histórico de um lead que "pertence" a outro para atender um cliente que
-  // chegou na loja. `listarLeads()` voltou a listar todo lead para todo
-  // papel — mesmo comportamento do kanban, sem escopo por responsável.
-  const { itens: leads, truncado } = await listarLeads({
-    incluirArquivados: mostrarArquivados,
-  });
 
   const linhas: LeadLinha[] = leads.map((lead) => ({
     id: lead.id,

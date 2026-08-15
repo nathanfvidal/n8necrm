@@ -1,3 +1,4 @@
+import { cache } from "react";
 import { redirect } from "next/navigation";
 
 import { auth } from "@/lib/auth";
@@ -13,7 +14,7 @@ import type { User } from "@prisma/client";
  * seria trivialmente forjável por qualquer requisição POST direta. Ver
  * decisão de segurança da Task 13.
  *
- * Checa `User.ativo` a cada chamada (fix round 1/5, achado do revisor:
+ * Checa `User.ativo` a cada REQUISIÇÃO (fix round 1/5, achado do revisor:
  * CRITICAL). `Credentials.authorize()` em `src/lib/auth.ts` só valida
  * `ativo` no MOMENTO do login — a sessão é JWT, sem store no servidor, então
  * um cookie já emitido continua válido depois que alguém desativa o usuário
@@ -21,6 +22,30 @@ import type { User } from "@prisma/client";
  * acesso e não revoga: a pessoa continua criando/movendo leads (e gravando
  * `AuditLog` em nome dela) até o token expirar por conta própria — o
  * cenário clássico de fail-open onde deveria ser fail-closed.
+ *
+ * ## Por que `cache()`, e por que ele NÃO enfraquece o parágrafo acima
+ *
+ * Dizia "a cada chamada" até esta branch, e era literal: `(painel)/layout.tsx`
+ * e a `page.tsx` de baixo chamam as duas, então todo carregamento completo do
+ * painel consultava a tabela `User` DUAS vezes com o mesmo e-mail. Medido: um
+ * F5 em `/leads` emite 8 consultas contra as 6 de uma troca de aba, e uma das
+ * duas extras é exatamente esta duplicata. A 85 ms de mediana por consulta
+ * (banco em `sa-east-1`), é viagem paga por nada.
+ *
+ * `cache()` do React memoiza dentro de UM render de requisição e nada além
+ * disso — não é cache entre requisições, não tem TTL, não sobrevive a nada.
+ * Cada Server Action é a sua própria requisição, então toda ação continua
+ * refazendo a checagem de `ativo` do zero, que é onde o fail-open importava.
+ * O que deixa de acontecer é perguntar duas vezes a mesma coisa ao banco no
+ * meio de um único render — e as duas respostas nunca poderiam divergir de
+ * forma útil: se alguém for desativado entre a consulta do layout e a da
+ * página, a requisição SEGUINTE rejeita de qualquer jeito.
+ *
+ * Fora de contexto de requisição — sob Vitest, por exemplo — `cache()` não
+ * memoiza nada, e `tests/unit/session.test.ts` depende disso: ele chama
+ * `usuarioAtual()` várias vezes no mesmo processo esperando respostas
+ * diferentes a cada mock. É o canário; se um dia ele ficar vermelho com
+ * "esperava lançar e retornou usuário", a causa é esta linha.
  *
  * Um usuário desativado lança a MESMA mensagem ("Não autenticado") que a
  * ausência de sessão, de propósito — não um erro com forma diferente
@@ -31,7 +56,7 @@ import type { User } from "@prisma/client";
  * um chamador futuro tratar só "sem sessão" e deixar "desativado" cair num
  * caminho não previsto — a task 13-21 inteira depende deste helper.
  */
-export async function usuarioAtual(): Promise<User> {
+export const usuarioAtual = cache(async function usuarioAtual(): Promise<User> {
   const session = await auth();
   if (!session?.user?.email) {
     throw new Error("Não autenticado");
@@ -41,7 +66,7 @@ export async function usuarioAtual(): Promise<User> {
     throw new Error("Não autenticado");
   }
   return usuario;
-}
+});
 
 /**
  * `usuarioAtual()` para PÁGINAS: em vez de lançar, manda para `/login`.

@@ -29,17 +29,42 @@ import { formatarDataHoraBR } from "@/lib/date";
  * `listarTasksPendentes(usuario.id)`, não a lista inteira.
  */
 export default async function DashboardPage() {
-  const usuario = await usuarioAtualOuLogin();
-
-  // `contarLeadsPorEtapa` e não `listarLeadsPorEtapa`: esta página só mostra
-  // NÚMEROS, e contava o tamanho de arrays com teto de 1000 linhas — ver o
-  // comentário da função em `leads/queries.ts` sobre por que isso enviesava a
-  // taxa de conversão para baixo, em silêncio, justamente na base grande.
-  const [etapas, leadsPorEtapa, tasksPendentes] = await Promise.all([
+  /**
+   * Duas rodadas, não três.
+   *
+   * Só `listarTasksPendentes` depende de quem está logado — ela é escopada ao
+   * usuário de propósito (ver o comentário acima). Todo o resto é do funil
+   * inteiro e não olha para `usuario`, inclusive a atividade recente, que
+   * antes esperava as outras três terminarem para só então começar.
+   *
+   * Medido: esta página emitia 6 consultas em ~1000 ms, com mediana de 85 ms
+   * por consulta contra `sa-east-1`. O tempo é viagem, não trabalho de banco,
+   * então o que se corta é a espera em fila — não dá para ficar em uma rodada
+   * só enquanto uma das consultas precisar do `usuario.id`.
+   *
+   * `contarLeadsPorEtapa` e não `listarLeadsPorEtapa`: esta página só mostra
+   * NÚMEROS, e contava o tamanho de arrays com teto de 1000 linhas — ver o
+   * comentário da função em `leads/queries.ts` sobre por que isso enviesava a
+   * taxa de conversão para baixo, em silêncio, justamente na base grande.
+   *
+   * `user` narrowed para `id`/`nome` via `select` explícito (Task 17: toda
+   * relação de `User` precisa disso — `include: { user: true }` traria
+   * `senhaHash` junto, mesmo raciocínio de `responsavel` em
+   * `leads/queries.ts` e `tasks/queries.ts`). Ninguém consome senha aqui;
+   * ela simplesmente nunca sai do banco.
+   */
+  const [usuario, etapas, leadsPorEtapa, atividadeRecente] = await Promise.all([
+    usuarioAtualOuLogin(),
     listarEtapas(),
     contarLeadsPorEtapa(),
-    listarTasksPendentes(usuario.id),
+    prisma.auditLog.findMany({
+      take: 10,
+      orderBy: { criadoEm: "desc" },
+      include: { user: { select: { id: true, nome: true } } },
+    }),
   ]);
+
+  const tasksPendentes = await listarTasksPendentes(usuario.id);
 
   const resumo = etapas.map((etapa) => ({
     id: etapa.id,
@@ -63,17 +88,6 @@ export default async function DashboardPage() {
   const etapaGanho = etapas.find((e) => e.ehGanho);
   const totalGanhos = etapaGanho ? (leadsPorEtapa[etapaGanho.id] ?? 0) : 0;
   const taxaConversao = totalLeads > 0 ? ((totalGanhos / totalLeads) * 100).toFixed(1) : "0.0";
-
-  // `user` narrowed para `id`/`nome` via `select` explícito (Task 17: toda
-  // relação de `User` precisa disso — `include: { user: true }` traria
-  // `senhaHash` junto, mesmo raciocínio de `responsavel` em
-  // `leads/queries.ts` e `tasks/queries.ts`). Ninguém consome senha aqui;
-  // ela simplesmente nunca sai do banco.
-  const atividadeRecente = await prisma.auditLog.findMany({
-    take: 10,
-    orderBy: { criadoEm: "desc" },
-    include: { user: { select: { id: true, nome: true } } },
-  });
 
   return (
     <div className="space-y-6 p-6">
