@@ -4,7 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { gravarLinhaDeAuditoria, registrarAuditoria } from "@/core/audit/log";
 import { avaliarAtividadeSuspeita } from "@/core/audit/alerta";
 import { etapaSchema } from "./schema";
-import type { PipelineStage } from "@prisma/client";
+import type { PipelineStage, Prisma } from "@prisma/client";
 
 export class EtapaInvalidaError extends Error {
   constructor(mensagem: string) {
@@ -229,9 +229,59 @@ export async function definirEtapaDeFechamento(input: {
 }
 
 /**
+ * Trava a estrutura do funil pelo resto da transação e devolve o que ela é
+ * NESTE instante.
+ *
+ * ## Por que uma leitura travante, e não `count()`
+ *
+ * Contagem não tranca linha nenhuma. Duas exclusões simultâneas leriam `2`
+ * cada uma, as duas passariam pela guarda "o funil precisa de pelo menos uma
+ * etapa", e o funil terminaria com ZERO — `criarLead` para de funcionar e o
+ * quadro fica vazio. **Mover o `count()` para dentro do `$transaction` não
+ * conserta**: sob `READ COMMITTED` (o padrão do Postgres, que o Prisma não
+ * troca) uma leitura comum dentro da transação continua enxergando só o que já
+ * foi comitado, então as duas leem `2` do mesmo jeito.
+ *
+ * Com `FOR UPDATE` a segunda transação ESPERA a primeira comitar e só então
+ * lê — uma leitura travante reavalia a linha depois de o lock ser liberado.
+ * Ela enxerga o funil já reduzido, e recusa. Achado R1 da auditoria desta
+ * branch (`docs/auditorias/2026-08-15-crud-etapas-do-funil.md`).
+ *
+ * ## Detalhes que não são estilo
+ *
+ * - `ORDER BY "id"`: ordem determinística de aquisição. Sem ela, duas
+ *   transações pegando as mesmas linhas em ordens diferentes podem travar uma
+ *   na outra.
+ * - Zero interpolação — a consulta é constante, sem nada vindo de fora.
+ * - Só `id` e `ehGanho`: é tudo que as guardas precisam, e a trava vale para a
+ *   linha inteira de qualquer jeito.
+ */
+async function travarEstruturaDoFunil(tx: Prisma.TransactionClient) {
+  return tx.$queryRaw<Array<{ id: string; ehGanho: boolean }>>`
+    SELECT "id", "ehGanho" FROM "PipelineStage" ORDER BY "id" FOR UPDATE
+  `;
+}
+
+/**
  * Remove uma etapa, movendo antes todos os leads dela para um destino.
  *
  * Devolve quantos leads foram movidos.
+ *
+ * ## Duas famílias de checagem, em dois lugares diferentes
+ *
+ * FORA da transação ficam as validações do PEDIDO — a etapa existe, tem leads,
+ * veio destino. São leituras baratas que produzem a mensagem certa antes de
+ * abrir transação nenhuma, e um resultado velho aqui só custa uma mensagem de
+ * erro um pouco fora de hora.
+ *
+ * DENTRO, sobre a leitura travada, ficam as INVARIANTES — funil não fica vazio,
+ * a etapa de fechamento não some, o destino ainda existe. Essas não podem ser
+ * decididas com um valor lido antes: entre a leitura e a escrita cabe outra
+ * transação inteira. Ver `travarEstruturaDoFunil`.
+ *
+ * A checagem de `ehGanho` aparece nas DUAS listas, e as duas são necessárias: a
+ * de dentro é a que vale, a de fora existe só para a mensagem sair na ordem
+ * certa. Ambas têm teste, e tirar qualquer uma das duas deixa a suíte vermelha.
  *
  * ## Por que a transação é INTERATIVA e não a de array
  *
@@ -262,14 +312,16 @@ export async function excluirEtapa(input: {
     throw new EtapaInvalidaError("Essa etapa não existe mais. Atualize a página.");
   }
 
+  // Repetida de propósito, e a cópia autoritativa é a de dentro da transação.
+  // Esta aqui existe pela ORDEM DA MENSAGEM: sem ela, tentar remover a etapa de
+  // fechamento (que tem leads) responde "escolha para onde eles vão" — manda a
+  // pessoa resolver um problema que não é o dela, para uma operação que vai ser
+  // recusada de qualquer jeito. Um teste contra o banco real pegou exatamente
+  // isso quando esta linha saiu.
   if (etapa.ehGanho) {
     throw new EtapaInvalidaError(
       "Esta é a etapa de fechamento. Marque outra etapa como fechamento antes de remover esta."
     );
-  }
-
-  if ((await prisma.pipelineStage.count()) <= 1) {
-    throw new EtapaInvalidaError("O funil precisa de pelo menos uma etapa.");
   }
 
   // Contagem SEM filtro de `arquivadoEm`: é o número que o `ON DELETE RESTRICT`
@@ -278,7 +330,6 @@ export async function excluirEtapa(input: {
   // e a etapa ficaria indeletável com um erro genérico.
   const leadsQueSeguram = await prisma.lead.count({ where: { stageId: etapa.id } });
 
-  let destino: PipelineStage | null = null;
   if (leadsQueSeguram > 0) {
     if (!input.destinoId) {
       throw new EtapaInvalidaError(
@@ -286,15 +337,47 @@ export async function excluirEtapa(input: {
           "Escolha para onde eles vão."
       );
     }
-    destino = await prisma.pipelineStage.findUnique({ where: { id: input.destinoId } });
-    if (!destino || destino.id === etapa.id) {
+    if (input.destinoId === etapa.id) {
       throw new EtapaInvalidaError("Escolha uma etapa de destino diferente desta.");
     }
   }
 
+  // Etapa sem lead ignora o destino: não há o que mover, e a auditoria grava
+  // `destinoId: null` — comportamento preservado da versão anterior.
+  const destinoId = leadsQueSeguram > 0 ? input.destinoId : null;
+
   const leadsMovidos = await prisma.$transaction(async (tx) => {
+    const funil = await travarEstruturaDoFunil(tx);
+
+    // A etapa pode ter sido apagada entre a leitura de cima e o lock.
+    const aindaExiste = funil.find((linha) => linha.id === etapa.id);
+    if (!aindaExiste) {
+      throw new EtapaInvalidaError("Essa etapa não existe mais. Atualize a página.");
+    }
+
+    // Sobre a leitura TRAVADA, não sobre `etapa`: alguém pode ter marcado esta
+    // etapa como a de fechamento no intervalo, e apagá-la deixaria o funil sem
+    // nenhuma — a taxa de conversão do painel passaria a mentir em silêncio.
+    if (aindaExiste.ehGanho) {
+      throw new EtapaInvalidaError(
+        "Esta é a etapa de fechamento. Marque outra etapa como fechamento antes de remover esta."
+      );
+    }
+
+    if (funil.length <= 1) {
+      throw new EtapaInvalidaError("O funil precisa de pelo menos uma etapa.");
+    }
+
+    // Destino conferido contra a leitura travada, e não com um `findUnique`
+    // solto: sem isto, um destino apagado no intervalo faria o `updateMany`
+    // gravar uma FK morta, e a transação cairia com P2003 — mensagem genérica
+    // para uma condição que tem nome.
+    if (destinoId && !funil.some((linha) => linha.id === destinoId)) {
+      throw new EtapaInvalidaError("Escolha uma etapa de destino diferente desta.");
+    }
+
     let movidos = 0;
-    if (destino) {
+    if (destinoId) {
       // Sem filtro de `arquivadoEm`, e correto assim: a etapa vai deixar de
       // existir, então quem segura a chave estrangeira tem que sair junto.
       //
@@ -303,7 +386,7 @@ export async function excluirEtapa(input: {
       // coluna que diz o contrário.
       const resultado = await tx.lead.updateMany({
         where: { stageId: etapa.id },
-        data: { stageId: destino.id },
+        data: { stageId: destinoId },
       });
       movidos = resultado.count;
     }
@@ -318,7 +401,7 @@ export async function excluirEtapa(input: {
         entidadeId: etapa.id,
         antes: { nome: etapa.nome, ordem: etapa.ordem, cor: etapa.cor },
         // O `count` da própria escrita, nunca uma leitura anterior.
-        depois: { destinoId: destino?.id ?? null, leadsMovidos: movidos },
+        depois: { destinoId: destinoId ?? null, leadsMovidos: movidos },
       },
       tx
     );
