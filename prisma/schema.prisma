@@ -265,6 +265,12 @@ model AuditLog {
   depois     Json?
   ip         String?
   criadoEm   DateTime @default(now())
+
+  // Serve o detector de rajada destrutiva (`core/audit/alerta.ts`), que roda a
+  // cada ação sensível, e cobre de quebra a chave estrangeira `userId`, que era
+  // a única do CRM sem índice numa tabela que só cresce. Igualdade antes de
+  // faixa: `userId = ?` depois `criadoEm >= ?`.
+  @@index([userId, criadoEm])
 }
 
 model RateLimit {
