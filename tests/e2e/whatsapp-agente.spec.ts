@@ -124,6 +124,34 @@ test.afterAll(async () => {
  * herdaria a sessão do teste anterior e passaria por engano, o pior resultado
  * possível para um teste de autorização.
  */
+/**
+ * O selo de estado da IA QUE ESTÁ NA TELA.
+ *
+ * O `visible: true` não é enfeite: sem ele este arquivo falha de forma
+ * intermitente por modo estrito ("resolved to 2 elements", dois
+ * `<span data-slot="badge">` idênticos) logo depois de um `page.goto` numa
+ * rota do painel. Reproduzido em 2 de 6 execuções da suíte completa.
+ *
+ * A causa é o `(painel)/loading.tsx`: ele cria uma fronteira de `<Suspense>`,
+ * e com ela o SSR passa a fazer streaming — o React entrega o conteúdo dentro
+ * de um `<div hidden>` e um script inline o move para o lugar. Entre a
+ * entrega e a troca, o selo existe duas vezes no DOM.
+ *
+ * **Não é defeito de produção, e isso foi verificado, não suposto:** um
+ * diagnóstico contra o build de produção mediu zero violação de CSP, nenhum
+ * marcador `[id^="S:"]` sobrevivente e uma única `<table>` três segundos
+ * depois da navegação — o script de troca roda, e a cópia extra nasce e morre
+ * dentro de `hidden`, sem nunca ser vista por ninguém.
+ *
+ * O que muda é o teste, que precisa dizer o que sempre quis dizer: o selo
+ * visível. Violação de modo estrito é erro imediato no Playwright, não algo
+ * que ele espere passar. **Se outro spec começar a falhar com "resolved to 2
+ * elements" depois de um `goto`, a causa é esta** — e não instabilidade.
+ */
+function seloVisivel(page: Page, texto: string) {
+  return page.getByText(texto).filter({ visible: true });
+}
+
 async function login(page: Page, email: string, senha = senhaE2e()): Promise<void> {
   await page.goto("/login");
   await page.waitForLoadState("networkidle");
@@ -142,8 +170,11 @@ test.describe(() => {
   test("pausar, responder e religar a IA numa conversa", async ({ page }) => {
     // `nomeExibicao` único (não só o prefixo do `waId`, que não aparece na
     // tela) para escopar a asserção na lista de /conversas a ESTA linha —
-    // `page.getByText("IA pausada")` sozinho quebraria em modo estrito do
+    // um `getByText("IA pausada")` solto quebraria em modo estrito do
     // Playwright se outra conversa pausada já existisse no banco compartilhado.
+    // (É outra causa de "resolved to 2 elements", independente da do
+    // streaming descrita em `seloVisivel` — esta é dado de verdade no banco
+    // compartilhado, aquela é uma cópia transitória dentro de `hidden`.)
     const nomeExibicao = `E2E Ciclo IA ${randomUUID().slice(0, 8)}`;
     const conversa = await prisma.conversation.create({
       data: { waId: `${PREFIXO_WAID}${randomUUID()}`, telefone: "5511999990000", nomeExibicao },
@@ -161,10 +192,10 @@ test.describe(() => {
 
 
     await page.goto(`/conversas/${conversa.id}`);
-    await expect(page.getByText("IA respondendo")).toBeVisible();
+    await expect(seloVisivel(page, "IA respondendo")).toBeVisible();
 
     await page.getByRole("button", { name: "Pausar IA" }).click();
-    await expect(page.getByText("IA pausada")).toBeVisible();
+    await expect(seloVisivel(page, "IA pausada")).toBeVisible();
 
     // O estado tem que aparecer TAMBÉM na lista — é o que evita conversa
     // pausada e esquecida. `getByRole("link", ...)` mira o mesmo `<Link>` que
@@ -173,12 +204,15 @@ test.describe(() => {
     // (substring, não `exact`) chega na linha certa antes de checar o badge
     // dentro dela.
     await page.goto("/conversas");
-    const linkConversa = page.getByRole("link", { name: nomeExibicao });
+    // `visible: true` pelo mesmo motivo de `seloVisivel`: este localizador roda
+  // logo depois de um `page.goto`, que é exatamente a janela em que a cópia
+  // de streaming ainda existe no DOM.
+  const linkConversa = page.getByRole("link", { name: nomeExibicao }).filter({ visible: true });
     await expect(linkConversa.getByText("IA pausada")).toBeVisible();
 
     await page.goto(`/conversas/${conversa.id}`);
     await page.getByRole("button", { name: "Religar IA" }).click();
-    await expect(page.getByText("IA respondendo")).toBeVisible();
+    await expect(seloVisivel(page, "IA respondendo")).toBeVisible();
   });
 });
 
@@ -250,7 +284,7 @@ test("erro de sessão inválida chega à tela ao tentar pausar a IA", async ({ p
   await login(page, EMAIL_USUARIO_TESTE, SENHA_USUARIO_TESTE);
 
   await page.goto(`/conversas/${conversa.id}`);
-  await expect(page.getByText("IA respondendo")).toBeVisible();
+  await expect(seloVisivel(page, "IA respondendo")).toBeVisible();
 
   // Desativa DEPOIS do login e da navegação: o cookie de sessão continua
   // válido, só `usuarioAtual()` (chamado dentro da Server Action, não pelo
@@ -314,7 +348,10 @@ test("conversa aguardando humano aparece com o selo na lista", async ({ page }) 
   await login(page, EMAIL_VENDEDOR_E2E);
   await page.goto("/conversas");
 
-  const linkConversa = page.getByRole("link", { name: nomeExibicao });
+  // `visible: true` pelo mesmo motivo de `seloVisivel`: este localizador roda
+  // logo depois de um `page.goto`, que é exatamente a janela em que a cópia
+  // de streaming ainda existe no DOM.
+  const linkConversa = page.getByRole("link", { name: nomeExibicao }).filter({ visible: true });
   await expect(linkConversa.getByText(/Aguardando há/)).toBeVisible();
 });
 

@@ -16,6 +16,12 @@ vi.mock("next/link", () => ({
     linksRenderizados.push(props);
     return <a href={props.href} {...(resto as object)}>{children as React.ReactNode}</a>;
   },
+  // `useLinkStatus` sai do MESMO módulo que o `<Link>`, e o mock acima
+  // substitui o módulo inteiro — sem esta linha, `IndicadorDeLink` (que a
+  // nav renderiza dentro de cada link) importa `undefined` e a suíte quebra
+  // no render, não numa asserção. `pending: false` é o estado parado, que é
+  // o correto para todo teste daqui: nenhum deles navega.
+  useLinkStatus: () => ({ pending: false }),
 }));
 
 import { NavLinks, type LinkDoPainel } from "@/components/nav-links";
@@ -61,6 +67,21 @@ describe("NavLinks", () => {
     expect(linksRenderizados).toHaveLength(3);
     for (const link of linksRenderizados) {
       expect(link.prefetch).toBe(false);
+    }
+  });
+
+  // O e2e navega o painel inteiro por `getByRole("link", { name: "Leads",
+  // exact: true })`. `IndicadorDeLink` mora DENTRO de cada `<Link>`, então
+  // qualquer texto que apareça nele entra no nome acessível e derruba a
+  // suíte inteira de uma vez — em specs que não têm nada a ver com a
+  // navegação. Aqui a comparação é por igualdade exata, ao contrário dos
+  // testes acima que usam regex: é justamente o que uma sobra de texto no
+  // indicador quebraria.
+  it("o nome acessível do link continua sendo só o rótulo", () => {
+    render(<NavLinks grupos={[GRUPO_A]} />);
+    for (const { label } of GRUPO_A) {
+      const link = screen.getByRole("link", { name: label });
+      expect(link.textContent?.trim()).toBe(label);
     }
   });
 

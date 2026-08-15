@@ -92,8 +92,27 @@ async function limparDadosDeTeste(): Promise<void> {
  * PAPEL não encontra a linha nesse estado, mesmo com ela visível na tela — só
  * o seletor de DOM atravessa isso.
  */
+/**
+ * A linha da tabela QUE ESTÁ NA TELA.
+ *
+ * O `visible: true` não é zelo: sem ele este teste quebra por modo estrito
+ * logo depois de um `page.goto("/etapas")`, com a mensagem "resolved to 2
+ * elements" apontando para um segundo `<tbody>` dentro de `[id="S:0"]`.
+ *
+ * A causa é o `(painel)/loading.tsx`. Ele cria uma fronteira de `<Suspense>`,
+ * e com ela o SSR passa a fazer streaming: o React entrega o conteúdo dentro
+ * de um `<div hidden>` e um script inline o move para o lugar. Na janela
+ * entre a entrega e a troca — sub-milissegundo numa máquina ociosa, larga o
+ * bastante com a suíte em três workers — a tabela existe DUAS vezes no DOM.
+ *
+ * Nenhuma delas é bug de aplicação: a cópia extra nasce dentro de `hidden` e
+ * nunca é vista por ninguém. Mas violação de modo estrito é erro imediato no
+ * Playwright, não algo que ele espere passar, então o localizador precisa
+ * dizer o que sempre quis dizer — a linha visível. Se outro spec começar a
+ * falhar com "resolved to 2 elements" depois de um `goto`, a causa é esta.
+ */
 function linhaDa(page: Page, nome: string) {
-  return page.locator("tbody tr").filter({ hasText: nome });
+  return page.locator("tbody tr").filter({ visible: true }).filter({ hasText: nome });
 }
 
 /**

@@ -8,6 +8,8 @@ import {
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
+import { IndicadorDeLink } from "@/components/indicador-de-link";
+
 export type IconeDoPainel =
   | "dashboard" | "leads" | "funil" | "contatos" | "tarefas" | "conversas" | "equipe" | "etapas";
 
@@ -78,6 +80,12 @@ export function NavLinks({ grupos }: { grupos: LinkDoPainel[][] }) {
               >
                 <Icone size={16} aria-hidden />
                 {label}
+                {/* Descendente do `<Link>` de propósito: é assim que
+                    `useLinkStatus` sabe de qual navegação está falando. O
+                    `aria-hidden` que ele carrega é o que mantém o nome
+                    acessível do link igual a `label` — ver o comentário longo
+                    em `indicador-de-link.tsx`. */}
+                <IndicadorDeLink />
               </Link>
             );
           })}

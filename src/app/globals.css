@@ -128,3 +128,60 @@
     @apply font-sans;
   }
 }
+
+/**
+ * Ponto de "estou indo" dos links da navegação — ver
+ * `src/components/indicador-de-link.tsx`, que decide quando a classe
+ * `pendente` entra.
+ *
+ * Mora em CSS, e não numa prop `style`, de propósito: a única `style` inline
+ * do projeto é a da cor da etapa no kanban, e ela precisa continuar sendo a
+ * única para que endurecer o `style-src` do CSP um dia seja uma mudança de
+ * uma linha.
+ *
+ * O espaço é reservado SEMPRE (`visibility: hidden`, nunca `display: none`):
+ * o item de menu não pode mudar de tamanho ao ser clicado. E a animação entra
+ * com 100 ms de atraso partindo de `opacity: 0`, então navegação rápida não
+ * pisca — o ponto só aparece quando a espera é real.
+ */
+.pista-de-link {
+  display: inline-block;
+  width: 0.4rem;
+  height: 0.4rem;
+  margin-left: auto;
+  border-radius: 9999px;
+  background: currentColor;
+  opacity: 0;
+  visibility: hidden;
+}
+
+.pista-de-link.pendente {
+  visibility: visible;
+  animation-name: pista-surge, pista-pulsa;
+  animation-duration: 200ms, 1s;
+  animation-delay: 100ms, 100ms;
+  animation-timing-function: ease, ease-in-out;
+  animation-iteration-count: 1, infinite;
+  animation-fill-mode: forwards, none;
+}
+
+@keyframes pista-surge {
+  to {
+    opacity: 0.9;
+  }
+}
+
+@keyframes pista-pulsa {
+  50% {
+    opacity: 0.3;
+  }
+}
+
+/* Quem pediu menos movimento vê o ponto aceso, sem pulsar. Continua sendo
+   sinal de que a navegação começou — só não fica piscando. */
+@media (prefers-reduced-motion: reduce) {
+  .pista-de-link.pendente {
+    animation: none;
+    opacity: 0.9;
+  }
+}
