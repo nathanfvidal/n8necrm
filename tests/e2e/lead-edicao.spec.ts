@@ -179,7 +179,14 @@ test("vendedor registra o valor, arquiva e desarquiva um lead", async ({ page })
 
     await page.goto(`/contatos/${contato!.id}`);
     await expect(page.getByRole("heading", { name: "Leads (1)" })).toBeVisible();
-    await expect(page.getByText("Arquivado")).toBeVisible();
+    // `visible: true`: este `getByText` roda logo depois de um `goto`, e
+    // desde o `(painel)/loading.tsx` o SSR do painel faz streaming — o React
+    // entrega o conteúdo dentro de um `<div hidden>` e um script inline o
+    // move para o lugar, então nessa janela o selo existe DUAS vezes no DOM
+    // e o modo estrito do Playwright falha na hora. A explicação completa,
+    // com a verificação de que não é defeito de produção, está em
+    // `whatsapp-agente.spec.ts` (função `seloVisivel`).
+    await expect(page.getByText("Arquivado").filter({ visible: true })).toBeVisible();
   });
 
   await test.step("o alternador acha o arquivado e o desarquiva", async () => {

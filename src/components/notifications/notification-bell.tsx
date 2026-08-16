@@ -72,9 +72,10 @@ function mensagemDeFalhaDeRede(erro: unknown): string {
  * muda — bug real encontrado ao verificar ao vivo contra o dev server: sem
  * isto, `useState(iniciais)` só lê o valor inicial UMA VEZ, no primeiro
  * mount. Criar um lead atualiza a contagem no banco e `criarLeadManualAction`
- * (`leads/actions.ts`) já chama `revalidatePath("/(painel)", "layout")` para
- * invalidar o cache do servidor, e `LeadForm` chama `router.refresh()` — mas
- * isso só faz o Next mesclar uma PROP nova no componente já montado; sem
+ * (`leads/actions.ts`) já chama `revalidatePath("/(painel)", "layout")`, o
+ * que invalida o cache do servidor e faz a resposta da própria action trazer
+ * a árvore re-renderizada — mas isso só faz o Next mesclar uma PROP nova no
+ * componente já montado; sem
  * ressincronizar o estado, o sino continuava mostrando a contagem antiga do
  * primeiro mount até um reload de página inteira (que remonta o componente
  * do zero). Mesmo padrão de "ajustar estado quando algo muda" de

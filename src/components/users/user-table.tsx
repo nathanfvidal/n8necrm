@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
@@ -40,21 +40,38 @@ export function UserTable({
   const [editando, setEditando] = useState<string | null>(null);
   const [trocandoSenha, setTrocandoSenha] = useState<string | null>(null);
   const [erro, setErro] = useState<string | null>(null);
-  const [ocupado, setOcupado] = useState(false);
+  const [aguardandoAction, setAguardandoAction] = useState(false);
+  const [atualizando, iniciarAtualizacao] = useTransition();
+
+  /**
+   * "Ocupado" tem duas metades, e a segunda faltava.
+   *
+   * `aguardandoAction` cobre a ida à Server Action. Só que o `finally` a
+   * desliga assim que a action responde, e a TABELA só muda quando o render
+   * do servidor chega — quase um segundo depois, porque cada consulta é uma
+   * viagem até São Paulo. Nessa janela os botões voltavam a parecer livres em
+   * cima de uma lista que ainda mostrava o papel antigo.
+   *
+   * `router.refresh()` devolve `void` e não dá para aguardar; dentro de
+   * `startTransition`, `isPending` só cai quando o render chega. Somando as
+   * duas, `ocupado` passa a significar "a tela ainda não é a verdade" — que é
+   * o que os `disabled` abaixo sempre quiseram dizer.
+   */
+  const ocupado = aguardandoAction || atualizando;
 
   async function executar(acao: () => Promise<{ ok: true } | { ok: false; erro: string }>) {
     setErro(null);
-    setOcupado(true);
+    setAguardandoAction(true);
     try {
       const resultado = await acao();
       if (!resultado.ok) {
         setErro(resultado.erro);
         return false;
       }
-      router.refresh();
+      iniciarAtualizacao(() => router.refresh());
       return true;
     } finally {
-      setOcupado(false);
+      setAguardandoAction(false);
     }
   }
 

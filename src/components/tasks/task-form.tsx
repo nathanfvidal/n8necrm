@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useTransition } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -94,6 +94,7 @@ export function TaskForm({
 }) {
   const router = useRouter();
   const [erroEnvio, setErroEnvio] = useState<string | null>(null);
+  const [atualizando, iniciarAtualizacao] = useTransition();
 
   const vazio = {
     titulo: "",
@@ -157,7 +158,10 @@ export function TaskForm({
     }
 
     reset(vazio);
-    router.refresh();
+    // Na transição, e não solto: `isSubmitting` cai quando a action responde,
+    // mas a lista só muda quando o render do servidor chega. Ver o comentário
+    // equivalente em `lead-form.tsx`.
+    iniciarAtualizacao(() => router.refresh());
   }
 
   return (
@@ -205,8 +209,8 @@ export function TaskForm({
         />
       </div>
 
-      <Button type="submit" disabled={isSubmitting}>
-        {isSubmitting ? "Salvando..." : "Adicionar tarefa"}
+      <Button type="submit" disabled={isSubmitting || atualizando}>
+        {isSubmitting || atualizando ? "Salvando..." : "Adicionar tarefa"}
       </Button>
 
       {erroEnvio && (

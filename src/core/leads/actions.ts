@@ -68,16 +68,23 @@ export async function criarLeadManualAction(input: {
     // `criarLead` (service.ts, Task 19) já grava uma notificação in-app para
     // `responsavelId` — mas o sino que a exibe (`NotificationBell`, dentro de
     // `PainelNav`) vive em `(painel)/layout.tsx`, um segmento COMPARTILHADO
-    // entre rotas, não na página `/leads` em si. `LeadForm` (client) já
-    // chama `router.refresh()` no sucesso, e isso é o bastante para a
-    // TABELA de leads (a própria página) mostrar o novo registro — mas o
-    // Router Cache do lado do cliente trata layouts compartilhados como
-    // reutilizáveis entre navegações (ver
+    // entre rotas, não na página `/leads` em si. Esta revalidação é o que
+    // atualiza as DUAS coisas: a resposta desta action já leva a árvore
+    // re-renderizada, e o prefixo de layout alcança o sino, que o Router
+    // Cache do cliente trataria como reutilizável entre navegações (ver
     // node_modules/next/dist/docs/01-app/03-api-reference/05-config/01-next-config-js/staleTimes.md:
     // "shared layouts won't automatically be refetched on every
-    // navigation"), então sem isto o sino só mostraria a contagem nova numa
-    // navegação de página inteira, não no refresh do formulário — verificado
-    // ao vivo contra o dev server antes deste fix.
+    // navigation") — sem o prefixo, a contagem nova só apareceria numa
+    // navegação de página inteira.
+    //
+    // Este trecho dizia, até 2026-08-15, que quem atualizava a TABELA era um
+    // `router.refresh()` chamado por `LeadForm`. Era verdade quando foi
+    // escrito, contra o dev server e com outro escopo de revalidação. Deixou
+    // de ser: aquele `refresh` foi removido (pagava um SEGUNDO render inteiro
+    // da rota — criar um lead custava 25 consultas ao Postgres e ~3,8 s), e
+    // `lead-to-won.spec.ts` continua verde exigindo a linha nova na tela sem
+    // nenhum `goto` nem `reload` no meio. Ver o comentário em
+    // `components/leads/lead-form.tsx`.
     //
     // `revalidatePath("/(painel)", "layout")` — NÃO `revalidatePath("/",
     // "layout")` (fix round 1/5, achado do revisor: o comentário anterior

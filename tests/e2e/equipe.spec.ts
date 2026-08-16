@@ -5,11 +5,17 @@
 //
 // Esse último passo é o que nenhum teste unitário alcança. `definirAtivo` só
 // grava uma coluna; quem faz a revogação valer é `usuarioAtual()`
-// (`core/auth/session.ts`), consultando `User.ativo` a cada chamada — a sessão
-// é JWT, sem store no servidor, então um cookie já emitido continuaria válido
-// se aquela consulta sumisse. Um teste de unidade sobre o serviço passaria
-// feliz com a desativação virando teatro; só um navegador com cookie de
-// verdade mostra a diferença.
+// (`core/auth/session.ts`), consultando `User.ativo` a cada REQUISIÇÃO — a
+// sessão é JWT, sem store no servidor, então um cookie já emitido continuaria
+// válido se aquela consulta sumisse. Um teste de unidade sobre o serviço
+// passaria feliz com a desativação virando teatro; só um navegador com cookie
+// de verdade mostra a diferença.
+//
+// Este arquivo cobre o caminho de CARREGAMENTO COMPLETO (`page.goto`), que
+// sempre alcança o servidor. O caminho de navegação client-side, que desde
+// `staleTimes.dynamic: 30` pode ser servido do cache do navegador sem passar
+// por `usuarioAtual()`, é coberto por `sessao-e-cache.spec.ts` — foi a
+// auditoria de 2026-08-15 que encontrou essa lacuna aqui.
 //
 // Mesmo padrão de `whatsapp-agente.spec.ts` para tocar o Postgres real e
 // compartilhado: PrismaClient próprio (não `@/lib/prisma`, que tem

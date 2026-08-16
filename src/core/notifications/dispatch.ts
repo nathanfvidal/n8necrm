@@ -6,6 +6,7 @@
 // uma garantia.
 import "server-only";
 
+import { after } from "next/server";
 import { Resend } from "resend";
 
 import { prisma } from "@/lib/prisma";
@@ -133,11 +134,55 @@ export async function listarNotificacoesNaoLidas(userId: string): Promise<Notifi
     orderBy: { criadoEm: "desc" },
   });
 
-  // Higiene DEPOIS da leitura, nunca antes: a poda não pode atrasar nem
-  // influenciar o que o sino mostra.
-  await podarDeVezEmQuando();
+  agendarPoda();
 
   return naoLidas;
+}
+
+/**
+ * Manda a poda para DEPOIS da resposta, em vez de esperá-la aqui.
+ *
+ * O comentário que morava aqui dizia que a higiene vem "depois da leitura,
+ * nunca antes: a poda não pode atrasar nem influenciar o que o sino mostra".
+ * Influenciar ela nunca influenciou; **atrasar, atrasava** — era um
+ * `await podarDeVezEmQuando()` no caminho crítico do layout do painel, ou
+ * seja, no meio de todo carregamento completo de toda tela. Nas vezes em que
+ * o sorteio dá poda, é um `DELETE` inteiro de espera antes de a página
+ * começar a existir, e o banco está em `sa-east-1` (85 ms de mediana por
+ * viagem, medido na Tarefa 0).
+ *
+ * `after()` roda o callback depois de a resposta terminar
+ * (node_modules/next/dist/docs/01-app/03-api-reference/04-functions/after.md),
+ * que é literalmente o desenho que aquele comentário já descrevia.
+ *
+ * ## Por que o `try`, e o que ele NÃO é
+ *
+ * A primeira versão deste comentário afirmava que `after()` lança fora de
+ * contexto de requisição e que sem o `try` os testes de unidade quebrariam.
+ * **Isso não foi verificado, e é falso.** Medido: com o filtro do `catch`
+ * trocado por um padrão que nunca casa, `tests/unit/notifications.test.ts`
+ * (que chama `listarNotificacoesNaoLidas` direto, sob Vitest, sem requisição
+ * nenhuma) roda 6/6 sem imprimir uma linha sequer — `after()` simplesmente
+ * não lança ali.
+ *
+ * O `try` fica, mas como seguro, não como necessidade conhecida: se algum
+ * runtime futuro passar a lançar, o sino de notificações não pode cair junto.
+ * E o `catch` REGISTRA, em vez de engolir — um `catch` vazio faria a poda
+ * sumir sem ninguém notar, e `Notification` voltaria a crescer sem teto em
+ * silêncio. Como hoje nenhum caminho conhecido lança, qualquer linha que
+ * apareça neste log é surpresa de verdade, e merece ser lida.
+ *
+ * Perder a poda numa chamada é aceitável: ela é oportunista por construção
+ * (roda por sorteio, ver `CHANCE_DE_PODA`), o próximo carregamento do painel
+ * volta a sorteá-la, e `podarNotificacoes` tem testes que a exercitam
+ * diretamente (`tests/unit/notificacoes-poda.test.ts`).
+ */
+function agendarPoda(): void {
+  try {
+    after(() => podarDeVezEmQuando());
+  } catch (erro) {
+    console.error("Falha ao agendar a poda de notificações:", erro);
+  }
 }
 
 /**

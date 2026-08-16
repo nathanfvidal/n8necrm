@@ -274,9 +274,10 @@ export async function definirAtivo(
 ): Promise<UsuarioListado> {
   recusarContaDeSistema(entrada.id);
 
-  // Desativar a si mesmo derruba a própria sessão na navegação seguinte
-  // (`usuarioAtual()` checa `ativo` a cada chamada). Recuperar exige outro
-  // ADMIN, e se não houver, exige acesso ao banco.
+  // Desativar a si mesmo derruba a própria sessão na navegação seguinte que
+  // alcance o servidor (`usuarioAtual()` checa `ativo` a cada REQUISIÇÃO —
+  // ela é memoizada por `cache()` dentro de um render, nunca entre eles).
+  // Recuperar exige outro ADMIN, e se não houver, exige acesso ao banco.
   if (entrada.id === autorId && !entrada.ativo) {
     throw new UsuarioInvalidoError("Você não pode desativar a própria conta.");
   }

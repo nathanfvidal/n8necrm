@@ -35,15 +35,24 @@ export default async function ContatosPage({
 }: {
   searchParams: Promise<{ q?: string }>;
 }) {
-  const usuario = await usuarioAtualOuLogin();
+  const { q } = await searchParams;
+  const busca = q?.trim() ?? "";
+
+  // As duas juntas: `listarContatos` não olha para `usuario`, então esperar a
+  // sessão para só então começar a busca era uma viagem de rede em fila por
+  // nada. Ver o comentário longo em `leads/page.tsx` sobre por que isso pesa
+  // (85 ms de mediana por consulta, banco em `sa-east-1`) e o que muda para a
+  // auditoria — as consultas passam a começar antes de a sessão ser
+  // confirmada, e `redirect()` continua lançando antes de qualquer render.
+  const [usuario, { itens: contatos, truncado }] = await Promise.all([
+    usuarioAtualOuLogin(),
+    listarContatos(busca),
+  ]);
+
   // Mesma regra da tela de detalhe: quem não pode ver o documento também não
   // pode preenchê-lo no cadastro. Sem isto, o campo apareceria em "Adicionar
   // contato" e sumiria ao reabrir a pessoa — comportamento que parece bug.
   const podeVerDocumento = hasPermission(usuario.papel, "ver_documento_contato");
-
-  const { q } = await searchParams;
-  const busca = q?.trim() ?? "";
-  const { itens: contatos, truncado } = await listarContatos(busca);
 
   return (
     <div className="space-y-6 p-6">
