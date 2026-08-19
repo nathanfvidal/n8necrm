@@ -113,7 +113,7 @@ Sem ela o iframe carrega mas não autentica: o cookie de sessão do n8n é
 permaneceu em 24.1.3 — o salto para 26.1 mexe em rede no boot e é o tipo de
 coisa que tranca alguém fora de uma VPS.
 
-### Três armadilhas de infraestrutura, encontradas ao vivo
+### Quatro armadilhas de infraestrutura, encontradas ao vivo
 
 Nenhuma é do CRM. Todas custam uma tarde a quem tropeçar sem saber.
 
@@ -135,12 +135,30 @@ e o nginx recusava a configuração inteira com `duplicate upstream`. Aconteceu 
 vivo. Corrigido nos dois scripts: um único link habilitado, apontando direto
 para a fonte em `/opt`.
 
-Ainda em aberto nesses scripts, **não corrigido**: ambos imprimem
-`✅ Certificados OK` mesmo quando o certbot falha. O certificado do domínio raiz
-`nateksoft.com` de fato falha ao renovar, porque o domínio aponta para o
-Cloudflare e não para esta VPS — inofensivo hoje (nada aqui serve o raiz), mas a
-mensagem de sucesso mentirosa esconderia um problema real. Os certificados que
-importam (`n8n` e `evolution`) estavam válidos por 74 dias em 2026-08-19.
+**4. Os scripts imprimiam sucesso quando o certbot falhava.** A checagem era
+`if [ -f .../fullchain.pem ]` — ou seja, "existe arquivo?", não "esta execução
+deu certo?". O arquivo existe desde a primeira emissão bem-sucedida, meses
+atrás, então `✅ Certificados OK` saía mesmo com o certbot falhando na cara.
+
+A falha é real e recorrente: o domínio raiz `nateksoft.com` aponta para o
+Cloudflare, não para esta VPS, então o desafio ACME por webroot devolve 404 e a
+renovação nunca conclui. Inofensivo hoje, porque nada nesta máquina serve o
+raiz — mas a mensagem mentirosa esconderia o dia em que um certificado que
+importa parasse de renovar.
+
+Corrigido nos dois scripts: o código de saída do certbot é capturado e os casos
+reais são distinguidos. Os quatro caminhos foram testados em isolado, o de
+"certificado vencendo" usando um certificado de verdade expirado na máquina
+(`chat.nateksoft.com`, vencido em abril):
+
+| Cenário | Comportamento |
+| --- | --- |
+| certbot concluiu | sucesso |
+| falhou, certificado válido por mais de 7 dias | **avisa com a data de vencimento e continua** |
+| falhou, certificado vence em menos de 7 dias | erro, aborta |
+| falhou, não existe certificado | erro, aborta |
+
+Certificados em 2026-08-19: `n8n` e `evolution` válidos por 74 dias.
 
 ## 6. Arquitetura
 
