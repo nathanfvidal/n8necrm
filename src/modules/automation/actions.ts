@@ -51,10 +51,17 @@ function mensagemDeErro(erro: unknown): string {
         return "Não foi possível falar com o n8n. A instância pode estar fora do ar.";
       case "nao_autorizado":
         // Cita o NOME da variável (`N8N_API_KEY`), nunca o valor — deliberado,
-        // não achado de revisão a corrigir. Só ADMIN alcança esta mensagem
-        // (`gerenciar_fluxos`), e é exatamente o que torna o erro acionável
-        // em vez de decorativo: sem o nome, quem investiga precisa adivinhar
-        // qual variável de ambiente checar.
+        // não achado de revisão a corrigir. É o que torna o erro acionável em
+        // vez de decorativo: sem o nome, quem investiga precisa adivinhar qual
+        // variável de ambiente checar.
+        //
+        // Quem alcança esta mensagem: ADMIN e GESTOR. Toda chamada ao n8n
+        // passa por uma das duas permissões — `gerenciar_fluxos` (ADMIN, em
+        // `operar`) ou `ver_fluxos` (ADMIN e GESTOR, no reexecutar) — e as
+        // duas podem esbarrar num 401 da instância. Este comentário já disse
+        // "só ADMIN"; deixou de ser verdade quando `ver_fluxos` foi criada,
+        // e a revisão pegou. Nome de variável de ambiente é aceitável para os
+        // dois papéis; o VALOR continua não saindo daqui para ninguém.
         return "O n8n recusou a chave de API do CRM. Verifique N8N_API_KEY.";
       case "nao_encontrado":
         return "Esse fluxo não existe mais no n8n. Recarregue a lista.";
