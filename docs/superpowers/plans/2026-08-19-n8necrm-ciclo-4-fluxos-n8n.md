@@ -1260,6 +1260,8 @@ componente de confirmação nem antecipe a prop.
 - [ ] **Step 6: Criar `src/app/(painel)/fluxos/page.tsx`**
 
 ```tsx
+import { notFound } from "next/navigation";
+
 import { EmptyState } from "@/components/empty-state";
 import { FluxosTable } from "@/components/automation/fluxos-table";
 import { hasPermission } from "@/core/auth/permissions";
@@ -1296,6 +1298,15 @@ export default async function FluxosPage() {
   exigirModulo("automation");
 
   const usuario = await usuarioAtualOuLogin();
+
+  // `ver_fluxos` (ADMIN e GESTOR), não `gerenciar_fluxos`.
+  //
+  // Esconder o link do menu não é gate: a rota continua alcançável digitando a
+  // URL, e Server Action é endpoint HTTP público. `notFound()` e não
+  // `redirect()` pelo mesmo motivo que `exigirModulo` usa 404 — quem não pode
+  // ver não deveria nem saber que a rota existe.
+  if (!hasPermission(usuario.papel, "ver_fluxos")) notFound();
+
   const resultado = await listarFluxos();
 
   if (!resultado.ok) {
@@ -1337,7 +1348,7 @@ cd "d:/Projetos Programação/N8n + Crm"
 grep -rn "conversas" src/components/ --include=*.tsx | head
 ```
 
-O link de Fluxos deve aparecer só quando `moduloAtivo("automation")` for verdadeiro **e** o papel tiver `gerenciar_fluxos` — GESTOR e VENDEDOR não devem ver a entrada.
+O link de Fluxos deve aparecer só quando `moduloAtivo("automation")` for verdadeiro **e** o papel tiver **`ver_fluxos`** — ou seja, ADMIN e GESTOR veem; VENDEDOR não. `gerenciar_fluxos` (só ADMIN) continua valendo apenas para os botões de ativar, desativar e apagar dentro da tela.
 
 - [ ] **Step 8: Rodar os testes tocados**
 
@@ -1925,7 +1936,8 @@ Depois, com `npm run dev` no ar e login feito com o usuário do seed, dirigindo 
 - [ ] a lista mostra os workflows reais da instância, com o estado ativo/desligado batendo com a API
 - [ ] o detalhe pagina execuções e mostra status e duração
 - [ ] o diálogo de desativar **não** habilita o botão até o nome ser digitado exato
-- [ ] um GESTOR não vê o link no menu e recebe 404 em `/fluxos`
+- [ ] um **VENDEDOR** não vê o link no menu e recebe 404 em `/fluxos`
+- [ ] um **GESTOR** vê a lista e consegue reexecutar, mas **não** vê os botões de ativar, desativar e apagar
 - [ ] **nenhuma resposta ao navegador contém `N8N_API_KEY`** — provar procurando o valor no HTML e no payload RSC:
   `curl -s http://localhost:3000/fluxos -H "Cookie: <sessão>" | grep -c "<primeiros 12 chars da chave>"` deve devolver `0`
 - [ ] o iframe carrega o editor do n8n (ou a tela de login dele, que já prova que o framing passou)
