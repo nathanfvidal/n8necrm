@@ -33,7 +33,18 @@ export type Acao =
    * reescreve `stageId` de leads em massa. Estreitar depois é fácil; alargar
    * depois de estragar, não.
    */
-  | "gerenciar_funil";
+  | "gerenciar_funil"
+  /**
+   * Ativar, desativar e apagar workflows na instância n8n, e reexecutar uma
+   * execução passada.
+   *
+   * ADMIN apenas, pelo mesmo motivo de `gerenciar_funil`, mas com o custo do
+   * erro maior: a instância n8n deste projeto atende CLIENTES REAIS — em
+   * 2026-08-19 eram 6 workflows ativos, um deles executando a cada poucos
+   * segundos por webhook. Desativar um fluxo pela tela derruba o WhatsApp de
+   * um cliente pagante, e nada no CRM avisa esse cliente.
+   */
+  | "gerenciar_fluxos";
 
 const matriz: Record<Role, Acao[]> = {
   ADMIN: [
@@ -45,6 +56,7 @@ const matriz: Record<Role, Acao[]> = {
     "configurar_agente",
     "ver_documento_contato",
     "gerenciar_funil",
+    "gerenciar_fluxos",
   ],
   GESTOR: [
     "criar_lead",

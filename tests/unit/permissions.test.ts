@@ -47,3 +47,11 @@ describe("gerenciar_funil", () => {
     expect(hasPermission("VENDEDOR", "gerenciar_funil")).toBe(false);
   });
 });
+
+describe("gerenciar_fluxos", () => {
+  it("gerenciar_fluxos e exclusiva de ADMIN — derruba atendimento de cliente", () => {
+    expect(hasPermission("ADMIN", "gerenciar_fluxos")).toBe(true);
+    expect(hasPermission("GESTOR", "gerenciar_fluxos")).toBe(false);
+    expect(hasPermission("VENDEDOR", "gerenciar_fluxos")).toBe(false);
+  });
+});

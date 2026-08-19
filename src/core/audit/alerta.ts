@@ -52,6 +52,13 @@ export type { AlertaAtividadePayload };
  * `excluir_etapa` entra: destrói estrutura do funil e reescreve `stageId` de
  * leads em massa. As outras operações de funil (`criar_etapa`, `editar_etapa`,
  * `reordenar_etapa`) ficam de fora, junto com o trabalho normal.
+ *
+ * `desativar_fluxo` e `apagar_fluxo` entram: cada um derruba o atendimento de
+ * um cliente inteiro, e a instância n8n é compartilhada por vários. Uma
+ * rajada aqui é o cenário exato que a detecção existe para pegar.
+ *
+ * `ativar_fluxo` e `reexecutar_execucao` ficam de fora: religar é reparo, e
+ * reexecutar um caso real é diagnóstico — nenhum dos dois destrói nada.
  */
 export const ACOES_SENSIVEIS = [
   "excluir_task",
@@ -61,6 +68,8 @@ export const ACOES_SENSIVEIS = [
   "redefinir_senha",
   "excluir_etapa",
   "exportar_leads",
+  "desativar_fluxo",
+  "apagar_fluxo",
 ] as const;
 
 /**
