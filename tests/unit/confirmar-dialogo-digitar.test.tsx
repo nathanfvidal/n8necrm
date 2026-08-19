@@ -57,6 +57,39 @@ describe("ConfirmarDialogo com exigirDigitar", () => {
     expect(botao.disabled).toBe(true);
   });
 
+  it("espaco extra no fim NAO habilita — comparacao e exata, sem trim", () => {
+    montar();
+    fireEvent.click(screen.getByText("abrir"));
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "Noiva Inteligente " } });
+
+    const botao = screen.getByRole("button", { name: "Apagar" }) as HTMLButtonElement;
+    expect(botao.disabled).toBe(true);
+  });
+
+  it(
+    "cancelar depois de digitar o texto exato e reabrir volta com o botao " +
+      "desabilitado — sem isso a protecao inteira deixa de valer, porque a " +
+      "segunda abertura vem com o digitado da sessao anterior ainda no estado " +
+      "(comentario de fechar() em confirmar-dialogo.tsx)",
+    () => {
+      montar();
+      fireEvent.click(screen.getByText("abrir"));
+      fireEvent.change(screen.getByRole("textbox"), { target: { value: "Noiva Inteligente" } });
+
+      let botao = screen.getByRole("button", { name: "Apagar" }) as HTMLButtonElement;
+      expect(botao.disabled).toBe(false);
+
+      // Cancela, sem confirmar.
+      fireEvent.click(screen.getByRole("button", { name: "Cancelar" }));
+
+      // Reabre.
+      fireEvent.click(screen.getByText("abrir"));
+
+      botao = screen.getByRole("button", { name: "Apagar" }) as HTMLButtonElement;
+      expect(botao.disabled).toBe(true);
+    }
+  );
+
   it("texto exato habilita e confirma", async () => {
     const onConfirmar = montar();
     fireEvent.click(screen.getByText("abrir"));
