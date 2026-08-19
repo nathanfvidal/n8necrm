@@ -24,6 +24,7 @@ class ErroN8nFake extends Error {
 vi.mock("@/modules/automation/n8n", () => ({ clienteN8n: clienteMock, ErroN8n: ErroN8nFake }));
 
 const acoes = await import("../../src/modules/automation/actions");
+const { MENSAGEM_SESSAO_INVALIDA } = await import("../../src/lib/acao");
 
 const ADMIN = { id: "u1", papel: "ADMIN" };
 const GESTOR = { id: "u2", papel: "GESTOR" };
@@ -99,6 +100,15 @@ describe("actions do modulo automation", () => {
 
     expect(r).toEqual({ ok: true });
     expect(clienteMock.reexecutarExecucao).toHaveBeenCalledWith("exec-1");
+    expect(registrarAuditoriaMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: "u2",
+        acao: "reexecutar_execucao",
+        entidade: "N8nExecucao",
+        entidadeId: "exec-1",
+        depois: { workflowId: "wf-1" },
+      })
+    );
   });
 
   it("VENDEDOR e recusado no reexecutar e NADA e chamado no n8n", async () => {
@@ -117,5 +127,6 @@ describe("actions do modulo automation", () => {
     const r = await acoes.desativarFluxoAction("wf-1", "X");
 
     expect(r.ok).toBe(false);
+    expect(r).toEqual({ ok: false, erro: MENSAGEM_SESSAO_INVALIDA });
   });
 });
