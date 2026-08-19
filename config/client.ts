@@ -34,12 +34,17 @@ export const client = clientConfigSchema.parse({
   // o módulo de fluxos do n8n entra no Ciclo 4 — não há enum a estender lá.
   // Aqui fica só "whatsapp", o único com código funcionando hoje.
   modulos: ["whatsapp"],
-  // Entidade genérica, mas NÃO vazia. `campos: []` passa no schema, e mesmo
-  // assim está errado: testes e telas iteram sobre `client.entidade.campos`
-  // (export de leads, formulário de lead, filtros de listagem), e uma lista
-  // vazia os deixa exercitando o caminho degenerado em vez do caminho real.
-  // Dois campos, um de cada tipo básico, mantêm a paridade de forma com a
-  // config que a base tinha.
+  // Entidade genérica, mas NÃO vazia. `campos: []` passaria no schema, mas
+  // `entidade.campos` não tem nenhum consumidor real hoje — nem tela, nem
+  // export, nem filtro: `prisma/schema.prisma:75-78` documenta que o
+  // caminho de campos configuráveis "foi desenhado e descartado" em favor
+  // de colunas fixas no modelo `Lead` (confirmado por grep em `src/`,
+  // `tests/` e `config/`: a única leitura de `.campos` fora deste arquivo é
+  // `tests/unit/client-config.test.ts`, que testa a validação do próprio
+  // schema Zod). Os dois campos ficam mesmo assim, por duas razões que não
+  // dependem de consumidor nenhum: manter a paridade de forma com a config
+  // que a base tinha, e exercitar a validação do schema com um `texto` e um
+  // `numero` reais em vez do caminho degenerado de uma lista vazia.
   entidade: {
     singular: "Item",
     plural: "Itens",
