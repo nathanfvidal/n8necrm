@@ -39,10 +39,11 @@ export type Acao =
    * execução passada.
    *
    * ADMIN apenas, pelo mesmo motivo de `gerenciar_funil`, mas com o custo do
-   * erro maior: a instância n8n deste projeto atende CLIENTES REAIS — em
-   * 2026-08-19 eram 6 workflows ativos, um deles executando a cada poucos
-   * segundos por webhook. Desativar um fluxo pela tela derruba o WhatsApp de
-   * um cliente pagante, e nada no CRM avisa esse cliente.
+   * erro maior: a instância n8n deste projeto atende CLIENTES REAIS — a
+   * contagem verificada em 2026-08-19 (Task 6, `.superpowers/sdd/task-6-report.md`)
+   * foi 11 workflows, 8 ativos e 3 desligados, um deles executando a cada
+   * poucos segundos por webhook. Desativar um fluxo pela tela derruba o
+   * WhatsApp de um cliente pagante, e nada no CRM avisa esse cliente.
    */
   | "gerenciar_fluxos"
   /**

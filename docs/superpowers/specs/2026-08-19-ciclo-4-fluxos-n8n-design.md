@@ -17,7 +17,10 @@ ao vivo, e nenhum deles depende dele.
 
 **A instância não é laboratório.** Levantado em 2026-08-19, com a API pública:
 
-- 10 workflows, **6 ativos**
+- 10 workflows, **6 ativos** no levantamento inicial deste spec. A contagem oficial de 2026-08-19
+  é a da verificação ao vivo da Task 6 (`.superpowers/sdd/task-6-report.md`), feita mais tarde no
+  mesmo dia: **11 workflows, 8 ativos e 3 desligados** — uniformizado nesta revisão em todos os
+  lugares que citavam um número diferente (ver achado M2 da revisão final do Ciclo 4)
 - São de cliente, em produção: `Natek Soft - Atendimento WhatsApp` (64 nós),
   `Noiva Inteligente` (65 nós), `Atendimento - Clinica Medica (IA First)` (55),
   `Studio Fight`, `Barbearia BOX64`, `CineMatch`
@@ -242,8 +245,8 @@ multi-empresa, que é o Ciclo 1.
 
 ## 9. Critérios de aceite
 
-- A lista mostra os 10 workflows reais, com o estado ativo/inativo batendo com o
-  que a API devolve
+- A lista mostra os 11 workflows reais (8 ativos, 3 desligados — contagem de
+  2026-08-19, Task 6), com o estado ativo/inativo batendo com o que a API devolve
 - O detalhe pagina execuções e mostra status e duração
 - "Reexecutar" dispara `retry` com `loadWorkflow: true` e a nova execução aparece
 - Ativar/desativar exige digitar o nome e grava em `AuditLog` — provado por

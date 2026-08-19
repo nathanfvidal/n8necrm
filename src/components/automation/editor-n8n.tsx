@@ -13,8 +13,12 @@
  * cookie de sessão em contexto de terceiro e a tela fica presa no login para
  * sempre.
  *
- * Falta ainda o `frame-src` no CSP do CRM, que é a Task 6. Até lá o quadro
- * fica em branco e o console do navegador mostra a violação.
+ * O `frame-src` no CSP do CRM (Task 6) já entrou — `frame-src
+ * https://n8n.nateksoft.com` está no lugar e foi provado ao vivo na
+ * auditoria do ciclo (`docs/auditorias/2026-08-19-ciclo-4-fluxos.md`, ✅12).
+ * Este comentário dizia "falta ainda" até a revisão final apontar que já
+ * era falso no HEAD — sem essa diretiva o quadro ficaria mesmo em branco,
+ * com violação no console, mas essa fase já passou.
  */
 export function EditorN8n({ url, nome }: { url: string; nome: string }) {
   return (

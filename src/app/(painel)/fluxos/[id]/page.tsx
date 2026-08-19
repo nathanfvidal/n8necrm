@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { hasPermission } from "@/core/auth/permissions";
 import { usuarioAtualOuLogin } from "@/core/auth/session";
 import { exigirModulo } from "@/lib/module-gate";
-import { clienteN8n, ErroN8n } from "@/modules/automation/n8n";
+import { clienteN8n, ErroN8n, urlBaseN8n } from "@/modules/automation/n8n";
 
 export default async function FluxoDetalhePage({
   params,
@@ -35,6 +35,7 @@ export default async function FluxoDetalhePage({
 
   let fluxo;
   let execucoes;
+  let urlEditor: string;
   try {
     // Em paralelo: são duas chamadas independentes, e serializá-las dobraria
     // o tempo de uma tela cujo propósito é diagnosticar rápido.
@@ -42,6 +43,19 @@ export default async function FluxoDetalhePage({
       clienteN8n.buscarWorkflow(id),
       clienteN8n.listarExecucoes({ workflowId: id, limite: 20 }),
     ]);
+
+    // Montada NO SERVIDOR e passada pronta. `N8N_API_KEY` não acompanha: o
+    // editor autentica pelo cookie de sessão do próprio n8n, não pela chave
+    // da API — que nunca deve sair daqui.
+    //
+    // `urlBaseN8n()` valida a env (achado M5 da revisão final): a versão
+    // anterior lia `process.env.N8N_API_URL?.replace(...)` cru, e com a env
+    // ausente ou inválida isso deixava passar `src="undefined/workflow/<id>"`
+    // pro navegador sem erro nenhum no servidor. Se a validação falhar, o
+    // `throw` cai no mesmo `catch` abaixo — e o `erro` NÃO é `ErroN8n`, então
+    // ele bate no ramo genérico do `description`, que tem texto próprio para
+    // isso (M6): não manda o leitor procurar em log de instância nenhuma.
+    urlEditor = `${urlBaseN8n().replace(/\/$/, "")}/workflow/${encodeURIComponent(id)}`;
   } catch (erro) {
     // `nao_encontrado` vira 404 de verdade, e não uma tela de erro: o fluxo
     // pode ter sido apagado por outra pessoa entre a lista e o clique.
@@ -52,19 +66,23 @@ export default async function FluxoDetalhePage({
         <EmptyState
           title="Não foi possível carregar este fluxo"
           description={
-            erro instanceof ErroN8n && erro.tipo === "inalcancavel"
-              ? "A instância do n8n pode estar fora do ar."
-              : "O n8n recusou a consulta. Veja os logs da instância."
+            erro instanceof ErroN8n
+              ? erro.tipo === "inalcancavel"
+                ? "A instância do n8n pode estar fora do ar."
+                : "O n8n recusou a consulta. Veja os logs da instância."
+              : // Achado M6 da revisão final: um erro que NÃO é `ErroN8n` — por
+                // exemplo `urlBaseN8n()`/`lerEnv()` rejeitando uma env
+                // ausente ou inválida — não é o n8n recusando nada. É
+                // configuração DESTE CRM. "Veja os logs da instância" manda
+                // o leitor procurar no lugar errado; aqui o problema está no
+                // servidor do CRM, não em `n8n.nateksoft.com`.
+                "A configuração do módulo de automação está incompleta. Veja os logs do servidor do CRM."
           }
         />
       </div>
     );
   }
 
-  // Montada NO SERVIDOR e passada pronta. `N8N_API_KEY` não acompanha: o
-  // editor autentica pelo cookie de sessão do próprio n8n, não pela chave da
-  // API — que nunca deve sair daqui.
-  const urlEditor = `${process.env.N8N_API_URL?.replace(/\/$/, "")}/workflow/${encodeURIComponent(id)}`;
   const mostrandoEditor = aba === "editar";
 
   return (

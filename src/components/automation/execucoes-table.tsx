@@ -1,6 +1,6 @@
 "use client";
 
-import { useTransition } from "react";
+import { useState, useTransition } from "react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
@@ -20,12 +20,22 @@ function duracao(execucao: Execucao): string {
 
 export function ExecucoesTable({ execucoes }: { execucoes: Execucao[] }) {
   const [pendente, iniciar] = useTransition();
+  // `pendente` do useTransition é ÚNICO para o componente inteiro — reexecutar
+  // UMA linha deixava as outras 19 com o botão desabilitado também (achado M4
+  // da revisão final). `idEmCurso` guarda qual execução está em voo agora, e
+  // cada linha só se desabilita quando é ELA que está em curso.
+  const [idEmCurso, setIdEmCurso] = useState<string | null>(null);
 
   function reexecutar(execucao: Execucao) {
+    setIdEmCurso(execucao.id);
     iniciar(async () => {
-      const r = await reexecutarExecucaoAction(execucao.id, execucao.workflowId);
-      if (r.ok) toast.success("Reexecução enfileirada. Atualize em alguns segundos.");
-      else toast.error(r.erro);
+      try {
+        const r = await reexecutarExecucaoAction(execucao.id, execucao.workflowId);
+        if (r.ok) toast.success("Reexecução enfileirada. Atualize em alguns segundos.");
+        else toast.error(r.erro);
+      } finally {
+        setIdEmCurso(null);
+      }
     });
   }
 
@@ -67,7 +77,12 @@ export function ExecucoesTable({ execucoes }: { execucoes: Execucao[] }) {
                   rodando de novo, ao contrário de apagar um fluxo. */}
               <ConfirmarDialogo
                 gatilho={(abrir) => (
-                  <Button variant="outline" size="sm" onClick={abrir} disabled={pendente}>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={abrir}
+                    disabled={pendente && idEmCurso === execucao.id}
+                  >
                     Reexecutar
                   </Button>
                 )}

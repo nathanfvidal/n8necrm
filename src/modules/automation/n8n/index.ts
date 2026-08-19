@@ -68,3 +68,18 @@ export const clienteN8n: ClienteN8n = new Proxy({} as ClienteN8n, {
     return typeof valor === "function" ? valor.bind(real) : valor;
   },
 });
+
+/**
+ * URL base do n8n, validada — para quem precisa montar uma URL fora do
+ * `ClienteN8nHttp` (o iframe do editor embutido, `fluxos/[id]/page.tsx`).
+ *
+ * Existe porque `[id]/page.tsx` lia `process.env.N8N_API_URL` CRU, com `?.`,
+ * para montar `urlEditor` — achado M5 da revisão final: com a env ausente ou
+ * inválida, isso produzia silenciosamente `src="undefined/workflow/<id>"`
+ * no navegador, sem erro nenhum no servidor. O resto do módulo é estrito
+ * sobre essa env (`lerEnv()` acima); esse `?.` era otimismo fora de lugar.
+ * Mesma validação de `obterCliente()`, mesma mensagem de erro clara.
+ */
+export function urlBaseN8n(): string {
+  return lerEnv().N8N_API_URL;
+}

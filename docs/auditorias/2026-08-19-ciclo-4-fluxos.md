@@ -5,7 +5,8 @@
 n8n, permissões `ver_fluxos`/`gerenciar_fluxos`, server actions com auditoria, tela de lista,
 tela de detalhe com iframe do editor, e `frame-src` no CSP (esta tarefa, Task 6)
 **Ambiente:** leitura de código + verificação ao vivo contra `n8n.nateksoft.com`, a instância de
-**produção** que atende 6 workflows reais de clientes (WhatsApp de clínica médica, barbearia e
+**produção** que atende 11 workflows reais de clientes (8 ativos, 3 desligados — contagem de
+2026-08-19, Task 6; WhatsApp de clínica médica, barbearia e
 outros). Nenhuma escrita destrutiva foi feita contra ela nesta auditoria — ver seção
 "Como a verificação foi feita sem tocar produção" abaixo.
 
@@ -105,7 +106,9 @@ pelo navegador. `script-src` não foi tocado por esta mudança.
 **Não é o mesmo eixo que `frame-ancestors 'none'`** (inalterado por este ciclo): `frame-src`
 controla o que ESTE site pode embutir; `frame-ancestors` controla quem pode embutir ESTE site.
 As duas convivem porque respondem perguntas opostas — confirmado que `frame-ancestors 'none'`
-segue presente no header real (ver ✅6), então o CRM continua impossível de embutir em qualquer
+segue presente no header real (ver ✅12 — corrigido nesta revisão; o item ✅6 da tabela é sobre a
+página de detalhe paginar execuções, não sobre o CSP), então o CRM continua impossível de embutir
+em qualquer
 página de terceiro, mesmo depois desta mudança.
 
 ---
@@ -142,10 +145,14 @@ separada do n8n, que este CRM não provisiona.
 ## 5. Auditoria de ações destrutivas (`ACOES_SENSIVEIS`)
 
 Este ciclo somou `desativar_fluxo` e `apagar_fluxo` a `ACOES_SENSIVEIS`
-(`core/audit/alerta.ts:68-69`) — cada um derruba o atendimento de um cliente inteiro, e a
-instância é compartilhada por vários, exatamente o cenário que o detector de rajada existe para
-pegar. `ativar_fluxo` (reparo) e `reexecutar_execucao` (diagnóstico, não destruição) ficam de
-fora, por decisão documentada no comentário do próprio arquivo.
+(`core/audit/alerta.ts:79-80` — corrigido nesta revisão; a versão anterior deste documento citava
+`:68-69`, que aponta para `redefinir_senha`/`excluir_etapa`, não para as entradas certas) — cada um
+derruba o atendimento de um cliente inteiro, e a instância é compartilhada por vários, exatamente
+o cenário que o detector de rajada existe para pegar. `ativar_fluxo` fica de fora (reparo, não
+estrago). `reexecutar_execucao` também foi somado, na revisão final (achado B1): reexecutar roda o
+fluxo inteiro de novo, nós de envio inclusos, contra a instância de produção — não é sem custo só
+por ser "diagnóstico", e uma rajada de reexecuções reais é o cenário exato que este detector existe
+para pegar.
 
 Toda chamada a `operar()` (as três ações de `gerenciar_fluxos`) e a `reexecutarExecucaoAction`
 grava linha de auditoria **depois** de o n8n confirmar a operação, nunca antes — o comentário em
