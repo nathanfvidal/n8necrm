@@ -12,37 +12,45 @@ import { clientConfigSchema } from "./client.schema";
  * e não há como faltarem no build.
  */
 export const client = clientConfigSchema.parse({
-  nome: "CRM Autus",
-  vertical: "automotivo",
+  nome: "n8necrm",
+  // Decisão 8 do spec (2026-08-19): a identidade do produto está EM ABERTO de
+  // propósito. "generico" é o marcador dessa decisão adiada, não um
+  // placeholder esquecido — `vertical` é obrigatório no schema e string vazia
+  // passaria na validação sem dizer nada a quem ler depois.
+  vertical: "generico",
   marca: {
-    nome: "Autus",
-    corPrimaria: "#0F62FE",
+    nome: "n8necrm",
+    // Croma acima do piso de `CROMA_MINIMO` (config/client.schema.ts): o
+    // schema RECUSA cinza, porque abaixo desse piso as superfícies derivadas
+    // ficam indistinguíveis de neutro e o white-label para de funcionar em
+    // silêncio. Ou seja: não existe "cor neutra provisória" aqui.
+    corPrimaria: "#6D4AFF",
     fonte: "Geist",
-    // Arte monocromática: a preta é para o tema claro, a branca para o
-    // escuro. Escolhido o par de 3 KB sem metadado C2PA — as variantes
-    // maiores da mesma arte carregavam ~9,5 KB de manifesto de proveniência.
-    logo: { claro: "/logo-preto.svg", escuro: "/logo-branco.svg" },
+    // `logo` omitido: é opcional, e sem arquivo o painel mostra o nome em
+    // texto. Não inventar caminho para asset que não existe — o regex de
+    // `caminhoDeAsset` aceitaria, e a imagem quebraria só em runtime.
   },
-  // "whatsapp" liga o atendente de IA (Fatia 1) e o link "Conversas" no
-  // menu — ver src/modules/whatsapp/. Diferente de catalog/analytics
-  // (ainda sem rota, Fases 2-3), este módulo tem código funcionando de
-  // verdade nesta fatia, então já entra ligado.
+  // O enum de `modulos` em client.schema.ts JÁ inclui "automation", que é onde
+  // o módulo de fluxos do n8n entra no Ciclo 4 — não há enum a estender lá.
+  // Aqui fica só "whatsapp", o único com código funcionando hoje.
   modulos: ["whatsapp"],
+  // Entidade genérica, mas NÃO vazia. `campos: []` passa no schema, e mesmo
+  // assim está errado: testes e telas iteram sobre `client.entidade.campos`
+  // (export de leads, formulário de lead, filtros de listagem), e uma lista
+  // vazia os deixa exercitando o caminho degenerado em vez do caminho real.
+  // Dois campos, um de cada tipo básico, mantêm a paridade de forma com a
+  // config que a base tinha.
   entidade: {
-    singular: "Veículo",
-    plural: "Veículos",
+    singular: "Item",
+    plural: "Itens",
     campos: [
-      { nome: "marca", tipo: "texto", obrigatorio: true, filtravel: true },
-      { nome: "modelo", tipo: "texto", obrigatorio: true, filtravel: true },
-      { nome: "ano", tipo: "numero", obrigatorio: true, filtravel: true },
-      { nome: "km", tipo: "numero", obrigatorio: false, filtravel: true },
-      { nome: "cambio", tipo: "opcao", obrigatorio: false, filtravel: true, opcoes: ["Manual", "Automático"] },
-      { nome: "cor", tipo: "texto", obrigatorio: false, filtravel: false },
+      { nome: "titulo", tipo: "texto", obrigatorio: true, filtravel: true },
+      { nome: "valor", tipo: "numero", obrigatorio: false, filtravel: true },
     ],
   },
-  funil: ["Novo", "Contato feito", "Visita agendada", "Proposta", "Fechado"],
+  funil: ["Novo", "Em contato", "Proposta", "Fechado"],
   whatsapp: {
     numero: "5511999999999",
-    mensagem: "Olá, tenho interesse no {item}",
+    mensagem: "Olá, tenho interesse em {item}",
   },
 });
