@@ -57,8 +57,16 @@ export type { AlertaAtividadePayload };
  * um cliente inteiro, e a instância n8n é compartilhada por vários. Uma
  * rajada aqui é o cenário exato que a detecção existe para pegar.
  *
- * `ativar_fluxo` e `reexecutar_execucao` ficam de fora: religar é reparo, e
- * reexecutar um caso real é diagnóstico — nenhum dos dois destrói nada.
+ * `ativar_fluxo` fica de fora: religar é reparo, não estrago.
+ *
+ * `reexecutar_execucao` ENTRA — correção da revisão final do Ciclo 4. Até ali
+ * este comentário dizia "reexecutar um caso real é diagnóstico — nenhum dos
+ * dois destrói nada", e estava errado: reexecutar roda o fluxo INTEIRO de
+ * novo, nós de envio inclusos, contra a instância de produção de um cliente
+ * — se o fluxo manda mensagem por WhatsApp, o cliente final pode recebê-la de
+ * novo. Não é sem custo só porque é reversível "rodando de novo"; uma rajada
+ * de reexecuções reais é exatamente o padrão que este detector existe para
+ * pegar, e `execucoes-table.tsx` já exige confirmação por causa disso.
  */
 export const ACOES_SENSIVEIS = [
   "excluir_task",
@@ -70,6 +78,7 @@ export const ACOES_SENSIVEIS = [
   "exportar_leads",
   "desativar_fluxo",
   "apagar_fluxo",
+  "reexecutar_execucao",
 ] as const;
 
 /**
