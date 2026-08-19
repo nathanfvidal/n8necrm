@@ -39,10 +39,15 @@ function getSegredoFila(): string {
  *
  * ## Por que o segredo vai no PAYLOAD, e não num header
  *
- * A documentação da Vercel garante que uma rota consumidora configurada por
+ * A documentação da Vercel (vercel.com/docs/queues/concepts, seção "Consumer
+ * function security" — verificado ao vivo na rodada de fix que corrigiu este
+ * achado) garante que uma rota consumidora configurada por
  * `experimentalTriggers` fica air-gapped da internet, só invocável pela
- * infraestrutura interna de fila. O SDK, por sua vez, NÃO verifica assinatura
- * nenhuma na requisição recebida — confia inteiramente nessa garantia de rede.
+ * infraestrutura interna de fila. A inspeção do código-fonte de
+ * `@vercel/queue` (`dist/index.js`, funções `parseCallback`/
+ * `parseBinaryHeaders`) confirma que o SDK, por sua vez, NÃO verifica
+ * assinatura nenhuma na requisição recebida — confia inteiramente nessa
+ * garantia de rede.
  * O segredo no payload é a segunda camada barata: se o air-gapping falhar por
  * bug ou configuração errada, um POST forjado ainda não dispara `processarTurno`
  * com um `conversationId` arbitrário. Vai no payload e não em
@@ -52,14 +57,16 @@ function getSegredoFila(): string {
  *
  * ## Por que a chave de idempotência muda a cada reagendamento
  *
- * Achado CRÍTICO de revisão na base: o reagendamento reusava a MESMA chave da
- * publicação original. A janela de dedupe do Vercel Queues é `min(retenção, 24h)`,
- * muito maior que os 8s entre a publicação e o primeiro reagendamento — então
- * TODA tentativa de reagendar por lease ocupado colidia, `send()` lançava
- * `DuplicateMessageError`, o handler respondia 500, e quem reentregava era o
- * retry padrão de 30s da fila, nunca o reagendamento de 5s pretendido. Sob
- * contenção sustentada isso queimava tentativas de entrega mais rápido que o
- * necessário e podia derrubar o turno antes de qualquer resposta sair.
+ * Fix round 1/5, achado CRÍTICO do revisor (C2): na base, o reagendamento
+ * reusava a MESMA chave da publicação original. A janela de dedupe do Vercel
+ * Queues é `min(retenção, 24h)`, muito maior que os 8s entre a publicação e o
+ * primeiro reagendamento — então TODA tentativa de reagendar por lease
+ * ocupado colidia, `send()` lançava `DuplicateMessageError`, o handler
+ * respondia 500, e quem reentregava era o retry padrão da fila
+ * (`retryAfterSeconds: 30` em `vercel.json`), nunca o reagendamento de 5s
+ * pretendido. Sob contenção sustentada isso queimava tentativas de entrega
+ * mais rápido que o necessário e podia derrubar o turno antes de qualquer
+ * resposta sair.
  */
 export class FilaVercel implements FilaTurnos {
   async publicar(job: TurnoJob, opcoes?: OpcoesPublicacao): Promise<void> {

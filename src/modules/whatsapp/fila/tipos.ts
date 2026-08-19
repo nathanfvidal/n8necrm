@@ -12,8 +12,8 @@
  *
  * `tentativaReagendamento` é o contador do NOSSO reagendamento deliberado
  * (quando `turno.ts` encontra o lease da conversa ocupado) — não confundir
- * com o retry nativo da fila. `undefined`/`0` = publicação original, feita
- * por `ingest.ts`.
+ * com `deliveryCount`, a contagem de retry NATIVA da fila para falha de
+ * handler. `undefined`/`0` = publicação original, feita por `ingest.ts`.
  */
 export interface TurnoJob {
   conversationId: string;
