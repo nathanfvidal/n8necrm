@@ -10,6 +10,8 @@ import {
   DialogFooter,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 
 /**
  * Confirmação para ação destrutiva, no lugar de `window.confirm`.
@@ -37,6 +39,7 @@ export function ConfirmarDialogo({
   rotuloConfirmar,
   rotuloConfirmando = "Excluindo...",
   onConfirmar,
+  exigirDigitar,
 }: {
   /** O botão que abre. Recebe `onClick` por injeção — ver abaixo. */
   gatilho: (abrir: () => void) => ReactNode;
@@ -51,15 +54,40 @@ export function ConfirmarDialogo({
    */
   rotuloConfirmando?: string;
   onConfirmar: () => void | Promise<void>;
+  /**
+   * Quando presente, exige que a pessoa digite este texto EXATO para o botão
+   * de confirmar habilitar.
+   *
+   * Existe para as operações em que o custo do erro recai sobre terceiros:
+   * desativar ou apagar um fluxo do n8n derruba o atendimento de um cliente
+   * que não está na sala para reclamar. Um diálogo comum vira reflexo depois
+   * da décima vez; digitar o nome não vira.
+   *
+   * Comparação exata, sem `trim` e sem ignorar caixa: metade do valor está em
+   * obrigar a LER o nome para reproduzi-lo.
+   */
+  exigirDigitar?: string;
 }) {
   const [aberto, setAberto] = useState(false);
   const [confirmando, setConfirmando] = useState(false);
+  const [digitado, setDigitado] = useState("");
+
+  const precisaDigitar = exigirDigitar !== undefined;
+  const podeConfirmar = !precisaDigitar || digitado === exigirDigitar;
+
+  function fechar(abrir: boolean) {
+    setAberto(abrir);
+    // Ao fechar, limpa o texto digitado: sem isto a segunda abertura já vem
+    // com o botão habilitado (o `digitado` de uma sessão anterior ainda bate
+    // com `exigirDigitar`), e a proteção inteira deixa de valer.
+    if (!abrir) setDigitado("");
+  }
 
   async function confirmar() {
     setConfirmando(true);
     try {
       await onConfirmar();
-      setAberto(false);
+      fechar(false);
     } finally {
       setConfirmando(false);
     }
@@ -71,17 +99,30 @@ export function ConfirmarDialogo({
           precisa controlar a aparência do botão (tamanho, variante) e o
           `DialogTrigger` do Base UI impõe a própria. */}
       {gatilho(() => setAberto(true))}
-      <Dialog open={aberto} onOpenChange={setAberto}>
+      <Dialog open={aberto} onOpenChange={fechar}>
         <DialogContent showCloseButton={false}>
           <DialogTitle>{titulo}</DialogTitle>
           <DialogDescription>{descricao}</DialogDescription>
+          {precisaDigitar ? (
+            <div className="space-y-2">
+              <Label htmlFor="confirmar-digitando">
+                Digite <span className="font-medium">{exigirDigitar}</span> para confirmar
+              </Label>
+              <Input
+                id="confirmar-digitando"
+                value={digitado}
+                onChange={(evento) => setDigitado(evento.target.value)}
+                autoComplete="off"
+              />
+            </div>
+          ) : null}
           <DialogFooter>
             {/* "Cancelar" primeiro e como padrão visual: num diálogo de ação
                 destrutiva, a saída segura é a que deve estar embaixo do dedo. */}
-            <Button variant="outline" onClick={() => setAberto(false)} disabled={confirmando}>
+            <Button variant="outline" onClick={() => fechar(false)} disabled={confirmando}>
               Cancelar
             </Button>
-            <Button variant="destructive" onClick={confirmar} disabled={confirmando}>
+            <Button variant="destructive" onClick={confirmar} disabled={confirmando || !podeConfirmar}>
               {confirmando ? rotuloConfirmando : rotuloConfirmar}
             </Button>
           </DialogFooter>

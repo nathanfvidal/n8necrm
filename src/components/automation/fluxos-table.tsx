@@ -98,6 +98,12 @@ export function FluxosTable({
                   }
                   rotuloConfirmar={fluxo.ativo ? "Desativar" : "Ativar"}
                   rotuloConfirmando="Aplicando…"
+                  // `undefined` quando o fluxo está desligado, e não sempre:
+                  // ativar é reparo, e exigir digitação para religar algo já
+                  // parado só treina a pessoa a digitar nome sem ler. A
+                  // fricção fica onde o custo do erro está — desativar
+                  // derruba o atendimento de um cliente; ativar devolve.
+                  exigirDigitar={fluxo.ativo ? fluxo.nome : undefined}
                   onConfirmar={() => alternar(fluxo)}
                 />
               </TableCell>

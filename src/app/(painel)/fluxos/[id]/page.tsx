@@ -1,0 +1,109 @@
+import Link from "next/link";
+import { notFound } from "next/navigation";
+
+import { ApagarFluxo } from "@/components/automation/apagar-fluxo";
+import { EditorN8n } from "@/components/automation/editor-n8n";
+import { ExecucoesTable } from "@/components/automation/execucoes-table";
+import { StatusFluxo } from "@/components/automation/status-fluxo";
+import { EmptyState } from "@/components/empty-state";
+import { Button } from "@/components/ui/button";
+import { hasPermission } from "@/core/auth/permissions";
+import { usuarioAtualOuLogin } from "@/core/auth/session";
+import { exigirModulo } from "@/lib/module-gate";
+import { clienteN8n, ErroN8n } from "@/modules/automation/n8n";
+
+export default async function FluxoDetalhePage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ id: string }>;
+  searchParams: Promise<{ aba?: string }>;
+}) {
+  exigirModulo("automation");
+
+  const { id } = await params;
+  const { aba } = await searchParams;
+  const usuario = await usuarioAtualOuLogin();
+
+  // Mesmo gate de `ver_fluxos` da lista (`src/app/(painel)/fluxos/page.tsx`):
+  // ADMIN e GESTOR, não `gerenciar_fluxos`. `notFound()` e não `redirect()`
+  // pelo mesmo motivo — quem não pode ver não deveria nem saber que a rota
+  // existe.
+  if (!hasPermission(usuario.papel, "ver_fluxos")) notFound();
+
+  const podeGerenciar = hasPermission(usuario.papel, "gerenciar_fluxos");
+
+  let fluxo;
+  let execucoes;
+  try {
+    // Em paralelo: são duas chamadas independentes, e serializá-las dobraria
+    // o tempo de uma tela cujo propósito é diagnosticar rápido.
+    [fluxo, execucoes] = await Promise.all([
+      clienteN8n.buscarWorkflow(id),
+      clienteN8n.listarExecucoes({ workflowId: id, limite: 20 }),
+    ]);
+  } catch (erro) {
+    // `nao_encontrado` vira 404 de verdade, e não uma tela de erro: o fluxo
+    // pode ter sido apagado por outra pessoa entre a lista e o clique.
+    if (erro instanceof ErroN8n && erro.tipo === "nao_encontrado") notFound();
+    return (
+      <div className="space-y-6">
+        <h1 className="text-2xl font-semibold">Fluxo</h1>
+        <EmptyState
+          title="Não foi possível carregar este fluxo"
+          description={
+            erro instanceof ErroN8n && erro.tipo === "inalcancavel"
+              ? "A instância do n8n pode estar fora do ar."
+              : "O n8n recusou a consulta. Veja os logs da instância."
+          }
+        />
+      </div>
+    );
+  }
+
+  // Montada NO SERVIDOR e passada pronta. `N8N_API_KEY` não acompanha: o
+  // editor autentica pelo cookie de sessão do próprio n8n, não pela chave da
+  // API — que nunca deve sair daqui.
+  const urlEditor = `${process.env.N8N_API_URL?.replace(/\/$/, "")}/workflow/${encodeURIComponent(id)}`;
+  const mostrandoEditor = aba === "editar";
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-start justify-between gap-4">
+        <div className="space-y-1">
+          <h1 className="text-2xl font-semibold">{fluxo.nome}</h1>
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <StatusFluxo ativo={fluxo.ativo} />
+            <span>{fluxo.nos} nós</span>
+            {fluxo.tags.length > 0 ? <span>· {fluxo.tags.join(", ")}</span> : null}
+          </div>
+        </div>
+        {podeGerenciar ? <ApagarFluxo id={fluxo.id} nome={fluxo.nome} /> : null}
+      </div>
+
+      <nav className="flex gap-2 border-b">
+        <Link href={`/fluxos/${id}`} aria-current={!mostrandoEditor ? "page" : undefined}>
+          <Button variant={!mostrandoEditor ? "default" : "ghost"} size="sm">
+            Execuções
+          </Button>
+        </Link>
+        <Link href={`/fluxos/${id}?aba=editar`} aria-current={mostrandoEditor ? "page" : undefined}>
+          <Button variant={mostrandoEditor ? "default" : "ghost"} size="sm">
+            Editar
+          </Button>
+        </Link>
+      </nav>
+
+      {mostrandoEditor ? (
+        <EditorN8n url={urlEditor} nome={fluxo.nome} />
+      ) : execucoes.itens.length === 0 ? (
+        <EmptyState
+          title="Nenhuma execução"
+          description="Este fluxo ainda não rodou, ou as execuções antigas já foram podadas pelo n8n."
+        />
+      ) : (
+        <ExecucoesTable execucoes={execucoes.itens} />
+      )}
+    </div>
+  );
+}
