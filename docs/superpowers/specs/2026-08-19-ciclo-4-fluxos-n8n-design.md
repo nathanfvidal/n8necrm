@@ -103,26 +103,50 @@ Armadilha registrada: existem **dois** `nateksoft.conf`. O de
 `/opt/nateksoft/nginx/nateksoft.conf`, para onde o `sites-enabled` aponta e de
 onde o `deploy.sh` copia. Editar o outro não faz efeito nenhum.
 
-**docker-compose** — a linha está **comentada e inerte** no serviço `n8n`:
+**n8n** — `N8N_SAMESITE_COOKIE=none` **aplicado** no serviço `n8n` do compose e
+confirmado dentro do container (`docker exec n8n printenv | grep -i samesite`).
+Sem ela o iframe carrega mas não autentica: o cookie de sessão do n8n é
+`SameSite=lax` por padrão e o navegador não o envia em contexto de terceiro.
 
-```
-# - N8N_SAMESITE_COOKIE=none
-```
+**Sistema** — kernel `6.8.0-124` → `6.8.0-138` (estava 14 revisões atrás, com
+9 semanas sem reboot), 71 pacotes aplicados. `cloud-init` já estava em `hold` e
+permaneceu em 24.1.3 — o salto para 26.1 mexe em rede no boot e é o tipo de
+coisa que tranca alguém fora de uma VPS.
 
-Pendente de aplicação, porque exige reiniciar o container e derrubar webhook em
-voo. Comando: `cd /opt/nateksoft/docker && docker-compose up -d n8n` (compose
-v1, com hífen — `docker compose` v2 não existe nesta VPS).
+### Três armadilhas de infraestrutura, encontradas ao vivo
 
-**Sem essa variável o iframe carrega mas não autentica**: o cookie de sessão do
-n8n é `SameSite=lax` por padrão e o navegador não o envia em contexto de
-terceiro. Ou seja, o painel via API funciona por completo antes dela; só a aba
-do editor fica presa na tela de login.
+Nenhuma é do CRM. Todas custam uma tarde a quem tropeçar sem saber.
+
+**1. `restart: always` não aplica mudança de compose.** Reiniciar a máquina
+reinicia o container *existente*, com o ambiente antigo. Variável nova exige
+**recriar**: `docker compose up -d --no-deps n8n`.
+
+**2. `docker-compose` v1 quebra contra o Docker Engine 29 — e destrói antes de
+falhar.** `KeyError: 'ContainerConfig'`, depois de já ter removido o container.
+Derrubou o n8n por ~90s em 2026-08-19. Corrigido: Compose v2 instalado como
+plugin, e `/usr/bin/docker-compose` desviado por `dpkg-divert` para um atalho
+que encaminha ao v2 (original em `/usr/bin/docker-compose.v1`). O desvio
+sobrevive a `apt upgrade`, ao contrário de sobrescrever o arquivo.
+
+**3. Os scripts de deploy criavam `upstream` duplicado.** `deploy.sh` e
+`deploy-auto.sh` faziam `ln -sf ... sites-enabled/nateksoft` **sem** remover o
+`sites-enabled/nateksoft.conf` que já existia; os dois declaravam `upstream n8n`
+e o nginx recusava a configuração inteira com `duplicate upstream`. Aconteceu ao
+vivo. Corrigido nos dois scripts: um único link habilitado, apontando direto
+para a fonte em `/opt`.
+
+Ainda em aberto nesses scripts, **não corrigido**: ambos imprimem
+`✅ Certificados OK` mesmo quando o certbot falha. O certificado do domínio raiz
+`nateksoft.com` de fato falha ao renovar, porque o domínio aponta para o
+Cloudflare e não para esta VPS — inofensivo hoje (nada aqui serve o raiz), mas a
+mensagem de sucesso mentirosa esconderia um problema real. Os certificados que
+importam (`n8n` e `evolution`) estavam válidos por 74 dias em 2026-08-19.
 
 ## 6. Arquitetura
 
 Segue a fronteira que a base já impõe: `src/core/` não conhece `src/modules/`.
 
-```
+```text
 src/modules/automation/
   n8n/
     tipos.ts        contrato: Workflow, Execucao, e a interface do cliente
