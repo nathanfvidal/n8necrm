@@ -119,7 +119,15 @@ export async function seed(): Promise<void> {
   // passada — o objetivo é rotacionar a senha de verdade quando alguém pede
   // isso deliberadamente, sem reescrever o hash (com salt novo, toda vez)
   // numa reexecução comum onde ninguém pediu troca nenhuma.
-  const senhaPlanoExplicita = process.env.SEED_PASSWORD;
+  //
+  // `|| undefined`, não `??` (incidente registrado em
+  // docs/auditorias/2026-08-19-ciclo-0-fundacao.md): uma `SEED_PASSWORD=""`
+  // deixada num `.env` preenchido pela metade chega como string vazia
+  // DEFINIDA, e `??` só cai no fallback para `null`/`undefined` — o admin
+  // nasceria com `bcrypt("")` e uma reexecução de rotina regravaria a senha
+  // já rotacionada por esse hash. String vazia vinda do ambiente precisa
+  // contar como "não definida", nunca como "senha vazia deliberada".
+  const senhaPlanoExplicita = process.env.SEED_PASSWORD || undefined;
   const senhaPlano = senhaPlanoExplicita ?? "senha123";
   const senhaHash = await bcrypt.hash(senhaPlano, 10);
   const atualizarSenhaNaReexecucao = senhaPlanoExplicita !== undefined;

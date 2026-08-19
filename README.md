@@ -12,6 +12,9 @@ Next.js 16 · React 19 · Prisma 7 · Postgres (Supabase) · Auth.js v5 · Tailw
 npm install
 cp .env.example .env   # preencher os valores — ver comentários no arquivo
 npx prisma migrate deploy
+# Antes do seed: gere e preencha SEED_PASSWORD em .env (openssl rand -base64 24).
+# Sem ela, o admin nasce com a senha padrão do repositório — ver o comentário
+# de SEED_PASSWORD em .env.example.
 npx prisma db seed
 npm run dev
 ```
