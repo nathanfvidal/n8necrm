@@ -811,8 +811,8 @@ E, com a ferramenta MCP do Supabase, `list_tables` no projeto `uzumzfxjcxrbxaucv
 
 ```bash
 cd "d:/Projetos Programação/N8n + Crm"
-grep -oE '^[A-Z_]+=' .env | sort > /tmp/env-real.txt
-grep -oE '^[A-Z_]+=' .env.example | sort > /tmp/env-exemplo.txt
+grep -oE '^[A-Z0-9_]+=' .env | sort > /tmp/env-real.txt
+grep -oE '^[A-Z0-9_]+=' .env.example | sort > /tmp/env-exemplo.txt
 diff /tmp/env-exemplo.txt /tmp/env-real.txt
 ```
 
