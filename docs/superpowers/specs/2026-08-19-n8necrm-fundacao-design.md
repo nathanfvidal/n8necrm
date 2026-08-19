@@ -86,7 +86,7 @@ depois como surpresa.
 | **0 — Fundação** | Repo copiado, Supabase migrado, app subindo, testes verdes, fila neutra | — |
 | **4 — Fluxos n8n** | Painel via API + editor em iframe | 0 |
 | **1 — Multi-empresa por baixo** | `Company`, `companyId`, escopo de query, RLS, emissão de JWT | 0 |
-| **2 — Conexões Evolution** | Tela de Conexões, QR ao vivo, ciclo de vida, webhook por instância | 1 |
+| **2 — Conexões** | Tela de Conexões: Evolution (QR) **e WhatsApp oficial (Meta Cloud API)**, ciclo de vida, webhook por conexão | 1 |
 | **3 — Chat ao vivo** | Realtime na thread e na inbox | 1, melhor depois de 2 |
 
 ### Ordem de execução: 0 → 4 → 1 → 2 → 3
@@ -155,6 +155,42 @@ abrir uma exceção nomeada dentro dela**, e a forma é obrigatória:
 
 Descartar essa blindagem por conveniência anularia o motivo de o RLS estar no
 Ciclo 1.
+
+### Ciclo 2 acrescentado: WhatsApp oficial ao lado da Evolution
+
+Pedido do dono em 2026-08-19, depois do Ciclo 4: além das instâncias da
+Evolution, o CRM precisa conectar o **WhatsApp oficial (Meta Cloud API)**, e o
+chat ao vivo tem que funcionar igual nos dois.
+
+**A base já foi desenhada para isso**, e isso muda o tamanho do trabalho. A
+interface `WhatsappGateway` (`src/modules/whatsapp/gateway/tipos.ts:34`) diz,
+por escrito, que um adapter da Meta Cloud API implementa **a mesma interface,
+sem tocar em `ingest.ts`, `turno.ts` nem nas rotas**. Não é reescrita; é um
+segundo adapter ao lado de `evolution.ts`.
+
+Três diferenças concretas que o Ciclo 2 vai ter que absorver, e que o
+comentário de `verificarOrigem` (`gateway/tipos.ts:52`) já antecipa:
+
+1. **Autenticidade do webhook é outra.** A Evolution self-hosted não assina
+   nada — a defesa é o token imprevisível no path mais a conferência do campo
+   `instance`. A Cloud API faz handshake `hub.challenge` na assinatura e assina
+   cada entrega com `X-Hub-Signature-256` (HMAC sobre o corpo **cru**). Por isso
+   `verificarOrigem` recebe o corpo já parseado e a rota decide como lê-lo:
+   a Cloud API precisa do corpo cru para conferir o HMAC.
+2. **Não existe QR Code.** O pareamento da Evolution é escanear um código; o da
+   Cloud API é cadastro no Meta Business, número verificado e token de acesso.
+   A tela de Conexões precisa de **dois fluxos de conexão diferentes**, não de
+   um só com um campo a mais.
+3. **Janela de 24h e templates.** A Cloud API só permite mensagem livre dentro
+   de 24h da última mensagem do cliente; fora disso, só template aprovado pela
+   Meta. A Evolution não tem essa restrição. Isso afeta o chat ao vivo do
+   Ciclo 3 diretamente: o campo de resposta precisa saber se a janela está
+   aberta, e dizer isso a quem está atendendo — em vez de deixar a mensagem
+   falhar no envio sem explicação.
+
+O modelo `Connection` do Ciclo 2 nasce, portanto, com um discriminador de
+provedor, e a tela de Conexões com dois caminhos. O resto do módulo continua
+conhecendo só a interface.
 
 ### Dívida declarada: configuração de cliente em arquivo
 
