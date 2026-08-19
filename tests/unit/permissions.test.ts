@@ -55,3 +55,11 @@ describe("gerenciar_fluxos", () => {
     expect(hasPermission("VENDEDOR", "gerenciar_fluxos")).toBe(false);
   });
 });
+
+describe("ver_fluxos", () => {
+  it("ver_fluxos e de ADMIN e GESTOR, mas nao de VENDEDOR — reexecutar dispara trabalho real no cliente", () => {
+    expect(hasPermission("ADMIN", "ver_fluxos")).toBe(true);
+    expect(hasPermission("GESTOR", "ver_fluxos")).toBe(true);
+    expect(hasPermission("VENDEDOR", "ver_fluxos")).toBe(false);
+  });
+});

@@ -44,7 +44,34 @@ export type Acao =
    * segundos por webhook. Desativar um fluxo pela tela derruba o WhatsApp de
    * um cliente pagante, e nada no CRM avisa esse cliente.
    */
-  | "gerenciar_fluxos";
+  | "gerenciar_fluxos"
+  /**
+   * Ver a tela de fluxos (execuções e workflows) e reexecutar uma execução
+   * passada. ADMIN e GESTOR — não VENDEDOR.
+   *
+   * Nasceu da revisão da Task 3 do Ciclo 4: `reexecutarExecucaoAction` só
+   * checava sessão válida, apoiada no comentário "quem pode ver a execução
+   * já pode ver o que ela fez" — premissa que não existia em lugar nenhum do
+   * código, porque não havia permissão de visualização de automação. Como
+   * Server Action é endpoint HTTP público, isso deixava qualquer VENDEDOR
+   * com sessão válida disparar `POST /executions/{id}/retry` com ids
+   * arbitrários contra a instância de produção de um cliente.
+   *
+   * Ver e reexecutar andam juntos porque reexecutar SEM poder ver é uma tela
+   * que ninguém alcança de propósito (não tem link pra chegar lá), e ver SEM
+   * poder reexecutar tira a única pergunta que a tela existe pra responder:
+   * "isso ainda quebra?". Separar os dois criaria uma permissão órfã de um
+   * lado e uma tela morta do outro.
+   *
+   * Não é o mesmo que `gerenciar_fluxos`, de propósito: reexecutar dispara
+   * trabalho real na instância de um cliente, então não pode ficar livre
+   * para quem só tem sessão válida — mas é diagnóstico (reexecuta um caso
+   * que já aconteceu), não destruição (ativar/desativar/apagar workflow).
+   * Prender diagnóstico a ADMIN tiraria de GESTOR a ferramenta de "isso
+   * ainda quebra?" sem ganhar segurança nenhuma em troca — GESTOR já lida
+   * com o cliente no dia a dia e é quem primeiro ouve "parou de funcionar".
+   */
+  | "ver_fluxos";
 
 const matriz: Record<Role, Acao[]> = {
   ADMIN: [
@@ -57,6 +84,7 @@ const matriz: Record<Role, Acao[]> = {
     "ver_documento_contato",
     "gerenciar_funil",
     "gerenciar_fluxos",
+    "ver_fluxos",
   ],
   GESTOR: [
     "criar_lead",
@@ -64,6 +92,7 @@ const matriz: Record<Role, Acao[]> = {
     "ver_dashboard_geral",
     "exportar_leads",
     "ver_documento_contato",
+    "ver_fluxos",
   ],
   VENDEDOR: ["criar_lead", "mover_lead"],
 };

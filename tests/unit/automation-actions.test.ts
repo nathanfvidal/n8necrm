@@ -27,6 +27,7 @@ const acoes = await import("../../src/modules/automation/actions");
 
 const ADMIN = { id: "u1", papel: "ADMIN" };
 const GESTOR = { id: "u2", papel: "GESTOR" };
+const VENDEDOR = { id: "u3", papel: "VENDEDOR" };
 
 describe("actions do modulo automation", () => {
   beforeEach(() => {
@@ -90,7 +91,7 @@ describe("actions do modulo automation", () => {
     expect(r).toEqual({ ok: false, erro: expect.stringContaining("n8n") });
   });
 
-  it("reexecutar nao exige permissao de gerenciar — e diagnostico, nao destruicao", async () => {
+  it("reexecutar nao exige gerenciar_fluxos, so ver_fluxos — e diagnostico, nao destruicao", async () => {
     usuarioAtualMock.mockResolvedValue(GESTOR);
     clienteMock.reexecutarExecucao.mockResolvedValueOnce(undefined);
 
@@ -98,6 +99,16 @@ describe("actions do modulo automation", () => {
 
     expect(r).toEqual({ ok: true });
     expect(clienteMock.reexecutarExecucao).toHaveBeenCalledWith("exec-1");
+  });
+
+  it("VENDEDOR e recusado no reexecutar e NADA e chamado no n8n", async () => {
+    usuarioAtualMock.mockResolvedValue(VENDEDOR);
+
+    const r = await acoes.reexecutarExecucaoAction("exec-1", "wf-1");
+
+    expect(r.ok).toBe(false);
+    expect(clienteMock.reexecutarExecucao).not.toHaveBeenCalled();
+    expect(registrarAuditoriaMock).not.toHaveBeenCalled();
   });
 
   it("sessao invalida vira mensagem de sessao, nao erro cru", async () => {

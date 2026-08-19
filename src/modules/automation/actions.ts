@@ -103,12 +103,22 @@ export async function apagarFluxoAction(id: string, nome: string): Promise<Resul
 }
 
 /**
- * Reexecutar NÃO exige `gerenciar_fluxos`, de propósito.
+ * Reexecutar exige `ver_fluxos`, não `gerenciar_fluxos`.
  *
- * É diagnóstico, não destruição: reexecuta um caso que já aconteceu, contra a
- * versão atual do fluxo. Exigir permissão de ADMIN aqui tiraria de GESTOR a
- * única ferramenta de "isso ainda quebra?" sem dar nenhuma segurança em troca
- * — quem pode ver a execução já pode ver o que ela fez.
+ * Até a revisão da Task 3 do Ciclo 4, esta função só checava sessão válida,
+ * apoiada num comentário que dizia "quem pode ver a execução já pode ver o
+ * que ela fez" — mas essa permissão de visualização não existia em lugar
+ * nenhum da matriz (`src/core/auth/permissions.ts` só tinha
+ * `gerenciar_fluxos`, exclusiva de ADMIN). Como Server Action é endpoint
+ * HTTP público, isso deixava qualquer VENDEDOR com sessão válida disparar
+ * `POST /executions/{id}/retry` com ids arbitrários contra a instância de
+ * produção de um cliente.
+ *
+ * `ver_fluxos` (ADMIN e GESTOR) fecha esse buraco sem prender a operação a
+ * ADMIN: é diagnóstico, não destruição — reexecuta um caso que já
+ * aconteceu, contra a versão atual do fluxo. Exigir `gerenciar_fluxos` aqui
+ * tiraria de GESTOR a única ferramenta de "isso ainda quebra?" sem ganhar
+ * segurança nenhuma em troca.
  *
  * Continua auditado, porque dispara trabalho real na instância do cliente.
  */
@@ -118,6 +128,9 @@ export async function reexecutarExecucaoAction(
 ): Promise<ResultadoAcao> {
   try {
     const usuario = await usuarioAtual();
+    if (!hasPermission(usuario.papel, "ver_fluxos")) {
+      return { ok: false, erro: "Você não tem permissão para ver fluxos." };
+    }
 
     await clienteN8n.reexecutarExecucao(execucaoId);
 
