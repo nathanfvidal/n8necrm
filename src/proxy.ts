@@ -113,6 +113,11 @@ import { auth } from "@/lib/auth";
  * - **`connect-src 'self'`.** Chamadas à OpenAI e à Evolution saem do
  *   SERVIDOR, nunca do navegador. Se algum dia um script no cliente tentar
  *   mandar dado de lead para fora, o navegador barra.
+ * - **`frame-src https://n8n.nateksoft.com`**: única origem que o CRM pode
+ *   embutir num iframe — o editor do n8n em `/fluxos/[id]?aba=editar`. Não é
+ *   o mesmo eixo de `frame-ancestors` logo abaixo: uma diretiva controla o
+ *   que ESTE site pode embutir, a outra controla quem pode embutir ESTE
+ *   site — as duas convivem porque respondem perguntas opostas.
  * - **`frame-ancestors 'none'`** e **`form-action 'self'`**: ninguém embute
  *   o CRM num iframe, e nenhum formulário daqui posta para fora — o que
  *   fecha o caminho de roubar credencial redirecionando o POST do login.
@@ -130,6 +135,14 @@ function montarCsp(nonce: string): string {
     "img-src 'self' blob: data:",
     "font-src 'self'",
     "connect-src 'self'",
+    // O editor do n8n é embutido num iframe na tela /fluxos. `frame-src` é a
+    // diretiva que permite ISSO — não confundir com `frame-ancestors`, que diz
+    // quem pode embutir O CRM e continua `'none'`.
+    //
+    // A origem é fixa e única de propósito: um `frame-src` amplo permitiria a
+    // qualquer script já presente na página embutir conteúdo de terceiro.
+    // `script-src` não é tocado.
+    "frame-src https://n8n.nateksoft.com",
     "object-src 'none'",
     "base-uri 'self'",
     "form-action 'self'",
