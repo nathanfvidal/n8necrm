@@ -11,7 +11,14 @@ outros). Nenhuma escrita destrutiva foi feita contra ela nesta auditoria — ver
 
 ## Resumo
 
-**❌ Críticas: 0 · ⚠️ Riscos: 1 · ✅ Verificados: 15 · 🔍 Não verificados: 2**
+**❌ Críticas nesta branch: 0 · ⚠️ Riscos: 1 · ✅ Verificados: 15 · 🔍 Não verificados: 2**
+
+Este número é sobre o que o Ciclo 4 mudou, não sobre o estado da instância. A mesma superfície
+levantada para este ciclo (`docs/superpowers/specs/2026-08-19-ciclo-4-fluxos-n8n-design.md`) já
+tinha registrado **quatro** achados críticos herdados da instância `n8n.nateksoft.com` — nenhum
+introduzido por este ciclo, nenhum corrigido aqui, e a revisão final apontou que esta auditoria
+não os citava uma vez sequer. Ver seção "Herdado, não corrigido aqui" abaixo — o `AGENTS.md` deste
+projeto não permite um relatório de "Críticas: 0" sobre uma instância nessas condições.
 
 O núcleo do ciclo — `N8N_API_KEY` nunca alcança o navegador, `ver_fluxos` (ADMIN e GESTOR) e
 `gerenciar_fluxos` (só ADMIN) são checados tanto na renderização quanto em cada Server Action,
@@ -186,6 +193,33 @@ alcançável por qualquer ADMIN sem teto e sem estar no detector de rajada — m
 **Correção proposta:** decisão do dono, mesmo trade-off já registrado em auditorias anteriores
 deste projeto. O detector de rajada por auditoria já cobre a detecção pós-fato; um rate limit
 cobriria a prevenção.
+
+---
+
+## ❌ Herdado, não corrigido aqui
+
+Achado I3 da revisão final: esta auditoria cobre o que o Ciclo 4 mudou (o CRM), não o estado da
+instância `n8n.nateksoft.com` em si — mas a mesma superfície levantada para este ciclo já tinha
+registrado quatro achados críticos da instância, e omiti-los deste documento deixava "❌ Críticas:
+0" parecer uma afirmação sobre a instância inteira, que não é. Nenhum dos quatro foi introduzido
+por este ciclo nem é corrigido aqui — todos já estavam escritos em
+`docs/superpowers/specs/2026-08-19-ciclo-4-fluxos-n8n-design.md`, seção "Achados fora do escopo
+deste ciclo, registrados porque foram vistos", e ficam repetidos aqui só para que uma auditoria de
+segurança sobre esta superfície não deixe de citá-los:
+
+1. **`N8N_ENCRYPTION_KEY=nateksoft`.** É a chave que criptografa **todas as credenciais salvas no
+   n8n** — tokens de WhatsApp, OAuth e API keys de todos os workflows de cliente. Valor adivinhável
+   a partir do nome da empresa. Trocar exige reencriptar as credenciais existentes, então é
+   projeto, não ajuste desta branch.
+2. **Chave global da Evolution é `nateksoft`.** Cria, apaga e lê qualquer instância. Um
+   `GET /instance/fetchInstances` com essa chave devolveu número de telefone e foto de perfil.
+3. **Senha reusada.** `DB_POSTGRESDB_PASSWORD` do n8n é a mesma senha do projeto Supabase do CRM.
+4. **O JWT da API do n8n não expira** (sem claim `exp`).
+
+Nenhum destes quatro é corrigido nesta branch — o próprio spec já registrava que trocar a chave de
+encriptação, por exemplo, exige reencriptar credenciais existentes e é projeto à parte. O ponto
+deste achado é só que um relatório de "Críticas: 0" não pode ficar de pé sem citá-los, porque quem
+lê só este documento sairia acreditando que a instância não tem problema crítico nenhum.
 
 ---
 
