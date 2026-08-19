@@ -91,17 +91,42 @@ describe("prisma/seed.ts", () => {
   });
 
   describe("senha semeada (Task 22 faz login end-to-end com essas credenciais)", () => {
-    beforeAll(seed);
+    // Não afirmamos mais contra o literal público "senha123" (documentado em
+    // prisma/seed.ts): se este teste exigisse aquele literal gravado no
+    // banco compartilhado de desenvolvimento, bastaria rodar `npm test` para
+    // deixar admin@exemplo.com (papel ADMIN) com uma senha pública — o mesmo
+    // defeito que motivou remover o `afterAll` da suíte de rotação, abaixo.
+    // Em vez disso, o teste controla `SEED_PASSWORD` com uma senha que ele
+    // mesmo escolhe e afirma que o seed grava um hash que verifica com ELA —
+    // prova o mecanismo (seed grava um hash válido) sem publicar segredo.
+    const SEED_PASSWORD_ORIGINAL = process.env.SEED_PASSWORD;
+    const SENHA_CONHECIDA_PELO_TESTE = "senhaConhecidaPeloTeste456";
 
-    it.each(EMAILS_SEED)("o hash gravado para %s verifica com a senha em texto plano 'senha123'", async (email) => {
-      const usuario = await prisma.user.findUniqueOrThrow({ where: { email } });
-      const senhaValida = await bcrypt.compare("senha123", usuario.senhaHash);
-      expect(senhaValida).toBe(true);
+    beforeAll(async () => {
+      process.env.SEED_PASSWORD = SENHA_CONHECIDA_PELO_TESTE;
+      await seed();
     });
+
+    afterAll(() => {
+      if (SEED_PASSWORD_ORIGINAL === undefined) {
+        delete process.env.SEED_PASSWORD;
+      } else {
+        process.env.SEED_PASSWORD = SEED_PASSWORD_ORIGINAL;
+      }
+    });
+
+    it.each(EMAILS_SEED)(
+      "o hash gravado para %s verifica com a senha conhecida definida pelo próprio teste",
+      async (email) => {
+        const usuario = await prisma.user.findUniqueOrThrow({ where: { email } });
+        const senhaValida = await bcrypt.compare(SENHA_CONHECIDA_PELO_TESTE, usuario.senhaHash);
+        expect(senhaValida).toBe(true);
+      }
+    );
 
     it("o hash gravado não é a senha em texto plano nem um valor vazio", async () => {
       const admin = await prisma.user.findUniqueOrThrow({ where: { email: "admin@exemplo.com" } });
-      expect(admin.senhaHash).not.toBe("senha123");
+      expect(admin.senhaHash).not.toBe(SENHA_CONHECIDA_PELO_TESTE);
       expect(admin.senhaHash.length).toBeGreaterThan(0);
     });
   });
@@ -153,25 +178,46 @@ describe("prisma/seed.ts", () => {
       const SENHA_ORIGINAL = "senha123";
       const SENHA_NOVA = "outraSenhaDeTeste789";
 
-      afterAll(async () => {
-        // Restaura a senha original explicitamente — sem isso, o resto da
-        // suíte (e a Task 22, que faz login e2e com admin@exemplo.com /
-        // senha123) ficaria com a senha rotacionada por este teste.
-        process.env.SEED_PASSWORD = SENHA_ORIGINAL;
-        await seed();
-        delete process.env.SEED_PASSWORD;
-      });
+      // O `afterAll` que existia aqui gravava SEED_PASSWORD="senha123" e
+      // rodava seed() de propósito, só para "desfazer" a rotação do teste de
+      // baixo — deixando admin@exemplo.com (papel ADMIN) com a senha pública
+      // documentada em prisma/seed.ts:123 no banco real toda vez que
+      // `npm test` rodava. A razão declarada dele — "a suíte e2e (Task 22)
+      // loga com admin@exemplo.com/senha123" — morreu em 2026-08-07: desde
+      // então tests/e2e/credenciais.ts usa contas próprias
+      // (e2e-admin@teste.invalid / e2e-vendedor@teste.invalid, senha em
+      // E2E_SENHA), exatamente porque uma auditoria encontrou aquela conta
+      // ADMIN acessível em produção com a senha do repositório. Sem efeito
+      // nenhum a preservar, o reset foi removido; cada teste abaixo agora
+      // controla SEED_PASSWORD explicitamente e restaura o valor original do
+      // ambiente ao final — não precisa mais de um afterAll para isso.
 
       it(
         "sem SEED_PASSWORD definida, reexecutar o seed não altera um senhaHash já existente",
         async () => {
-          await seed();
-          const antes = await prisma.user.findUniqueOrThrow({ where: { email: "admin@exemplo.com" } });
+          // O teste não pode presumir que o processo está sem SEED_PASSWORD
+          // — o .env deste projeto legitimamente define a variável (é a
+          // senha rotacionada do admin), e herdá-la faria seed() regravar o
+          // hash com salt novo a cada chamada, quebrando a asserção de
+          // igualdade abaixo por um motivo alheio ao que o teste prova.
+          // Por isso salvamos e restauramos o valor original do ambiente.
+          const SEED_PASSWORD_ORIGINAL_DO_AMBIENTE = process.env.SEED_PASSWORD;
+          delete process.env.SEED_PASSWORD;
+          try {
+            await seed();
+            const antes = await prisma.user.findUniqueOrThrow({ where: { email: "admin@exemplo.com" } });
 
-          await seed();
-          const depois = await prisma.user.findUniqueOrThrow({ where: { email: "admin@exemplo.com" } });
+            await seed();
+            const depois = await prisma.user.findUniqueOrThrow({ where: { email: "admin@exemplo.com" } });
 
-          expect(depois.senhaHash).toBe(antes.senhaHash);
+            expect(depois.senhaHash).toBe(antes.senhaHash);
+          } finally {
+            if (SEED_PASSWORD_ORIGINAL_DO_AMBIENTE === undefined) {
+              delete process.env.SEED_PASSWORD;
+            } else {
+              process.env.SEED_PASSWORD = SEED_PASSWORD_ORIGINAL_DO_AMBIENTE;
+            }
+          }
         },
         // duas chamadas a seed() (cada uma faz bcrypt.hash + ~20 round-trips
         // contra o Postgres real) não cabem no timeout padrão de 5000ms.
@@ -181,21 +227,42 @@ describe("prisma/seed.ts", () => {
       it(
         "com SEED_PASSWORD definida, reexecutar o seed troca o hash e invalida a senha antiga para admin e vendedor",
         async () => {
-          await seed();
-          const adminAntes = await prisma.user.findUniqueOrThrow({ where: { email: "admin@exemplo.com" } });
-          expect(await bcrypt.compare(SENHA_ORIGINAL, adminAntes.senhaHash)).toBe(true);
+          // Precisa definir a baseline explicitamente, não só apagar
+          // SEED_PASSWORD: como update: {} nunca regrava senhaHash numa
+          // reexecução sem a variável (é exatamente o achado do revisor que
+          // este describe prova), um teste anterior deste arquivo pode ter
+          // deixado admin@exemplo.com com outro hash gravado — deletar a
+          // variável aqui herdaria esse hash, não a senha original.
+          const SEED_PASSWORD_ORIGINAL_DO_AMBIENTE = process.env.SEED_PASSWORD;
+          process.env.SEED_PASSWORD = SENHA_ORIGINAL;
+          try {
+            await seed();
+            const adminAntes = await prisma.user.findUniqueOrThrow({ where: { email: "admin@exemplo.com" } });
+            expect(await bcrypt.compare(SENHA_ORIGINAL, adminAntes.senhaHash)).toBe(true);
 
-          process.env.SEED_PASSWORD = SENHA_NOVA;
-          await seed();
-          delete process.env.SEED_PASSWORD;
+            process.env.SEED_PASSWORD = SENHA_NOVA;
+            await seed();
 
-          const admin = await prisma.user.findUniqueOrThrow({ where: { email: "admin@exemplo.com" } });
-          const vendedor = await prisma.user.findUniqueOrThrow({ where: { email: "vendedor@exemplo.com" } });
+            const admin = await prisma.user.findUniqueOrThrow({ where: { email: "admin@exemplo.com" } });
+            const vendedor = await prisma.user.findUniqueOrThrow({ where: { email: "vendedor@exemplo.com" } });
 
-          expect(await bcrypt.compare(SENHA_ORIGINAL, admin.senhaHash)).toBe(false);
-          expect(await bcrypt.compare(SENHA_NOVA, admin.senhaHash)).toBe(true);
-          expect(await bcrypt.compare(SENHA_ORIGINAL, vendedor.senhaHash)).toBe(false);
-          expect(await bcrypt.compare(SENHA_NOVA, vendedor.senhaHash)).toBe(true);
+            expect(await bcrypt.compare(SENHA_ORIGINAL, admin.senhaHash)).toBe(false);
+            expect(await bcrypt.compare(SENHA_NOVA, admin.senhaHash)).toBe(true);
+            expect(await bcrypt.compare(SENHA_ORIGINAL, vendedor.senhaHash)).toBe(false);
+            expect(await bcrypt.compare(SENHA_NOVA, vendedor.senhaHash)).toBe(true);
+          } finally {
+            // Restaura o valor original do ambiente — não "senha123": o
+            // objetivo é devolver a variável ao estado em que a máquina a
+            // tinha (definida ou ausente), não gravar um literal público no
+            // banco. Deliberadamente NÃO chamamos seed() de novo aqui: isso
+            // é exatamente o reset que foi removido acima, e o controlador
+            // que roda depois desta suíte já rotaciona a senha do admin.
+            if (SEED_PASSWORD_ORIGINAL_DO_AMBIENTE === undefined) {
+              delete process.env.SEED_PASSWORD;
+            } else {
+              process.env.SEED_PASSWORD = SEED_PASSWORD_ORIGINAL_DO_AMBIENTE;
+            }
+          }
         },
         // três chamadas a seed() nesta única prova (baseline + rotação) —
         // mesmo motivo do timeout acima.
