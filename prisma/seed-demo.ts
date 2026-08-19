@@ -27,13 +27,12 @@
 // funções produzem, para que os dados de demo sejam indistinguíveis de dados
 // criados por um usuário real através da UI.
 //
-// NB (achado, fora do escopo desta task): este mesmo problema já afeta
-// `prisma/seed.ts` hoje — `npx prisma db seed` falha na importação de
-// `@/lib/prisma` pelo motivo acima (reproduzido durante este trabalho). Os
-// testes de `seed.ts` nunca pegam isso porque rodam sob Vitest, que mocka
-// "server-only" globalmente por arquivo. Não mexo em `seed.ts` nem em
-// `prisma.config.ts` aqui — está fora do pedido desta task ("não mude o que
-// `npx prisma db seed` faz") — mas registro o achado no relatório.
+// `prisma/seed.ts` tinha o mesmo problema (`npx prisma db seed` falhava na
+// importação de `@/lib/prisma` pelo motivo acima) — já corrigido, sem tocar
+// neste arquivo: `prisma.config.ts` roda o seed com
+// `tsx --conditions=react-server`, que faz `"server-only"` resolver para o
+// no-op da condição "react-server" em vez de lançar. Ver o comentário em
+// `prisma.config.ts` para o detalhe completo.
 import "dotenv/config";
 
 import { PrismaClient, Prisma } from "@prisma/client";

@@ -26,6 +26,7 @@ npm run dev
 | `npm run dev` | Servidor de desenvolvimento |
 | `npm run build` | Build de produção |
 | `npm run typecheck` | `tsc --noEmit` |
+| `npm run lint` | ESLint |
 | `npm test` | Suíte unitária (Vitest) |
 | `npm run test:e2e` | Suíte end-to-end (Playwright) — exige `E2E_SENHA` |
 | `npx prisma db seed` | Seed real (usuários, funil, config do bot) |

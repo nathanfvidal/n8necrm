@@ -1,3 +1,10 @@
+// Sem `import "server-only"` aqui, de propósito -- a marcação fica em
+// `./index.ts` (mesmo padrão de `gateway/evolution.ts`/`gateway/index.ts`).
+// `tests/unit/whatsapp-fila-vercel.test.ts` importa `FilaVercel` direto deste
+// arquivo para testar o adaptador isolado da função de conveniência
+// `publicarTurno`; se o `server-only` estivesse aqui, esse import quebraria
+// sob Vitest sem o mock que `./index.ts` não precisa (`./tipos.ts` explica a
+// mesma divisão pro contrato).
 import { send } from "@vercel/queue";
 import { z } from "zod";
 
