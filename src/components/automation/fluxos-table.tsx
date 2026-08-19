@@ -46,7 +46,11 @@ export function FluxosTable({
   function alternar(fluxo: FluxoComUltimaExecucao) {
     iniciar(async () => {
       const acao = fluxo.ativo ? desativarFluxoAction : ativarFluxoAction;
-      const r = await acao(fluxo.id, fluxo.nome);
+      // Só o `id` viaja: `nome` deixou de ser parâmetro da action (achado I1
+      // da revisão final) — ela lê o nome real do n8n antes de agir, então
+      // um `nome` vindo daqui nunca seria usado mesmo. O texto do toast
+      // abaixo usa `fluxo.nome` local, que é só UI otimista, não auditoria.
+      const r = await acao(fluxo.id);
       if (r.ok) toast.success(fluxo.ativo ? `"${fluxo.nome}" desativado.` : `"${fluxo.nome}" ativado.`);
       else toast.error(r.erro);
     });

@@ -76,15 +76,36 @@ function mensagemDeErro(erro: unknown): string {
 /**
  * Guarda comum das operações destrutivas.
  *
- * A ordem importa e é deliberada: **permissão, depois n8n, depois auditoria.**
- * Auditar antes de o n8n confirmar produziria linha de auditoria para operação
- * que não aconteceu — pior que não auditar, porque parece verdade.
+ * A ordem importa e é deliberada: **permissão, ESTADO REAL, n8n, depois
+ * auditoria.** Auditar antes de o n8n confirmar produziria linha de
+ * auditoria para operação que não aconteceu — pior que não auditar, porque
+ * parece verdade.
+ *
+ * `executar` não só dispara a chamada ao n8n: é ele quem lê o estado real do
+ * workflow (`clienteN8n.buscarWorkflow`) e devolve o `antes`/`depois` já
+ * prontos para o `AuditLog`. Até a revisão final do Ciclo 4, `antes`/`depois`
+ * vinham do PARÂMETRO que quem chamou a Server Action passou — dois
+ * problemas concretos, achado I1 da revisão: (1) ativar um fluxo que JÁ
+ * estava ativo gravava `antes: { ativo: false }` mesmo sem a transição ter
+ * acontecido; (2) Server Action é endpoint HTTP público — quem chama escolhe
+ * o `nome`, e essa é a ÚNICA linha do sistema que registra que aquele
+ * workflow existiu. Ler antes de agir resolve os dois, no mesmo padrão que
+ * todo irmão deste módulo já segue: `core/pipeline/service.ts:110` (`antes:
+ * { nome: atual.nome, cor: atual.cor }`), `core/users/service.ts:306`
+ * (`antes: { ativo: antes.ativo }`), `core/leads/notes.ts:150` (`antes: {
+ * texto: nota.texto }`).
+ *
+ * Se a leitura falhar, a ação inteira é abortada — o erro sobe até o `catch`
+ * abaixo e vira mensagem legível, e NENHUMA chamada destrutiva chega a
+ * disparar. Decisão deliberada: para uma operação que liga, desliga ou
+ * apaga o atendimento de um cliente, falhar sem agir é mais seguro do que
+ * agir sobre um `nome`/estado que só o parâmetro (potencialmente forjado)
+ * garante.
  */
 async function operar(
   acao: string,
   entidadeId: string,
-  executar: () => Promise<void>,
-  registro: { antes?: unknown; depois?: unknown }
+  executar: () => Promise<{ antes?: unknown; depois?: unknown }>
 ): Promise<ResultadoAcao> {
   try {
     const usuario = await usuarioAtual();
@@ -92,7 +113,7 @@ async function operar(
       return { ok: false, erro: "Você não tem permissão para gerenciar fluxos." };
     }
 
-    await executar();
+    const registro = await executar();
 
     await registrarAuditoria({
       userId: usuario.id,
@@ -110,30 +131,46 @@ async function operar(
   }
 }
 
-export async function ativarFluxoAction(id: string, nome: string): Promise<ResultadoAcao> {
-  return operar("ativar_fluxo", id, () => clienteN8n.ativarWorkflow(id), {
-    antes: { nome, ativo: false },
-    depois: { nome, ativo: true },
+export async function ativarFluxoAction(id: string): Promise<ResultadoAcao> {
+  return operar("ativar_fluxo", id, async () => {
+    const atual = await clienteN8n.buscarWorkflow(id);
+    await clienteN8n.ativarWorkflow(id);
+    return { antes: { nome: atual.nome, ativo: atual.ativo }, depois: { nome: atual.nome, ativo: true } };
   });
 }
 
-export async function desativarFluxoAction(id: string, nome: string): Promise<ResultadoAcao> {
-  return operar("desativar_fluxo", id, () => clienteN8n.desativarWorkflow(id), {
-    antes: { nome, ativo: true },
-    depois: { nome, ativo: false },
+export async function desativarFluxoAction(id: string): Promise<ResultadoAcao> {
+  return operar("desativar_fluxo", id, async () => {
+    const atual = await clienteN8n.buscarWorkflow(id);
+    await clienteN8n.desativarWorkflow(id);
+    return { antes: { nome: atual.nome, ativo: atual.ativo }, depois: { nome: atual.nome, ativo: false } };
   });
 }
 
 /**
  * `antes: { nome }` sem `depois` — o workflow deixou de existir.
  *
- * O nome vem por parâmetro e não de uma leitura no n8n porque, depois do
- * DELETE, não há de onde reconstituí-lo: o id sozinho não conta a história de
- * "quem apagou o fluxo de qual cliente". Mesmo raciocínio de `excluirEtapa`
+ * A leitura acontece ANTES do DELETE, e não depois, porque depois não há de
+ * onde reconstituir nada: o id sozinho não conta a história de "quem apagou
+ * o fluxo de qual cliente" — `nome` lido aqui é a ÚNICA linha do sistema que
+ * registra que aquele workflow existiu. Mesmo raciocínio de `excluirEtapa`
  * em `core/pipeline/service.ts`.
+ *
+ * Se a leitura falhar (instância fora do ar, chave recusada, workflow já
+ * sumiu), a ação é abortada — mesma decisão de `ativarFluxoAction`/
+ * `desativarFluxoAction` (ver comentário de `operar()` acima). Não segue com
+ * um `nome` vindo de parâmetro só porque "é melhor que nada": para uma
+ * operação IRREVERSÍVEL, gravar `antes: { nome }` sem confirmar que aquele
+ * nome é real é pior do que simplesmente falhar e deixar quem chamou tentar
+ * de novo — e se a leitura falhou por a instância estar fora do ar, o DELETE
+ * seguinte falharia de qualquer forma pelo mesmo motivo.
  */
-export async function apagarFluxoAction(id: string, nome: string): Promise<ResultadoAcao> {
-  return operar("apagar_fluxo", id, () => clienteN8n.apagarWorkflow(id), { antes: { nome } });
+export async function apagarFluxoAction(id: string): Promise<ResultadoAcao> {
+  return operar("apagar_fluxo", id, async () => {
+    const atual = await clienteN8n.buscarWorkflow(id);
+    await clienteN8n.apagarWorkflow(id);
+    return { antes: { nome: atual.nome } };
+  });
 }
 
 /**

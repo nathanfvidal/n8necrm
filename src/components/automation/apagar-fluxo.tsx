@@ -26,7 +26,10 @@ export function ApagarFluxo({ id, nome }: { id: string; nome: string }) {
       rotuloConfirmando="Apagando…"
       onConfirmar={() =>
         iniciar(async () => {
-          const r = await apagarFluxoAction(id, nome);
+          // Só o `id` viaja: `apagarFluxoAction` deixou de aceitar `nome`
+          // (achado I1 da revisão final) — ela lê o nome real do n8n antes
+          // do DELETE. `nome` aqui embaixo é só para o toast/redirect da UI.
+          const r = await apagarFluxoAction(id);
           if (r.ok) {
             toast.success(`"${nome}" foi apagado.`);
             // Volta para a lista: a página de detalhe passou a apontar para

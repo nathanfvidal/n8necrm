@@ -10,6 +10,7 @@ const registrarAuditoriaMock = vi.fn();
 vi.mock("@/core/audit/log", () => ({ registrarAuditoria: (...a: unknown[]) => registrarAuditoriaMock(...a) }));
 
 const clienteMock = {
+  buscarWorkflow: vi.fn(),
   ativarWorkflow: vi.fn(),
   desativarWorkflow: vi.fn(),
   apagarWorkflow: vi.fn(),
@@ -36,12 +37,25 @@ describe("actions do modulo automation", () => {
     usuarioAtualMock.mockResolvedValue(ADMIN);
   });
 
-  it("desativar chama o n8n e grava auditoria com o NOME, nao so o id", async () => {
+  it("desativar LE o estado real do n8n e grava auditoria com o nome e o ativo VERDADEIROS, nao os do parametro", async () => {
+    // Achado I1 da revisao final: antes/depois vinham de parametro que quem
+    // chama a Server Action escolhe. Aqui o mock devolve um nome DIFERENTE
+    // do que qualquer chamador poderia ter digitado, provando que quem
+    // decide o que vai pro AuditLog e a LEITURA, nao o parametro.
+    clienteMock.buscarWorkflow.mockResolvedValueOnce({
+      id: "wf-1",
+      nome: "Noiva Inteligente",
+      ativo: true,
+      nos: 65,
+      tags: [],
+      atualizadoEm: "",
+    });
     clienteMock.desativarWorkflow.mockResolvedValueOnce(undefined);
 
-    const r = await acoes.desativarFluxoAction("wf-1", "Noiva Inteligente");
+    const r = await acoes.desativarFluxoAction("wf-1");
 
     expect(r).toEqual({ ok: true });
+    expect(clienteMock.buscarWorkflow).toHaveBeenCalledWith("wf-1");
     expect(clienteMock.desativarWorkflow).toHaveBeenCalledWith("wf-1");
     expect(registrarAuditoriaMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -55,39 +69,104 @@ describe("actions do modulo automation", () => {
     );
   });
 
-  it("GESTOR e recusado e NADA e chamado no n8n", async () => {
+  it("ativar um fluxo que JA estava ativo grava o antes.ativo REAL (true), nao um antes forjado", async () => {
+    // Este e o problema concreto #1 do achado I1: o codigo antigo gravava
+    // sempre `antes: { ativo: false }` para ativar, mesmo quando o fluxo ja
+    // estava ativo — uma transicao que nao aconteceu.
+    clienteMock.buscarWorkflow.mockResolvedValueOnce({
+      id: "wf-1",
+      nome: "X",
+      ativo: true,
+      nos: 1,
+      tags: [],
+      atualizadoEm: "",
+    });
+    clienteMock.ativarWorkflow.mockResolvedValueOnce(undefined);
+
+    await acoes.ativarFluxoAction("wf-1");
+
+    expect(registrarAuditoriaMock).toHaveBeenCalledWith(
+      expect.objectContaining({ antes: { nome: "X", ativo: true }, depois: { nome: "X", ativo: true } })
+    );
+  });
+
+  it("GESTOR e recusado, NADA e chamado no n8n e o estado real nem chega a ser lido", async () => {
     usuarioAtualMock.mockResolvedValue(GESTOR);
 
-    const r = await acoes.desativarFluxoAction("wf-1", "Noiva Inteligente");
+    const r = await acoes.desativarFluxoAction("wf-1");
 
     expect(r.ok).toBe(false);
+    expect(clienteMock.buscarWorkflow).not.toHaveBeenCalled();
     expect(clienteMock.desativarWorkflow).not.toHaveBeenCalled();
     expect(registrarAuditoriaMock).not.toHaveBeenCalled();
   });
 
-  it("apagar grava auditoria ANTES de nao poder mais ler o workflow", async () => {
+  it("apagar LE o nome real do n8n ANTES do DELETE, nao usa nome de parametro (a action nem aceita mais)", async () => {
+    clienteMock.buscarWorkflow.mockResolvedValueOnce({
+      id: "wf-9",
+      nome: "Barbearia BOX64",
+      ativo: true,
+      nos: 3,
+      tags: [],
+      atualizadoEm: "",
+    });
     clienteMock.apagarWorkflow.mockResolvedValueOnce(undefined);
 
-    await acoes.apagarFluxoAction("wf-9", "Barbearia BOX64");
+    await acoes.apagarFluxoAction("wf-9");
+
+    // A ordem importa: ler antes de apagar, nunca depois — depois do DELETE
+    // nao ha de onde reconstituir o nome.
+    const ordemLeitura = clienteMock.buscarWorkflow.mock.invocationCallOrder[0];
+    const ordemDelete = clienteMock.apagarWorkflow.mock.invocationCallOrder[0];
+    expect(ordemLeitura).toBeLessThan(ordemDelete);
 
     expect(registrarAuditoriaMock).toHaveBeenCalledWith(
       expect.objectContaining({ acao: "apagar_fluxo", entidadeId: "wf-9", antes: { nome: "Barbearia BOX64" } })
     );
   });
 
-  it("se o n8n recusa, NAO grava auditoria de sucesso", async () => {
+  it("se a LEITURA do estado real falha, aborta — o n8n nunca chega a ser chamado para agir", async () => {
+    // Decisao registrada no comentario de `apagarFluxoAction`: para uma
+    // operacao irreversivel, falhar sem agir e mais seguro que seguir com um
+    // nome de parametro nao confirmado.
+    clienteMock.buscarWorkflow.mockRejectedValueOnce(new ErroN8nFake("fora do ar", "inalcancavel"));
+
+    const r = await acoes.apagarFluxoAction("wf-9");
+
+    expect(r.ok).toBe(false);
+    expect(clienteMock.apagarWorkflow).not.toHaveBeenCalled();
+    expect(registrarAuditoriaMock).not.toHaveBeenCalled();
+  });
+
+  it("se o n8n recusa a ESCRITA (depois de ler o estado com sucesso), NAO grava auditoria de sucesso", async () => {
+    clienteMock.buscarWorkflow.mockResolvedValueOnce({
+      id: "wf-1",
+      nome: "X",
+      ativo: true,
+      nos: 1,
+      tags: [],
+      atualizadoEm: "",
+    });
     clienteMock.desativarWorkflow.mockRejectedValueOnce(new ErroN8nFake("recusou", "recusado"));
 
-    const r = await acoes.desativarFluxoAction("wf-1", "X");
+    const r = await acoes.desativarFluxoAction("wf-1");
 
     expect(r.ok).toBe(false);
     expect(registrarAuditoriaMock).not.toHaveBeenCalled();
   });
 
   it("instancia fora do ar vira mensagem legivel, nao erro cru", async () => {
+    clienteMock.buscarWorkflow.mockResolvedValueOnce({
+      id: "wf-1",
+      nome: "X",
+      ativo: false,
+      nos: 1,
+      tags: [],
+      atualizadoEm: "",
+    });
     clienteMock.ativarWorkflow.mockRejectedValueOnce(new ErroN8nFake("timeout", "inalcancavel"));
 
-    const r = await acoes.ativarFluxoAction("wf-1", "X");
+    const r = await acoes.ativarFluxoAction("wf-1");
 
     expect(r).toEqual({ ok: false, erro: expect.stringContaining("n8n") });
   });
@@ -124,7 +203,7 @@ describe("actions do modulo automation", () => {
   it("sessao invalida vira mensagem de sessao, nao erro cru", async () => {
     usuarioAtualMock.mockRejectedValue(new Error("Não autenticado"));
 
-    const r = await acoes.desativarFluxoAction("wf-1", "X");
+    const r = await acoes.desativarFluxoAction("wf-1");
 
     expect(r.ok).toBe(false);
     expect(r).toEqual({ ok: false, erro: MENSAGEM_SESSAO_INVALIDA });
