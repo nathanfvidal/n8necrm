@@ -20,14 +20,41 @@ import { clienteN8n, ErroN8n } from "@/modules/automation/n8n";
 
 const ENTIDADE = "N8nWorkflow";
 
-/** Traduz o erro para algo que dá para mostrar, sem vazar chave nem rastro. */
+/**
+ * Traduz o erro para algo que dá para mostrar, sem vazar chave nem detalhe
+ * interno pro CLIENTE — mas loga tudo no SERVIDOR, mesmo padrão dos irmãos
+ * (`whatsapp/actions.ts:79,82`, `leads/actions.ts:309,312`,
+ * `pipeline/actions.ts:39,42`, `contacts/actions.ts:70,73`,
+ * `tasks/actions.ts:174,177`, `users/actions.ts:40,43`).
+ *
+ * Até a revisão da Task 3 do Ciclo 4 esta função era a única exceção: só o
+ * ramo de erro inesperado logava. Consequência concreta — um ADMIN tentando
+ * desativar um fluxo travado durante um incidente esbarrava em "instância
+ * fora do ar" e não sobrava rastro nenhum no servidor pra quem investigasse
+ * depois.
+ *
+ * `erro.message` de `ErroN8n` pode conter URL, status HTTP e até 300
+ * caracteres do corpo cru da resposta (`n8n/cliente.ts`) — aceitável em log
+ * de servidor, é o que torna o log útil. A chave de API nunca aparece: ela
+ * só vai em header de requisição (`X-N8N-API-KEY`), nunca é ecoada pelo n8n
+ * na resposta nem composta em nenhuma mensagem de erro deste módulo.
+ */
 function mensagemDeErro(erro: unknown): string {
-  if (ehSessaoInvalida(erro)) return MENSAGEM_SESSAO_INVALIDA;
+  if (ehSessaoInvalida(erro)) {
+    console.error("Ação de automação negada — sessão expirada ou usuário desativado.", erro);
+    return MENSAGEM_SESSAO_INVALIDA;
+  }
   if (erro instanceof ErroN8n) {
+    console.error("Falha na integração com o n8n:", erro);
     switch (erro.tipo) {
       case "inalcancavel":
         return "Não foi possível falar com o n8n. A instância pode estar fora do ar.";
       case "nao_autorizado":
+        // Cita o NOME da variável (`N8N_API_KEY`), nunca o valor — deliberado,
+        // não achado de revisão a corrigir. Só ADMIN alcança esta mensagem
+        // (`gerenciar_fluxos`), e é exatamente o que torna o erro acionável
+        // em vez de decorativo: sem o nome, quem investiga precisa adivinhar
+        // qual variável de ambiente checar.
         return "O n8n recusou a chave de API do CRM. Verifique N8N_API_KEY.";
       case "nao_encontrado":
         return "Esse fluxo não existe mais no n8n. Recarregue a lista.";
