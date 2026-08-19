@@ -30,10 +30,10 @@ export const client = clientConfigSchema.parse({
     // texto. Não inventar caminho para asset que não existe — o regex de
     // `caminhoDeAsset` aceitaria, e a imagem quebraria só em runtime.
   },
-  // O enum de `modulos` em client.schema.ts JÁ inclui "automation", que é onde
-  // o módulo de fluxos do n8n entra no Ciclo 4 — não há enum a estender lá.
-  // Aqui fica só "whatsapp", o único com código funcionando hoje.
-  modulos: ["whatsapp"],
+  // O enum de `modulos` em client.schema.ts JÁ incluía "automation" desde
+  // antes do Ciclo 4 começar — não houve enum a estender lá. A Task 4 do
+  // Ciclo 4 é quem liga o módulo de fato, com a tela `/fluxos` no ar.
+  modulos: ["whatsapp", "automation"],
   // Entidade genérica, mas NÃO vazia. `campos: []` passaria no schema, mas
   // `entidade.campos` não tem nenhum consumidor real hoje — nem tela, nem
   // export, nem filtro: `prisma/schema.prisma:75-78` documenta que o

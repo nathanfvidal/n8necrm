@@ -45,6 +45,15 @@ export function PainelNav({
     ...(papelUsuario && hasPermission(papelUsuario, "gerenciar_funil")
       ? [{ href: "/etapas", label: "Etapas", icone: "etapas" as const }]
       : []),
+    // Módulo E permissão — as duas, não uma ou outra. `moduloAtivo` sozinho
+    // mostraria o link para VENDEDOR (a página faz `notFound()`, mas exibir
+    // um link que sempre dá 404 é ruído); `hasPermission` sozinho mostraria
+    // o link num fork sem o módulo `automation` ligado. `ver_fluxos`
+    // (ADMIN e GESTOR), não `gerenciar_fluxos` — esconder o link nunca é o
+    // gate de verdade (a página e as actions são), só evita ruído no menu.
+    ...(moduloAtivo("automation") && papelUsuario && hasPermission(papelUsuario, "ver_fluxos")
+      ? [{ href: "/fluxos", label: "Fluxos", icone: "fluxos" as const }]
+      : []),
   ];
 
   const grupos = [GRUPO_TRABALHO, grupoExtra];
