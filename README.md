@@ -29,7 +29,6 @@ npm run dev
 | `npm test` | Suíte unitária (Vitest) |
 | `npm run test:e2e` | Suíte end-to-end (Playwright) — exige `E2E_SENHA` |
 | `npx prisma db seed` | Seed real (usuários, funil, config do bot) |
-| `npm run seed:demo` | Dados de demonstração — **não** rodar em banco de cliente |
 
 ## Arquitetura
 
