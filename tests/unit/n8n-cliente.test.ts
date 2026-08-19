@@ -114,6 +114,57 @@ describe("ClienteN8nHttp", () => {
 
     const erro = await cliente().listarWorkflows().catch((e) => e);
 
+    // Dos quatro valores de `tipo` ("inalcancavel", "nao_autorizado",
+    // "nao_encontrado", "recusado"), só "recusado" — o branch do `else` genérico
+    // em `chamar()` — não tinha asserção de VALOR em lugar nenhum da suíte antes
+    // desta correção; achado na revisão da Task 1 do Ciclo 4.
+    expect(erro).toBeInstanceOf(ErroN8n);
+    expect(erro.tipo).toBe("recusado");
     expect(String(erro.message)).not.toContain("chave-de-teste");
+  });
+
+  it("corpo de erro ilegível não trava o cliente — `.text().catch(() => \"\")` absorve a rejeição", async () => {
+    // `cliente.ts` linha 132: `const corpo = await resposta.text().catch(() => "");`.
+    // Ninguém exercitava esse `catch` — todo mock de resposta em uso até aqui
+    // tinha `text()` resolvendo sempre. Aqui `text()` REJEITA de propósito,
+    // simulando um stream de corpo já consumido ou corrompido, e o teste prova
+    // que o cliente ainda assim degrada para um ErroN8n normal, sem promise
+    // rejeitada não tratada.
+    fetchMock.mockResolvedValueOnce({
+      ok: false,
+      status: 500,
+      json: async () => {
+        throw new Error("não deveria ser chamado neste branch");
+      },
+      text: async () => {
+        throw new Error("stream do corpo já consumido");
+      },
+    });
+
+    const erro = await cliente().listarWorkflows().catch((e) => e);
+
+    expect(erro).toBeInstanceOf(ErroN8n);
+    expect(erro.tipo).toBe("recusado");
+    expect(String(erro.message)).toContain("HTTP 500");
+  });
+
+  it("resposta OK com JSON malformado degrada para lista vazia — `.json().catch(() => null)` absorve a rejeição", async () => {
+    // `cliente.ts` linha 136: `return resposta.json().catch(() => null);`.
+    // Mesma lacuna do teste acima, no branch de sucesso: `json()` REJEITA
+    // (corpo não é JSON válido), e `listarWorkflows` precisa continuar
+    // funcionando — `json?.data ?? []` sobre um `chamar()` que devolveu `null`
+    // vira lista vazia, não erro não tratado.
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => {
+        throw new SyntaxError("Unexpected token in JSON");
+      },
+      text: async () => "<html>não é json</html>",
+    });
+
+    const workflows = await cliente().listarWorkflows();
+
+    expect(workflows).toEqual([]);
   });
 });
