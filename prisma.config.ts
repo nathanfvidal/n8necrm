@@ -11,9 +11,12 @@ export default defineConfig({
     // package.json tiver esse campo). Ver node_modules/@prisma/config/dist/index.d.ts
     // (MigrationsConfigShape.seed).
     //
-    // `--conditions=react-server`: sem isto, `npx prisma db seed` (logo,
-    // também `npm run dev`/deploy, e o README, que documentam esse comando)
-    // QUEBRA sempre, incondicionalmente. `prisma/seed.ts` importa
+    // `--conditions=react-server`: sem isto, `npx prisma db seed` (e o
+    // README, que documenta esse comando) QUEBRA sempre, incondicionalmente.
+    // `npm run dev` (`next dev`) e o deploy (`prisma migrate deploy`) não
+    // rodam seed em momento nenhum, então esta flag não afeta nenhum dos
+    // dois -- só quem invoca `npx prisma db seed` diretamente passa por
+    // aqui. `prisma/seed.ts` importa
     // `src/lib/prisma.ts`, que começa com `import "server-only"` — esse
     // pacote lança na hora da resolução do módulo (não em runtime) sempre que
     // é carregado fora da condição de exportação "react-server" que o
