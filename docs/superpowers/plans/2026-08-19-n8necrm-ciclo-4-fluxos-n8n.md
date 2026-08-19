@@ -1235,7 +1235,6 @@ export function FluxosTable({
                       ? "O fluxo para de responder imediatamente. Se ele atende clientes por WhatsApp, as mensagens deixam de ser respondidas e ninguém é avisado."
                       : "O fluxo volta a responder imediatamente."
                   }
-                  exigirDigitar={fluxo.ativo ? fluxo.nome : undefined}
                   rotuloConfirmar={fluxo.ativo ? "Desativar" : "Ativar"}
                   rotuloConfirmando="Aplicando…"
                   onConfirmar={() => alternar(fluxo)}
@@ -1250,7 +1249,13 @@ export function FluxosTable({
 }
 ```
 
-**Nota para o implementador:** `exigirDigitar` **ainda não existe** em `ConfirmarDialogo`. Ele é adicionado na Task 5, Step 1. Se você estiver executando as tarefas em ordem, esta prop causará erro de tipo até lá — nesse caso, faça a Task 5 Step 1 antes deste passo e diga isso no relatório. **Não** invente um segundo componente de confirmação.
+**Sobre a confirmação:** esta tarefa usa `ConfirmarDialogo` como ele existe hoje —
+diálogo simples de sim/não. A **confirmação por digitação** do nome, que a
+decisão 3 do spec exige para as operações destrutivas, chega na Task 5, que
+estende o componente e volta aqui para acrescentar a prop. Foi separado assim de
+propósito: esta tarefa não pode depender de código que ainda não existe, e a
+Task 5 é quem prova a extensão com teste próprio. **Não** invente um segundo
+componente de confirmação nem antecipe a prop.
 
 - [ ] **Step 6: Criar `src/app/(painel)/fluxos/page.tsx`**
 
@@ -1747,11 +1752,72 @@ export default async function FluxoDetalhePage({
 
 **Notas para o implementador:**
 
-- `EditorN8n` é criado na **Task 6, Step 3**. Se estiver executando em ordem, faça aquele passo antes deste, ou deixe o import quebrado e conserte lá — e diga qual escolheu no relatório.
+- `EditorN8n` é criado no **Step 8 desta mesma tarefa**, logo abaixo. A Task 6 só liga o `frame-src` do CSP que faz o iframe de fato carregar — até lá, o navegador bloqueia o quadro e o console mostra violação de CSP. Isso é esperado e não é defeito seu.
 - Confira a assinatura real de `EmptyState` e as `variant` que o `Button` da base aceita (`ghost` pode não existir) antes de rodar. Ajuste a chamada ao componente; **não** mude os componentes compartilhados por causa desta tela.
 - A paginação por cursor **não** entra nesta tarefa: a primeira página de 20 execuções resolve o diagnóstico, e `proximoCursor` já existe no tipo para quando for preciso. Registre como dívida no relatório, não construa por antecipação.
 
-- [ ] **Step 8: Rodar a suíte inteira e commitar**
+- [ ] **Step 8: Criar `src/components/automation/editor-n8n.tsx`**
+
+```tsx
+/**
+ * O editor do n8n embutido.
+ *
+ * Não há SSO: o n8n autentica por cookie próprio, e o fluxo de login por
+ * iframe (`N8N_EMBED_LOGIN_ENABLED` + token exchange) exige licença
+ * Enterprise. Na primeira visita a pessoa vê a tela de login DO N8N aqui
+ * dentro, entra uma vez, e o cookie passa a valer.
+ *
+ * Isso só funciona porque duas coisas foram configuradas na VPS em
+ * 2026-08-19 e estão registradas no spec: o nginx troca `X-Frame-Options`
+ * por `frame-ancestors` listando a origem do CRM, e o n8n roda com
+ * `N8N_SAMESITE_COOKIE=none` — sem essa segunda, o navegador não envia o
+ * cookie de sessão em contexto de terceiro e a tela fica presa no login para
+ * sempre.
+ *
+ * Falta ainda o `frame-src` no CSP do CRM, que é a Task 6. Até lá o quadro
+ * fica em branco e o console do navegador mostra a violação.
+ */
+export function EditorN8n({ url, nome }: { url: string; nome: string }) {
+  return (
+    <div className="space-y-2">
+      <p className="text-sm text-muted-foreground">
+        Na primeira vez, entre com sua conta do n8n aqui dentro. O login vale para as próximas.
+      </p>
+      <iframe
+        src={url}
+        title={`Editor do n8n — ${nome}`}
+        className="h-[70vh] w-full rounded-md border"
+        // `sandbox` NÃO é usado aqui de propósito: o editor do n8n precisa de
+        // scripts, formulários, popups de OAuth e do próprio cookie de sessão.
+        // Um sandbox que permitisse tudo isso não estaria restringindo nada, e
+        // um mais estreito quebraria o editor de um jeito difícil de
+        // diagnosticar. A contenção real é o `frame-src` de origem única.
+      />
+    </div>
+  );
+}
+```
+
+- [ ] **Step 9: Aplicar a confirmação por digitação na tela de lista**
+
+A Task 4 deixou `FluxosTable` com o diálogo simples, porque `exigirDigitar` ainda
+não existia. Agora existe. Volte lá e acrescente, no `ConfirmarDialogo` da
+tabela:
+
+```tsx
+                  exigirDigitar={fluxo.ativo ? fluxo.nome : undefined}
+```
+
+`undefined` quando o fluxo está desligado, e não sempre: **ativar** é reparo, e
+exigir digitação para religar algo que já está parado só treina a pessoa a
+digitar nome sem ler. A fricção precisa ficar onde o custo do erro está —
+desativar derruba o atendimento de um cliente; ativar devolve.
+
+Confira que `tests/unit/fluxos-table.test.tsx` continua passando; se algum caso
+clicava direto no botão de confirmar do fluxo ativo, ele agora precisa digitar o
+nome antes.
+
+- [ ] **Step 10: Rodar a suíte inteira e commitar**
 
 ```bash
 cd "d:/Projetos Programação/N8n + Crm"
@@ -1773,18 +1839,22 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 ---
 
-### Task 6: Iframe do editor, CSP e verificação final
+### Task 6: `frame-src` no CSP, documentação e verificação final
 
 **Files:**
 - Modify: `src/proxy.ts` (acrescentar `frame-src`)
-- Modify: `src/app/(painel)/fluxos/[id]/page.tsx` (aba "Editar")
-- Create: `src/components/automation/editor-n8n.tsx`
 - Modify: `.env.example` (documentar `N8N_API_URL` e `N8N_API_KEY`)
+- Create: `docs/auditorias/2026-08-19-ciclo-4-fluxos.md`
 - Test: `tests/unit/proxy-csp-frame-src.test.ts` — **conferir primeiro** se `tests/unit/proxy-matcher.test.ts` já cobre a montagem do CSP; se cobrir, acrescente o caso lá em vez de criar arquivo novo
 
 **Interfaces:**
-- Consumes: tudo das tarefas anteriores.
+- Consumes: tudo das tarefas anteriores. `EditorN8n` e a aba "Editar" já foram criados na Task 5.
 - Produces: nada consumido por outra tarefa. É a última.
+
+**O que esta tarefa destrava:** até aqui o iframe existe na tela mas o navegador
+o bloqueia, porque o CSP do CRM não tem `frame-src`. Uma linha em `src/proxy.ts`
+é o que separa "quadro em branco com violação no console" de "editor do n8n
+funcionando".
 
 - [ ] **Step 1: Acrescentar `frame-src` ao CSP**
 
@@ -1817,50 +1887,7 @@ Se `proxy-matcher.test.ts` já monta o CSP, acrescente lá; senão crie o arquiv
 
 **Confira o nome e a assinatura reais da função** em `src/proxy.ts` antes de escrever — ela pode não ser exportada, e nesse caso exportá-la só para o teste é aceitável, com um comentário dizendo por quê.
 
-- [ ] **Step 3: Criar `src/components/automation/editor-n8n.tsx`**
-
-```tsx
-/**
- * O editor do n8n embutido.
- *
- * Não há SSO: o n8n autentica por cookie próprio, e o fluxo de login por
- * iframe (`N8N_EMBED_LOGIN_ENABLED` + token exchange) exige licença
- * Enterprise. Na primeira visita a pessoa vê a tela de login DO N8N aqui
- * dentro, entra uma vez, e o cookie passa a valer.
- *
- * Isso só funciona porque duas coisas foram configuradas na VPS em
- * 2026-08-19 e estão registradas no spec: o nginx troca `X-Frame-Options`
- * por `frame-ancestors` listando a origem do CRM, e o n8n roda com
- * `N8N_SAMESITE_COOKIE=none` — sem essa segunda, o navegador não envia o
- * cookie de sessão em contexto de terceiro e a tela fica presa no login para
- * sempre.
- */
-export function EditorN8n({ url, nome }: { url: string; nome: string }) {
-  return (
-    <div className="space-y-2">
-      <p className="text-sm text-muted-foreground">
-        Na primeira vez, entre com sua conta do n8n aqui dentro. O login vale para as próximas.
-      </p>
-      <iframe
-        src={url}
-        title={`Editor do n8n — ${nome}`}
-        className="h-[70vh] w-full rounded-md border"
-        // `sandbox` NÃO é usado aqui de propósito: o editor do n8n precisa de
-        // scripts, formulários, popups de OAuth e do próprio cookie de sessão.
-        // Um sandbox que permitisse tudo isso não estaria restringindo nada, e
-        // um mais estreito quebraria o editor de um jeito difícil de
-        // diagnosticar. A contenção real é o `frame-src` de origem única.
-      />
-    </div>
-  );
-}
-```
-
-- [ ] **Step 4: Ligar a aba "Editar" na página de detalhe**
-
-Monte a URL **no servidor**: `${process.env.N8N_API_URL}/workflow/${id}` e passe pronta. Nunca passe `N8N_API_KEY` a este componente.
-
-- [ ] **Step 5: Documentar as variáveis no `.env.example`**
+- [ ] **Step 3: Documentar as variáveis no `.env.example`**
 
 Acrescentar, no padrão de comentário do arquivo (denso, explica o modo de falha, diz onde obter):
 
@@ -1882,7 +1909,7 @@ N8N_API_URL="https://n8n.nateksoft.com"
 N8N_API_KEY="gerar-em-n8n-settings-n8n-api"
 ```
 
-- [ ] **Step 6: Verificação final — os critérios de aceite do spec**
+- [ ] **Step 4: Verificação final — os critérios de aceite do spec**
 
 Cada item fecha com o comando e a saída colados. O que este ambiente não permitir provar sai como **não verificado**, com o comando que um humano precisa rodar.
 
@@ -1906,7 +1933,7 @@ Depois, com `npm run dev` no ar e login feito com o usuário do seed, dirigindo 
 
 **Não ative, desative nem apague nenhum workflow da instância real durante a verificação.** Ela atende clientes. Para exercitar o caminho destrutivo, confirme que o diálogo habilita o botão e **cancele**.
 
-- [ ] **Step 7: Auditoria de segurança e commit final**
+- [ ] **Step 5: Auditoria de segurança e commit final**
 
 O `AGENTS.md` da base exige auditoria antes de integrar. Escreva `docs/auditorias/2026-08-19-ciclo-4-fluxos.md` cobrindo a superfície tocada: exposição da chave, permissões, CSP, e o que o iframe abre. Depois:
 
