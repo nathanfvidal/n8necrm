@@ -118,10 +118,17 @@ no spec do ciclo: o nginx da VPS troca `X-Frame-Options` por `frame-ancestors` l
 do CRM, e o n8n roda com `N8N_SAMESITE_COOKIE=none` (sem isso o navegador não enviaria o cookie
 de sessão do n8n em contexto de terceiro, e a tela ficaria presa no login para sempre).
 
-**Consequência de design, não achado:** uma vez autenticado no n8n dentro do iframe, quem tem
-`gerenciar_fluxos` (só ADMIN) e uma conta n8n válida tem o mesmo poder que teria abrindo o n8n
-direto, fora do CRM — o CRM não adiciona nem remove capacidade dentro do editor embutido, só
-decide quem chega até ele. Isso é esperado: o editor É o n8n, só reenquadrado.
+**Consequência de design, não achado — mas a permissão citada abaixo estava errada nesta mesma
+auditoria e foi corrigida na revisão final (achado I2):** a aba "Editar" (`fluxos/[id]/page.tsx`)
+não tem gate além de `ver_fluxos` — **não** `gerenciar_fluxos`. Quem alcança o editor embutido,
+uma vez autenticado no n8n dentro do iframe, é ADMIN **e GESTOR**, e tem o mesmo poder que teria
+abrindo o n8n direto, fora do CRM — o CRM não adiciona nem remove capacidade dentro do editor
+embutido, só decide quem chega até ele. Isso é esperado: o editor É o n8n, só reenquadrado.
+
+Decisão do dono, registrada em comentário no próprio código junto da aba "Editar": manter ADMIN e
+GESTOR é escolha consciente, não herança acidental — quem já tem conta no n8n alcança tudo isso
+pelo domínio dele de qualquer forma, e o CRM só poupa um clique. A barreira real é a conta
+separada do n8n, que este CRM não provisiona.
 
 ---
 

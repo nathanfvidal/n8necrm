@@ -87,6 +87,18 @@ export default async function FluxoDetalhePage({
             Execuções
           </Button>
         </Link>
+        {/* A aba "Editar" NÃO tem gate além de `ver_fluxos` — quem alcança são
+            ADMIN e GESTOR, não só ADMIN. Isso é DELIBERADO, decidido pelo
+            dono em 2026-08-19 depois de a revisão final do Ciclo 4 apontar
+            que a auditoria do próprio ciclo
+            (docs/auditorias/2026-08-19-ciclo-4-fluxos.md) descrevia isso
+            errado, como se o gate fosse `gerenciar_fluxos` (achado I2).
+            O argumento: quem já tem conta no n8n alcança tudo isso pelo
+            domínio dele de qualquer forma — o CRM só poupa um clique, não
+            concede poder novo. A barreira real é a conta separada do n8n,
+            que este CRM não provisiona. O gate NÃO é `gerenciar_fluxos` DE
+            PROPÓSITO — não "consertar" isso depois achando que foi
+            esquecimento. */}
         <Link href={`/fluxos/${id}?aba=editar`} aria-current={mostrandoEditor ? "page" : undefined}>
           <Button variant={mostrandoEditor ? "default" : "ghost"} size="sm">
             Editar
