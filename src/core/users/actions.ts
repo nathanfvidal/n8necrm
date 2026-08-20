@@ -66,7 +66,7 @@ export async function criarUsuarioAction(dados: {
 }): Promise<ResultadoAcao> {
   try {
     const autor = await exigirGestorDeUsuarios();
-    await criarUsuario(dados, autor.id);
+    await criarUsuario(dados, autor.id, autor.companyId);
   } catch (erro) {
     return paraResultadoErro(erro, "Falha ao criar o usuário. Tente novamente.");
   }
@@ -81,7 +81,7 @@ export async function atualizarUsuarioAction(dados: {
 }): Promise<ResultadoAcao> {
   try {
     const autor = await exigirGestorDeUsuarios();
-    await atualizarUsuario(dados, autor.id);
+    await atualizarUsuario(dados, autor.id, autor.companyId);
   } catch (erro) {
     return paraResultadoErro(erro, "Falha ao salvar o usuário. Tente novamente.");
   }
@@ -92,7 +92,7 @@ export async function atualizarUsuarioAction(dados: {
 export async function definirAtivoAction(dados: { id: string; ativo: boolean }): Promise<ResultadoAcao> {
   try {
     const autor = await exigirGestorDeUsuarios();
-    await definirAtivo(dados, autor.id);
+    await definirAtivo(dados, autor.id, autor.companyId);
   } catch (erro) {
     return paraResultadoErro(erro, "Falha ao mudar a situação do usuário. Tente novamente.");
   }

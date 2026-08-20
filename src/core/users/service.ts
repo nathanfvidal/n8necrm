@@ -139,28 +139,41 @@ function recusarContaDeSistema(id: string): void {
 }
 
 /**
- * Impede a única mudança irreversível desta tela: deixar o sistema sem
+ * Impede a única mudança irreversível desta tela: deixar uma empresa sem
  * nenhum administrador ativo. Não há caminho de recuperação pela interface —
  * quem restaura um ADMIN é outro ADMIN — então o estrago só se desfaz com
  * acesso direto ao banco.
  *
- * Conta apenas administradores **ativos e humanos**: contas de sistema ficam
- * de fora (`idsDeSistema()`) porque o robô do WhatsApp é ADMIN e não consegue
- * fazer login — deixá-lo entrar na conta faria o sistema autorizar a saída da
- * última pessoa de verdade.
+ * ## Por que "daquela empresa", e não do sistema inteiro
+ *
+ * Antes do vínculo (`Membership`) existir, "administrador" só podia
+ * significar "administrador do sistema inteiro" — havia uma empresa só. Com
+ * mais de uma empresa, a versão global vira um bug: rebaixar o último ADMIN
+ * da empresa A seria recusado porque a empresa B (que não tem nada a ver com
+ * essa mudança) ficaria sem ADMIN. A guarda existe para proteger CADA
+ * empresa de ficar sem ninguém que possa promover alguém — não para acoplar
+ * empresas que não deveriam se enxergar. Com uma empresa só (o estado atual
+ * do Ciclo 1a) o comportamento observável é idêntico ao de antes.
+ *
+ * Conta apenas administradores **ativos e humanos** DAQUELA empresa: contas
+ * de sistema ficam de fora (`idsDeSistema()`) porque o robô do WhatsApp é
+ * ADMIN e não consegue fazer login — deixá-lo entrar na conta faria o sistema
+ * autorizar a saída da última pessoa de verdade.
  *
  * Chamado antes de desativar um ADMIN e antes de rebaixá-lo, que são os dois
  * caminhos para o mesmo fim.
  */
-async function garantirQueSobraAdmin(idQueVaiSair: string): Promise<void> {
-  const outros = await prisma.user.count({
+async function garantirQueSobraAdmin(idQueVaiSair: string, companyId: string): Promise<void> {
+  const outros = await prisma.membership.count({
     where: {
+      companyId,
       papel: "ADMIN",
-      ativo: true,
-      // Os dois predicados de `id` no MESMO objeto — ver `sistema.ts` sobre
-      // por que espalhar um fragmento com `id` silenciosamente descarta o
-      // outro.
-      id: { not: idQueVaiSair, notIn: idsDeSistema() },
+      // Os dois predicados de `userId` no MESMO objeto — mesmo raciocínio de
+      // `sistema.ts` sobre por que espalhar um fragmento com `id`
+      // silenciosamente descarta o outro (aqui é `userId`, mas a armadilha do
+      // spread é idêntica).
+      userId: { not: idQueVaiSair, notIn: idsDeSistema() },
+      user: { ativo: true },
     },
   });
   if (outros === 0) {
@@ -181,7 +194,11 @@ function ehEmailDuplicado(erro: unknown): boolean {
   return typeof erro === "object" && erro !== null && "code" in erro && erro.code === "P2002";
 }
 
-export async function criarUsuario(dados: DadosNovoUsuario, autorId: string): Promise<UsuarioListado> {
+export async function criarUsuario(
+  dados: DadosNovoUsuario,
+  autorId: string,
+  companyId: string
+): Promise<UsuarioListado> {
   const nome = validarNome(dados.nome);
   const email = validarEmail(dados.email);
   const papel = validarPapel(dados.papel);
@@ -191,9 +208,29 @@ export async function criarUsuario(dados: DadosNovoUsuario, autorId: string): Pr
 
   let criado;
   try {
-    criado = await prisma.user.create({
-      data: { nome, email, senhaHash, papel },
-      select: { id: true, nome: true, email: true, papel: true, ativo: true, criadoEm: true },
+    // `User` e `Membership` na MESMA transação: um `User` sem vínculo é uma
+    // conta inutilizável — `usuarioAtual()` (`core/auth/session.ts`) trata
+    // zero `Membership` como sessão inválida. Criar o `User` e falhar antes
+    // do `Membership` (crash, timeout) deixaria exatamente essa órfã; a
+    // transação garante que as duas linhas nascem juntas ou nenhuma nasce.
+    //
+    // `papel` ainda vai para `User.create` também (dual-write): a coluna
+    // `User.papel` foi derrubada e RESTAURADA nesta mesma tarefa — o DROP
+    // provou seguro para os dados, mas revelou um terceiro grupo de leitores
+    // (`core/audit/alerta.ts` em produção, mais ~20 arquivos de teste/e2e)
+    // fora do escopo desta tarefa. Até esses leitores migrarem para
+    // `Membership` numa tarefa dedicada, `User.papel` precisa continuar
+    // correto também para gente criada DEPOIS da restauração — não só para
+    // quem já existia quando ela rodou. `Membership.papel` é a fonte que
+    // este módulo LÊ; `User.papel` é só o bridge escrito para não quebrar os
+    // leitores antigos.
+    criado = await prisma.$transaction(async (tx) => {
+      const usuario = await tx.user.create({
+        data: { nome, email, senhaHash, papel },
+        select: { id: true, nome: true, email: true, ativo: true, criadoEm: true },
+      });
+      await tx.membership.create({ data: { userId: usuario.id, companyId, papel } });
+      return usuario;
     });
   } catch (erro) {
     // Deixamos o banco decidir, em vez de consultar antes: entre a consulta e
@@ -205,6 +242,8 @@ export async function criarUsuario(dados: DadosNovoUsuario, autorId: string): Pr
     throw erro;
   }
 
+  const resultado: UsuarioListado = { ...criado, papel };
+
   // `depois` NUNCA inclui `senhaHash`: `AuditLog.depois` é uma coluna Json
   // lida pelo dashboard ("atividade recente") e por qualquer consulta futura
   // ao histórico. Gravar o hash ali o espalharia para fora da única coluna
@@ -214,15 +253,16 @@ export async function criarUsuario(dados: DadosNovoUsuario, autorId: string): Pr
     acao: "criar_usuario",
     entidade: "User",
     entidadeId: criado.id,
-    depois: { nome: criado.nome, email: criado.email, papel: criado.papel, ativo: criado.ativo },
+    depois: { nome: criado.nome, email: criado.email, papel, ativo: criado.ativo },
   });
 
-  return criado;
+  return resultado;
 }
 
 export async function atualizarUsuario(
   entrada: { id: string; nome: string; papel: Role },
-  autorId: string
+  autorId: string,
+  companyId: string
 ): Promise<UsuarioListado> {
   recusarContaDeSistema(entrada.id);
 
@@ -232,36 +272,65 @@ export async function atualizarUsuario(
   // `findUnique` por id, sem somar o filtro de conta de sistema:
   // `recusarContaDeSistema` acima já rejeitou esse caso, e tentar compor os
   // dois num único `where` foi exatamente o que produziu o bug do spread
-  // descrito em `sistema.ts`.
+  // descrito em `sistema.ts`. O papel não vem mais daqui — mora no
+  // `Membership` da empresa de quem chama, buscado junto (`memberships`
+  // filtrado por `companyId`, no máximo um vínculo por par usuário/empresa).
   const antes = await prisma.user.findUnique({
     where: { id: entrada.id },
-    select: { id: true, nome: true, email: true, papel: true, ativo: true },
+    select: {
+      id: true,
+      nome: true,
+      email: true,
+      ativo: true,
+      memberships: { where: { companyId }, select: { papel: true } },
+    },
   });
-  if (!antes) throw new UsuarioInvalidoError("Usuário não encontrado.");
+  const vinculoAntes = antes?.memberships[0];
+  // Sem vínculo com ESTA empresa é "não encontrado" — a pessoa pode existir
+  // no banco (ligada a outra empresa), mas não é gerenciável por quem chama.
+  if (!antes || !vinculoAntes) throw new UsuarioInvalidoError("Usuário não encontrado.");
 
   // Trocar o próprio papel é um tiro no pé imediato: quem se rebaixa perde,
   // na mesma ação, o acesso à tela onde acabou de estar. Bloquear aqui é
   // mais claro do que deixar acontecer e a pessoa descobrir com um 404.
-  if (entrada.id === autorId && papel !== antes.papel) {
+  if (entrada.id === autorId && papel !== vinculoAntes.papel) {
     throw new UsuarioInvalidoError("Você não pode mudar o próprio papel.");
   }
 
-  if (antes.papel === "ADMIN" && papel !== "ADMIN" && antes.ativo) {
-    await garantirQueSobraAdmin(entrada.id);
+  if (vinculoAntes.papel === "ADMIN" && papel !== "ADMIN" && antes.ativo) {
+    await garantirQueSobraAdmin(entrada.id, companyId);
   }
 
-  const depois = await prisma.user.update({
-    where: { id: entrada.id },
-    data: { nome, papel },
-    select: { id: true, nome: true, email: true, papel: true, ativo: true, criadoEm: true },
+  // `nome` em `User` (atributo da pessoa, não da empresa) e `papel` em
+  // `Membership` (atributo do vínculo) — duas tabelas, uma transação: a outra
+  // opção (duas escritas soltas) deixaria uma janela onde `nome` mudou e
+  // `papel` ainda não, ou vice-versa, se a segunda escrita falhasse.
+  //
+  // `User.papel` também é regravado aqui — mesmo dual-write de `criarUsuario`
+  // (ver o comentário lá): a coluna é um bridge temporário para os leitores
+  // que o DROP desta tarefa revelou fora do escopo dela, e precisa continuar
+  // correta quando o papel de alguém muda, não só na criação.
+  const usuarioAtualizado = await prisma.$transaction(async (tx) => {
+    const usuario = await tx.user.update({
+      where: { id: entrada.id },
+      data: { nome, papel },
+      select: { id: true, nome: true, email: true, ativo: true, criadoEm: true },
+    });
+    await tx.membership.update({
+      where: { userId_companyId: { userId: entrada.id, companyId } },
+      data: { papel },
+    });
+    return usuario;
   });
+
+  const depois: UsuarioListado = { ...usuarioAtualizado, papel };
 
   await registrarAuditoria({
     userId: autorId,
     acao: "editar_usuario",
     entidade: "User",
     entidadeId: depois.id,
-    antes: { nome: antes.nome, papel: antes.papel },
+    antes: { nome: antes.nome, papel: vinculoAntes.papel },
     depois: { nome: depois.nome, papel: depois.papel },
   });
 
@@ -270,7 +339,8 @@ export async function atualizarUsuario(
 
 export async function definirAtivo(
   entrada: { id: string; ativo: boolean },
-  autorId: string
+  autorId: string,
+  companyId: string
 ): Promise<UsuarioListado> {
   recusarContaDeSistema(entrada.id);
 
@@ -282,20 +352,24 @@ export async function definirAtivo(
     throw new UsuarioInvalidoError("Você não pode desativar a própria conta.");
   }
 
+  // `ativo` continua sendo coluna de `User` — é a pessoa que está
+  // ativa/desativada, e não algo por empresa. O papel (só usado aqui pela
+  // guarda do último ADMIN) é que vem do `Membership` desta empresa.
   const antes = await prisma.user.findUnique({
     where: { id: entrada.id },
-    select: { id: true, papel: true, ativo: true },
+    select: { id: true, ativo: true, memberships: { where: { companyId }, select: { papel: true } } },
   });
-  if (!antes) throw new UsuarioInvalidoError("Usuário não encontrado.");
+  const vinculo = antes?.memberships[0];
+  if (!antes || !vinculo) throw new UsuarioInvalidoError("Usuário não encontrado.");
 
-  if (antes.papel === "ADMIN" && antes.ativo && !entrada.ativo) {
-    await garantirQueSobraAdmin(entrada.id);
+  if (vinculo.papel === "ADMIN" && antes.ativo && !entrada.ativo) {
+    await garantirQueSobraAdmin(entrada.id, companyId);
   }
 
   const depois = await prisma.user.update({
     where: { id: entrada.id },
     data: { ativo: entrada.ativo },
-    select: { id: true, nome: true, email: true, papel: true, ativo: true, criadoEm: true },
+    select: { id: true, nome: true, email: true, ativo: true, criadoEm: true },
   });
 
   await registrarAuditoria({
@@ -307,7 +381,7 @@ export async function definirAtivo(
     depois: { ativo: depois.ativo },
   });
 
-  return depois;
+  return { ...depois, papel: vinculo.papel };
 }
 
 /**
