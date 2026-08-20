@@ -40,18 +40,13 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       authorize: autorizarCredenciais,
     }),
   ],
-  callbacks: {
-    jwt({ token, user }) {
-      if (user) {
-        token.role = user.role;
-      }
-      return token;
-    },
-    session({ session, token }) {
-      if (session.user) {
-        session.user.role = token.role;
-      }
-      return session;
-    },
-  },
+  // Sem callbacks `jwt`/`session`: chegaram a propagar `role` de
+  // `user`/`token` para `session.user`, mas nada em `src/` lia
+  // `session.user.role` nem `token.role` (medido) — e o valor propagado era
+  // `User.papel`, que deixou de ser a fonte de verdade do papel desde que a
+  // gestão de equipe passou a gravar em `Membership` (Ciclo 1a). Um campo
+  // morto que ainda por cima carregava dado obsoleto na sessão. Toda
+  // autorização usa `usuarioAtual().papel`, resolvido do vínculo a cada
+  // requisição (`core/auth/session.ts`) — o JWT só precisa do essencial que
+  // o Auth.js já propaga por padrão (id/name/email).
 });

@@ -178,12 +178,15 @@ describe("autorizarCredenciais — tempo de resposta não revela se a conta exis
       headers: { "x-vercel-forwarded-for": "203.0.113.88" },
     });
 
+  // Sem `papel`: depois do Ciclo 1a a coluna `User.papel` foi derrubada (o
+  // papel mora em `Membership`), e `autorizarCredenciais` nunca leu esse
+  // campo mesmo antes disso — o mock reflete o que `prisma.user.findUnique`
+  // devolve de verdade hoje.
   const usuarioAtivo = {
     id: "u1",
     nome: "Fulano",
     email: "existe@exemplo.com",
     senhaHash: "$2b$10$hashRealDeMentiraParaOTeste......................",
-    papel: "ADMIN",
     ativo: true,
   };
 
@@ -258,11 +261,17 @@ describe("autorizarCredenciais — tempo de resposta não revela se a conta exis
       requisicao()
     );
 
+    // Contrato novo: sem `role`. O campo já foi devolvido aqui, mas nada em
+    // `src/` autorizava com `session.user.role`/`token.role` (medido), e o
+    // valor que ele carregava — `User.papel` — deixou de ser a fonte de
+    // verdade do papel desde que a gestão de equipe passou a gravar em
+    // `Membership`. Um `toEqual` exaustivo (não `toMatchObject`) prova que
+    // `role` NÃO está mais presente — a mesma lógica de "prova por ausência"
+    // já usada para `senhaHash` em `users-service.test.ts`.
     expect(resultado).toEqual({
       id: "u1",
       name: "Fulano",
       email: "existe@exemplo.com",
-      role: "ADMIN",
     });
     // O objeto que vai para o token JWT não pode carregar o hash junto.
     expect(JSON.stringify(resultado)).not.toContain("$2b$");

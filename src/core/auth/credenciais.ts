@@ -107,5 +107,12 @@ export async function autorizarCredenciais(
   // sessão em andamento é outra camada, em `usuarioAtual()`.)
   if (!user || !user.ativo || !senhaValida) return null;
 
-  return { id: user.id, name: user.nome, email: user.email, role: user.papel };
+  // Sem `role`: o campo já foi devolvido aqui, mas nada em `src/` autoriza
+  // com `session.user.role`/`token.role` (medido — só a augmentation de tipos
+  // em `types/next-auth.d.ts` os mencionava). Depois que o papel passou a
+  // morar em `Membership` (Ciclo 1a), o JWT continuaria carregando um valor
+  // OBSOLETO — o de `User.papel`, que já não é mais a fonte de verdade — e
+  // que ninguém precisa ler: toda autorização usa `usuarioAtual().papel`,
+  // resolvido do vínculo a cada requisição (`core/auth/session.ts`).
+  return { id: user.id, name: user.nome, email: user.email };
 }
