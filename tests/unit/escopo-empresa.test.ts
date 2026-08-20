@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
@@ -18,7 +20,12 @@ import { PrismaPg } from "@prisma/adapter-pg";
 // pode fazer.
 vi.mock("@/lib/prisma", () => ({ prisma: undefined }));
 
-import { prismaDaEmpresa, EscopoDeEmpresaError } from "@/core/tenancy/escopo";
+import {
+  prismaDaEmpresa,
+  escoparArgumentos,
+  EscopoDeEmpresaError,
+  MODELOS_DE_TENANT,
+} from "@/core/tenancy/escopo";
 
 const EMPRESA_A = "cmp_a";
 const EMPRESA_B = "cmp_b";
@@ -74,11 +81,16 @@ function bancoFalso(tabelas: Record<string, Linha[]>) {
               tabelas[model].push(nova);
               return nova;
             }
-            case "createMany": {
+            case "createMany":
+            case "createManyAndReturn": {
               const dados = Array.isArray(args.data) ? args.data : [args.data];
               for (const d of dados) tabelas[model].push({ ...(d as Linha) });
               return { count: dados.length };
             }
+            // `updateManyAndReturn` grava igual a `updateMany` — o que importa
+            // aqui é que a linha MUDE de verdade, para que um `companyId`
+            // divergente em `data` apareça como linha movida de empresa.
+            case "updateManyAndReturn":
             case "updateMany": {
               let count = 0;
               for (const l of tabelas[model]) {
@@ -234,13 +246,254 @@ describe("prismaDaEmpresa", () => {
     });
   });
 
+  // Os casos abaixo mandam payload que o TIPO não aceita (é o ponto: prova que
+  // o RUNTIME recusa) e operações que o tipo do delegate estreita demais. Daí
+  // o `as any` — a lacuna de tipos está registrada em escopo.ts, seção "O tipo
+  // não sabe o que o runtime faz".
+  /* eslint-disable @typescript-eslint/no-explicit-any */
+  describe("updateMany não pode MOVER a linha para outra empresa", () => {
+    // O buraco que estes casos fecham: `updateMany` estava só no grupo do
+    // `where`, e esse ramo validava apenas `where.companyId`. O `data` passava
+    // intacto, então `{ where: {}, data: { companyId: "B" } }` escolhia a linha
+    // DENTRO da empresa A e a gravava na B — filtro certo, escrita fora do
+    // escopo, silêncio total.
+    it("updateMany com data.companyId de OUTRA empresa é recusado, e a linha não sai da empresa", async () => {
+      const a = escopadoPara(EMPRESA_A);
+
+      await expect(
+        (a as any).contact.updateMany({ data: { companyId: EMPRESA_B } })
+      ).rejects.toThrow(EscopoDeEmpresaError);
+
+      expect(tabelas.Contact.find((l) => l.id === "a1")).toMatchObject({
+        companyId: EMPRESA_A,
+      });
+      expect(chamadas).toHaveLength(0);
+    });
+
+    it("updateManyAndReturn tem a mesma trava", async () => {
+      const a = escopadoPara(EMPRESA_A);
+
+      await expect(
+        (a as any).contact.updateManyAndReturn({ data: { companyId: EMPRESA_B } })
+      ).rejects.toThrow(EscopoDeEmpresaError);
+
+      expect(tabelas.Contact.find((l) => l.id === "a1")).toMatchObject({
+        companyId: EMPRESA_A,
+      });
+    });
+
+    it("também pega a forma `{ set: ... }`, que grava a mesma coluna", async () => {
+      const a = escopadoPara(EMPRESA_A);
+
+      await expect(
+        (a as any).contact.updateMany({ data: { companyId: { set: EMPRESA_B } } })
+      ).rejects.toThrow(EscopoDeEmpresaError);
+    });
+
+    it("updateMany com companyId IGUAL ao escopo passa — a política é a mesma do create", async () => {
+      const a = escopadoPara(EMPRESA_A);
+      const r = await (a as any).contact.updateMany({
+        data: { nome: "Renomeada", companyId: EMPRESA_A },
+      });
+
+      expect(r.count).toBe(1);
+      expect(tabelas.Contact.find((l) => l.id === "b1")).toMatchObject({ nome: "Bruno da B" });
+    });
+  });
+
+  describe("escrita aninhada: divergência recusada em qualquer profundidade", () => {
+    // `injetarEmData` só lia e escrevia o nível de cima. O aninhado que OMITE
+    // `companyId` falha alto no banco (`NOT NULL` desde a Task 1); o que passa
+    // o `companyId` de OUTRA empresa era ACEITO, porque o campo estava
+    // preenchido. A varredura profunda fecha esse segundo caso — recusando,
+    // não injetando (a forma do payload aninhado varia demais para injetar).
+    it("aninhado com companyId de outra empresa é recusado, e nada é gravado", async () => {
+      const a = escopadoPara(EMPRESA_A);
+
+      await expect(
+        (a as any).contact.create({
+          data: {
+            nome: "Fachada",
+            notes: { create: [{ texto: "n", companyId: EMPRESA_B }] },
+          },
+        })
+      ).rejects.toThrow(EscopoDeEmpresaError);
+
+      expect(tabelas.Contact).toHaveLength(2);
+      expect(chamadas).toHaveLength(0);
+    });
+
+    it("aninhado COERENTE com o escopo passa", async () => {
+      const a = escopadoPara(EMPRESA_A);
+
+      await expect(
+        (a as any).contact.create({
+          data: {
+            nome: "Coerente",
+            notes: { create: [{ texto: "n", companyId: EMPRESA_A }] },
+          },
+        })
+      ).resolves.toMatchObject({ companyId: EMPRESA_A });
+    });
+
+    it("pega fundo, dentro de lote, e diz o CAMINHO onde achou", async () => {
+      const a = escopadoPara(EMPRESA_A);
+
+      await expect(
+        (a as any).contact.create({
+          data: {
+            nome: "Fundo",
+            leads: {
+              create: [
+                { titulo: "ok", companyId: EMPRESA_A },
+                { titulo: "intruso", notes: { create: { texto: "x", companyId: EMPRESA_B } } },
+              ],
+            },
+          },
+        })
+      ).rejects.toThrow("data.leads.create[1].notes.create.companyId");
+    });
+
+    it("`company: { connect }` aninhado é o mesmo companyId por outro nome", async () => {
+      const a = escopadoPara(EMPRESA_A);
+
+      await expect(
+        (a as any).contact.create({
+          data: {
+            nome: "Por relação",
+            notes: { create: [{ texto: "n", company: { connect: { id: EMPRESA_B } } }] },
+          },
+        })
+      ).rejects.toThrow(EscopoDeEmpresaError);
+    });
+
+    // Referência cíclica: a varredura tem de TERMINAR, e ainda enxergar a
+    // divergência que está do outro lado do ciclo.
+    //
+    // Os dois casos entram por `escoparArgumentos`, não pelo cliente, e o
+    // motivo foi medido aqui em 2026-08-20: mandar `data` cíclico pelo cliente
+    // morre com `RangeError: Maximum call stack size exceeded` DENTRO do
+    // runtime do Prisma (`client.js`, função `Ct`, que desce nos argumentos
+    // recursivamente) — antes de o payload chegar a qualquer banco. Ou seja: o
+    // ciclo é fatal um passo adiante de qualquer jeito, e o que este arquivo
+    // precisa garantir é que o ESCOPO não seja quem trava, nem quem deixa
+    // passar. Por isso o teste mira a varredura direto.
+    it("referência cíclica não vira laço infinito na varredura", () => {
+      const cicloLimpo: Record<string, unknown> = { nome: "Ciclo" };
+      cicloLimpo.euMesmo = cicloLimpo;
+
+      expect(
+        escoparArgumentos("Contact", "create", { data: cicloLimpo }, EMPRESA_A).data
+      ).toMatchObject({ companyId: EMPRESA_A });
+    });
+
+    it("referência cíclica não esconde a divergência do outro lado do ciclo", () => {
+      const cicloSujo: Record<string, unknown> = {
+        nome: "Ciclo sujo",
+        notes: { create: [{ texto: "n", companyId: EMPRESA_B }] },
+      };
+      cicloSujo.euMesmo = cicloSujo;
+
+      expect(() =>
+        escoparArgumentos("Contact", "create", { data: cicloSujo }, EMPRESA_A)
+      ).toThrow(EscopoDeEmpresaError);
+    });
+  });
+
+  describe("leitura ANINHADA: a limitação é real e está documentada", () => {
+    // Este caso não afirma uma proteção — afirma a AUSÊNCIA dela, de propósito.
+    // `$allOperations` vê UMA operação e o `include` desce intacto. Como `User`
+    // não é modelo de tenant, `Lead → responsavel → leadsAtribuidos` sai do
+    // tenant. Se um dia o Prisma passar a decompor `include` em operações
+    // separadas, este caso quebra — e quebrar é o aviso de que o parágrafo em
+    // escopo.ts ("Leitura ANINHADA") precisa ser reescrito.
+    it("include através de User desce sem filtro — uma chamada só", async () => {
+      const a = escopadoPara(EMPRESA_A);
+      await (a as any).lead.findMany({
+        include: { responsavel: { include: { leadsAtribuidos: true } } },
+      });
+
+      expect(chamadas).toHaveLength(1);
+      expect((chamadas[0].args as any).include).toEqual({
+        responsavel: { include: { leadsAtribuidos: true } },
+      });
+      expect((chamadas[0].args as any).where).toEqual({ companyId: EMPRESA_A });
+    });
+  });
+
+  describe("comportamentos declarados que faltavam exercitar", () => {
+    it("operação não classificada LANÇA (o fecha-fechado do default)", () => {
+      // Pela porta do cliente este ramo é inalcançável: medido em 2026-08-20,
+      // `typeof prisma.contact.operacaoInventada` é `undefined` — o delegate
+      // não encaminha operação que o runtime não conhece. Por isso a decisão
+      // foi extraída para `escoparArgumentos`, e o teste entra por lá.
+      expect(() =>
+        escoparArgumentos("Contact", "operacaoQueOPrismaAindaNaoTem", {}, EMPRESA_A)
+      ).toThrow(EscopoDeEmpresaError);
+      expect(() =>
+        escoparArgumentos("Contact", "operacaoQueOPrismaAindaNaoTem", {}, EMPRESA_A)
+      ).toThrow("ainda não classifica");
+    });
+
+    it("`data: { company: ... }` no topo é recusado com nome próprio", async () => {
+      const a = escopadoPara(EMPRESA_A);
+
+      await expect(
+        (a as any).contact.create({
+          data: { nome: "Por relação", company: { connect: { id: EMPRESA_A } } },
+        })
+      ).rejects.toThrow(/relação `company`/);
+      expect(chamadas).toHaveLength(0);
+    });
+
+    it("companyId vazio lança na ENTRADA, apontando a origem correta", () => {
+      expect(() => prismaDaEmpresa("", clienteBase())).toThrow(EscopoDeEmpresaError);
+      expect(() => prismaDaEmpresa("", clienteBase())).toThrow("UsuarioAtivo.companyId");
+    });
+
+    it("groupBy e aggregate recebem where.companyId como qualquer leitura", async () => {
+      const a = escopadoPara(EMPRESA_A);
+      await (a as any).contact.groupBy({ by: ["nome"] });
+      await (a as any).contact.aggregate({ _count: true });
+
+      expect(chamadas.map((c) => (c.args as any).where)).toEqual([
+        { companyId: EMPRESA_A },
+        { companyId: EMPRESA_A },
+      ]);
+    });
+
+    it("createManyAndReturn injeta em cada linha do lote", async () => {
+      const a = escopadoPara(EMPRESA_A);
+      await (a as any).contact.createManyAndReturn({
+        data: [{ nome: "Um" }, { nome: "Dois" }],
+      });
+
+      expect((chamadas[0].args as any).data).toEqual([
+        { nome: "Um", companyId: EMPRESA_A },
+        { nome: "Dois", companyId: EMPRESA_A },
+      ]);
+    });
+
+    it("updateManyAndReturn é escopado no where como updateMany", async () => {
+      const a = escopadoPara(EMPRESA_A);
+      await (a as any).contact.updateManyAndReturn({ data: { nome: "Renomeada" } });
+
+      expect((chamadas[0].args as any).where).toEqual({ companyId: EMPRESA_A });
+      expect(tabelas.Contact.find((l) => l.id === "b1")).toMatchObject({ nome: "Bruno da B" });
+    });
+  });
+  /* eslint-enable @typescript-eslint/no-explicit-any */
+
   describe("operações por chave única", () => {
     const casos = [
       ["findUnique", "findFirst"],
       ["findUniqueOrThrow", "findFirst"],
       ["update", "updateMany"],
       ["delete", "deleteMany"],
-      ["upsert", "updateMany"],
+      // A sugestão do `upsert` não é "updateMany" solto: é a receita inteira.
+      // Afirmar só o pedaço deixava o teste passar mesmo que a mensagem
+      // perdesse o `findFirst` e o `create`, que é o que ensina o caminho.
+      ["upsert", "findFirst + create/updateMany"],
     ] as const;
 
     for (const [operacao, sugestao] of casos) {
@@ -303,5 +556,74 @@ describe("prismaDaEmpresa", () => {
     expect(await b.contact.findMany()).toHaveLength(1);
     expect((await a.contact.findMany())[0].id).toBe("a1");
     expect((await b.contact.findMany())[0].id).toBe("b1");
+  });
+});
+
+/**
+ * A trava de deriva de `MODELOS_DE_TENANT`.
+ *
+ * O arquivo é fecha-fechado para OPERAÇÃO (a não classificada lança) e era o
+ * contrário para MODELO: modelo fora do Set passa sem filtro nenhum, por
+ * desenho — é assim que `User`, `RateLimit` e `Company` funcionam. A
+ * consequência é que um modelo NOVO com `companyId` que ninguém acrescente ao
+ * Set não dá erro: vaza calado, e nada no código percebe.
+ *
+ * Este caso é o que percebe. Ele lê o schema, extrai quem tem `companyId`
+ * escalar e exige o conjunto EXATO. Adicionar tabela de tenant sem tocar o Set
+ * passa a quebrar aqui, com o nome do modelo na mensagem.
+ */
+function modelosComCompanyIdNoSchema(): Set<string> {
+  const caminho = fileURLToPath(new URL("../../prisma/schema.prisma", import.meta.url));
+  const texto = readFileSync(caminho, "utf8");
+
+  const encontrados = new Set<string>();
+  let modeloAtual: string | null = null;
+
+  for (const linha of texto.split(/\r?\n/)) {
+    const abertura = /^model\s+(\w+)\s*\{/.exec(linha);
+    if (abertura) {
+      modeloAtual = abertura[1];
+      continue;
+    }
+    if (/^\}/.test(linha)) {
+      modeloAtual = null;
+      continue;
+    }
+    // Campo ESCALAR chamado `companyId` — `companyId String`, com ou sem `?`,
+    // com ou sem atributos depois. A relação (`company Company @relation(...)`)
+    // tem outro nome e não casa; `@@index([companyId])` começa com `@@`.
+    if (modeloAtual && /^\s*companyId\s+\w+/.test(linha)) encontrados.add(modeloAtual);
+  }
+
+  return encontrados;
+}
+
+describe("MODELOS_DE_TENANT não pode derivar do schema", () => {
+  it("bate EXATAMENTE com os modelos que têm companyId em prisma/schema.prisma", () => {
+    const noSchema = modelosComCompanyIdNoSchema();
+
+    // Sem esta linha, um regex quebrado devolveria conjunto vazio e o teste
+    // ainda acusaria — mas por "sobrando", que é a mensagem errada. Falhar
+    // aqui diz a verdade: o leitor do schema é que parou de funcionar.
+    expect(noSchema.size).toBeGreaterThan(0);
+
+    const problemas = [
+      ...[...noSchema]
+        .filter((m) => !MODELOS_DE_TENANT.has(m))
+        .map(
+          (m) =>
+            `${m} tem companyId no schema e NÃO está em MODELOS_DE_TENANT: ` +
+            `operação nele passa SEM filtro de empresa (vazamento silencioso)`
+        ),
+      ...[...MODELOS_DE_TENANT]
+        .filter((m) => !noSchema.has(m))
+        .map(
+          (m) =>
+            `${m} está em MODELOS_DE_TENANT e NÃO tem companyId no schema: ` +
+            `injetar o filtro nele quebra a query com erro de coluna inexistente`
+        ),
+    ];
+
+    expect(problemas).toEqual([]);
   });
 });

@@ -7,10 +7,16 @@ import type { PrismaClient } from "@prisma/client";
  * ## O que este arquivo é, e o que ele não é
  *
  * Ele é metade do isolamento por empresa. A outra metade é a regra de lint em
- * `eslint.config.mjs` que proíbe `src/core/**` e `src/modules/**` de importar
- * `@/lib/prisma` — porque o wrapper cobre o caminho comum e **não cobre tudo**
- * (a lista exata está mais abaixo). Sem o lint, o que este arquivo não alcança
- * vira um `import { prisma }` que ninguém revisa.
+ * `eslint.config.mjs` que proíbe `src/core/**`, `src/modules/**` **e
+ * `src/app/**`** de importar `@/lib/prisma` — porque o wrapper cobre o caminho
+ * comum e **não cobre tudo** (a lista exata está mais abaixo). Sem o lint, o
+ * que este arquivo não alcança vira um `import { prisma }` que ninguém revisa.
+ *
+ * As três árvores, não duas: enquanto `src/app/**` ficava de fora, uma página
+ * do painel podia ler modelo de tenant sem escopo nenhum e o lint ficava
+ * verde. Três páginas faziam exatamente isso quando a regra foi estendida
+ * (2026-08-20); estão na exceção TEMPORÁRIA, com a fila de conversão anotada
+ * lá. A mais exposta lê `AuditLog` sem `where` nenhum.
  *
  * Ele NÃO é RLS. `CLAUDE.md` já registra a armadilha: o Prisma conecta com o
  * papel dono da tabela, e política de linha não se aplica ao dono a menos que
@@ -67,6 +73,14 @@ import type { PrismaClient } from "@prisma/client";
  * `updateMany`, `updateManyAndReturn`, `deleteMany`, `create`, `createMany`,
  * `createManyAndReturn`.
  *
+ * `updateMany` e `updateManyAndReturn` contam nos DOIS lados, e é preciso
+ * dizer isso em voz alta porque a primeira versão deste arquivo só contava um.
+ * Elas escolhem linha (`where`) E gravam (`data`). Enquanto só o `where` era
+ * validado, `updateMany({ where: {...}, data: { companyId: "B" } })` escolhia
+ * uma linha DENTRO da empresa A e a MOVIA para a B: filtro certo, gravação
+ * fora do escopo, nenhum erro. Hoje o `data` delas passa pela mesma exigência
+ * de coerência do `create` — `companyId` divergente RECUSA, lançando.
+ *
  * **Recusa, lançando**: `findUnique`, `findUniqueOrThrow`, `update`,
  * `delete`, `upsert`. O motivo é do Prisma, não uma escolha de gosto: o
  * `where` dessas operações é tipado como `XWhereUniqueInput` e só aceita
@@ -81,13 +95,55 @@ import type { PrismaClient } from "@prisma/client";
  * por `$allModels`, e por isso o lint é a peça central — é ele que garante
  * que chegar no `prisma` cru para fazer SQL exige uma exceção visível.
  *
- * **Também não alcança escrita ANINHADA.** `contact.create({ data: { notes:
- * { create: [...] } } })` é UMA operação aos olhos da extensão: o
- * `$allOperations` vê `Contact.create` e nunca vê o `LeadNote.create` que
- * acontece dentro. O `companyId` do aninhado não é injetado. Isso não vaza
- * calado, porque a Task 1 tornou `companyId` `NOT NULL` nos 11 modelos e o
- * Prisma recusa o aninhado sem ele — mas o erro vem do banco, não daqui, e
- * quem ler o erro precisa saber que a causa é esta.
+ * **Escrita ANINHADA: metade alcançada, e a metade que falta é recusa, não
+ * injeção.** `contact.create({ data: { notes: { create: [...] } } })` é UMA
+ * operação aos olhos da extensão: o `$allOperations` vê `Contact.create` e
+ * nunca vê o `LeadNote.create` que acontece dentro. O escopo NÃO injeta
+ * `companyId` no aninhado, de propósito — a forma do payload aninhado varia
+ * demais (`create`, `createMany`, `connectOrCreate`, linha só ou lote, com
+ * `data:` ou sem) para a injeção ser sólida ali.
+ *
+ * O que ele faz é VARRER o `data` inteiro, em qualquer profundidade, e recusar
+ * `companyId` de outra empresa onde quer que apareça. Os dois buracos ficam
+ * fechados, por vias diferentes, e vale saber qual é qual:
+ *
+ * - aninhado que OMITE `companyId` → o BANCO recusa, porque a Task 1 tornou a
+ *   coluna `NOT NULL` nos 11 modelos. O erro vem do banco e não explica a
+ *   causa; quem ler precisa saber que é esta.
+ * - aninhado que passa o `companyId` de OUTRA empresa → o banco ACEITA. O
+ *   campo está preenchido, o `NOT NULL` está satisfeito, e a linha nasce na
+ *   empresa errada. Só a varredura pega. A versão anterior deste comentário
+ *   dizia que o `NOT NULL` cobria o caso aninhado; cobria metade dele.
+ *
+ * A varredura é iterativa (pilha explícita, não recursão, para não estourar em
+ * payload fundo), guarda os objetos já visitados num `WeakSet` (referência
+ * cíclica não vira laço) e tem teto de nós — acima do teto ela LANÇA, em vez
+ * de desistir calada.
+ *
+ * ## Leitura ANINHADA: não alcança, e este é o caminho mais fácil de errar
+ *
+ * `include`/`select` aninhado atravessa a fronteira de empresa sem parecer uma
+ * segunda consulta. Aos olhos da extensão ele não é: `$allOperations` vê UMA
+ * operação (`Lead.findMany`) e o `include` desce intacto até o motor. Medido
+ * em 2026-08-20 sobre o banco falso do teste: uma chamada só, `include` sem
+ * nenhum filtro acrescentado.
+ *
+ * A regra prática é esta: **relação que fica dentro de `Company` é segura;
+ * relação que passa por `User` não é.** `User` não é modelo de tenant (não tem
+ * `companyId`, e o motivo está logo acima) e tem oito relações inversas —
+ * `leadsAtribuidos`, `tasks`, `notes`, `notifications`, `auditLogs`,
+ * `conversasPausadas`, `botConfigsEditadas`, `memberships`
+ * (`prisma/schema.prisma`). Atravessá-lo sai do tenant. O caminho concreto:
+ *
+ *   lead.findMany({ include: { responsavel: { include: { leadsAtribuidos: true } } } })
+ *
+ * O `findMany` de fora é escopado na empresa A. `responsavel` é um `User`, que
+ * passa intacto. `leadsAtribuidos` dele devolve os leads de TODAS as empresas
+ * em que aquela pessoa tem vínculo. Nada nesta extensão evita isso, e não dá
+ * para consertar aqui: é inerente à extensão `query`, que enxerga a operação
+ * de topo e mais nada. Quem escrever `include` através de `User` filtra à mão
+ * (`leadsAtribuidos: { where: { companyId } }`) ou faz a segunda consulta
+ * separada, no cliente escopado.
  *
  * ## O tipo não sabe o que o runtime faz
  *
@@ -153,6 +209,14 @@ const OPERACOES_COM_WHERE = new Set([
   "deleteMany",
 ]);
 
+/**
+ * Operações do grupo acima que TAMBÉM gravam. Elas escolhem linha pelo `where`
+ * e mudam coluna pelo `data`, e por isso precisam das duas defesas: sem a
+ * segunda, `updateMany({ data: { companyId: outra } })` passava o filtro da
+ * empresa A e movia a linha para a B.
+ */
+const OPERACOES_COM_WHERE_QUE_GRAVAM = new Set(["updateMany", "updateManyAndReturn"]);
+
 /** Operações que gravam linha nova — a injeção é em `data`, não em `where`. */
 const OPERACOES_COM_DATA = new Set(["create", "createMany", "createManyAndReturn"]);
 
@@ -169,14 +233,130 @@ const OPERACOES_POR_CHAVE_UNICA: Record<string, string> = {
   upsert: "findFirst + create/updateMany dentro de uma transação",
 };
 
+/**
+ * Coerência de UM valor de `companyId` que o chamador passou explicitamente.
+ *
+ * ## Por que a varredura profunda existe no `data` e não existe no `where`
+ *
+ * Esta função olha um valor só. Quem varre em profundidade é
+ * `exigirEmpresaCoerenteEmData`, e ela só é aplicada ao `data`. A assimetria é
+ * deliberada, não sobra de implementação:
+ *
+ * - No `data`, `companyId` divergente GRAVA na empresa errada. Foi assim que
+ *   `updateMany` movia linha entre empresas, e é assim que uma escrita
+ *   aninhada nasce fora do tenant. Divergência ali é dano.
+ * - No `where`, a injeção do escopo compõe em AND com o que o chamador mandou.
+ *   `{ OR: [{ companyId: "B" }], companyId: "A" }` vira uma consulta que exige
+ *   as duas coisas ao mesmo tempo e devolve vazio. Divergência aninhada no
+ *   `where` é inofensiva por construção — não vaza, só não encontra nada.
+ *
+ * Então: o TOPO do `where` é validado (para que o erro apareça no caso comum,
+ * que é o chamador tentando escapar do escopo de propósito), e o resto dele
+ * não é varrido. Isso é escolha registrada, não lacuna esquecida.
+ */
 function exigirCoerencia(campo: string, valor: unknown, companyId: string, onde: string) {
   if (valor === undefined) return;
   if (valor === companyId) return;
   throw new EscopoDeEmpresaError(
     `${onde} recebeu ${campo}=${JSON.stringify(valor)}, mas o escopo é ${JSON.stringify(companyId)}. ` +
       `O escopo NÃO sobrescreve em silêncio: divergência aqui é bug ou ataque, e os dois merecem parar. ` +
-      `Remova o campo (o escopo injeta) ou use o cliente da empresa certa.`
+      `Use o cliente da empresa certa. No TOPO de \`data\`/\`where\` dá para remover o campo e deixar ` +
+      `o escopo injetar; no ANINHADO não há injeção — ver "Escrita ANINHADA" no topo deste arquivo.`
   );
+}
+
+/**
+ * Teto de nós da varredura profunda do `data`.
+ *
+ * Um `create` comum tem dezenas de nós, e num lote cada elemento é varrido
+ * com o orçamento inteiro — então cem mil nós em UMA linha é payload que já
+ * não deveria existir. Acima do teto o escopo LANÇA, em vez de parar de olhar:
+ * desistir calado devolveria exatamente o buraco que a varredura fecha, e um
+ * `data` desse tamanho é mais provável ser bug ou ataque que uso legítimo.
+ */
+const LIMITE_DE_NOS_NA_VARREDURA = 100_000;
+
+/**
+ * `data: { companyId: { set: "..." } }` é a forma de atribuição que o Prisma
+ * aceita nas operações de update; `data: { companyId: "..." }` é a forma
+ * direta. As duas gravam a mesma coluna, então as duas têm de ser conferidas —
+ * olhar só a direta deixaria a porta da outra aberta.
+ */
+function valorGravadoEmCompanyId(valor: unknown): unknown {
+  if (valor !== null && typeof valor === "object" && !Array.isArray(valor) && "set" in valor) {
+    return (valor as { set: unknown }).set;
+  }
+  return valor;
+}
+
+/**
+ * Varre o `data` inteiro e RECUSA `companyId` de outra empresa em qualquer
+ * profundidade. Não injeta nada no aninhado — o motivo está no topo do
+ * arquivo, seção "Escrita ANINHADA".
+ *
+ * Iterativa de propósito (pilha explícita): payload fundo não estoura pilha de
+ * chamada. `WeakSet` de visitados: referência cíclica não vira laço infinito.
+ * Teto de nós: payload absurdo lança em vez de travar o processo.
+ */
+function exigirEmpresaCoerenteEmData(dado: unknown, companyId: string, onde: string) {
+  const pilha: { valor: unknown; caminho: string }[] = [{ valor: dado, caminho: "data" }];
+  const visitados = new WeakSet<object>();
+  let nos = 0;
+
+  while (pilha.length > 0) {
+    const atual = pilha.pop()!;
+    const { valor, caminho } = atual;
+
+    if (valor === null || typeof valor !== "object") continue;
+    // `Date`, `Buffer`, `Decimal` e afins são valores, não estrutura: descer
+    // neles só gasta orçamento e nunca encontra um `companyId`.
+    if (valor instanceof Date || ArrayBuffer.isView(valor)) continue;
+    if (visitados.has(valor)) continue;
+    visitados.add(valor);
+
+    if (++nos > LIMITE_DE_NOS_NA_VARREDURA) {
+      throw new EscopoDeEmpresaError(
+        `${onde} passou um \`data\` com mais de ${LIMITE_DE_NOS_NA_VARREDURA} nós, e o escopo ` +
+          `não consegue conferir a empresa nele por inteiro. Quebre o lote em pedaços menores. ` +
+          `Passar sem conferir seria vazamento silencioso entre empresas.`
+      );
+    }
+
+    if (Array.isArray(valor)) {
+      for (let i = 0; i < valor.length; i += 1) {
+        pilha.push({ valor: valor[i], caminho: `${caminho}[${i}]` });
+      }
+      continue;
+    }
+
+    for (const [chave, filho] of Object.entries(valor as Record<string, unknown>)) {
+      const caminhoFilho = `${caminho}.${chave}`;
+
+      if (chave === "companyId") {
+        exigirCoerencia(caminhoFilho, valorGravadoEmCompanyId(filho), companyId, onde);
+        continue;
+      }
+
+      // `company: { connect: { id } }` é o mesmo `companyId` escrito por
+      // relação. No TOPO do `data` ele é recusado de saída (ver
+      // `injetarEmData`, e o motivo lá); ANINHADO ele é legítimo — é como um
+      // `LeadNote` criado junto declara a empresa dele — desde que a empresa
+      // seja esta.
+      if (chave === "company" && filho !== null && typeof filho === "object") {
+        const conectar = (filho as Record<string, unknown>).connect;
+        if (conectar !== null && typeof conectar === "object") {
+          exigirCoerencia(
+            `${caminhoFilho}.connect.id`,
+            (conectar as Record<string, unknown>).id,
+            companyId,
+            onde
+          );
+        }
+      }
+
+      pilha.push({ valor: filho, caminho: caminhoFilho });
+    }
+  }
 }
 
 function injetarEmData(dado: unknown, companyId: string, onde: string): unknown {
@@ -194,8 +374,87 @@ function injetarEmData(dado: unknown, companyId: string, onde: string): unknown 
     );
   }
 
-  exigirCoerencia("data.companyId", registro.companyId, companyId, onde);
+  // A varredura começa no topo, então ela cobre `data.companyId` E qualquer
+  // `companyId` aninhado. Não existe mais uma conferência do topo em separado:
+  // duas passagens sobre a mesma coisa só criariam a chance de uma delas ficar
+  // para trás numa edição futura.
+  exigirEmpresaCoerenteEmData(registro, companyId, onde);
   return { ...registro, companyId };
+}
+
+/**
+ * A decisão inteira do escopo, isolada da extensão do Prisma: recebe a
+ * operação e devolve os argumentos a passar adiante — ou LANÇA.
+ *
+ * ## Por que isto é exportado
+ *
+ * Por causa do teste, e vale dizer o motivo em vez de deixar parecendo
+ * superfície aberta à toa. O ramo fecha-fechado do `default` — operação de
+ * modelo de tenant que este arquivo não classifica — é INALCANÇÁVEL pelo
+ * cliente Prisma: medido em 2026-08-20 no Prisma 7.9.1 desta árvore,
+ * `typeof prisma.contact.operacaoInventada` sai `undefined`. O delegate só
+ * expõe as operações que o runtime conhece, e uma inventada nunca desce até
+ * `$allOperations`. Sem esta porta, o único ramo que existe justamente para o
+ * dia em que o Prisma acrescentar uma operação seria o único ramo sem teste.
+ */
+export function escoparArgumentos(
+  model: string,
+  operation: string,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  args: any,
+  companyId: string
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+): any {
+  if (!MODELOS_DE_TENANT.has(model)) return args;
+
+  const onde = `${model}.${operation}`;
+  const argumentos = args ?? {};
+
+  if (OPERACOES_COM_WHERE.has(operation)) {
+    exigirCoerencia("where.companyId", argumentos.where?.companyId, companyId, onde);
+
+    // As que também gravam conferem o `data` com o mesmo rigor do `create`.
+    // Conferem e NÃO injetam: a linha já está na empresa por força do `where`,
+    // então escrever a coluna de novo seria gravação que ninguém pediu.
+    if (OPERACOES_COM_WHERE_QUE_GRAVAM.has(operation)) {
+      const dados = argumentos.data;
+      if (Array.isArray(dados)) {
+        for (const d of dados) exigirEmpresaCoerenteEmData(d, companyId, onde);
+      } else {
+        exigirEmpresaCoerenteEmData(dados, companyId, onde);
+      }
+    }
+
+    return { ...argumentos, where: { ...(argumentos.where ?? {}), companyId } };
+  }
+
+  if (OPERACOES_COM_DATA.has(operation)) {
+    const dados = argumentos.data;
+    return {
+      ...argumentos,
+      data: Array.isArray(dados)
+        ? dados.map((d: unknown) => injetarEmData(d, companyId, onde))
+        : injetarEmData(dados, companyId, onde),
+    };
+  }
+
+  const equivalente = OPERACOES_POR_CHAVE_UNICA[operation];
+  if (equivalente) {
+    throw new EscopoDeEmpresaError(
+      `${onde} não é escopável por empresa: o \`where\` dela só aceita campo único, ` +
+        `e \`companyId\` não é único em ${model} — o Prisma recusa o campo ali. ` +
+        `Use \`${equivalente}\` no cliente escopado. ` +
+        `Devolver a linha sem filtro entregaria dado de outra empresa a quem soubesse o id.`
+    );
+  }
+
+  // Fecha fechado: operação de modelo que este arquivo não classificou
+  // (o Prisma pode acrescentar uma) para em vez de passar sem filtro.
+  throw new EscopoDeEmpresaError(
+    `${onde} é uma operação que o escopo de empresa ainda não classifica. ` +
+      `Classifique-a em core/tenancy/escopo.ts antes de usá-la — passar sem filtro ` +
+      `seria vazamento silencioso entre empresas.`
+  );
 }
 
 /**
@@ -206,6 +465,24 @@ function injetarEmData(dado: unknown, companyId: string, onde: string): unknown 
  * `companyIdDoUsuario` em `core/users/empresa.ts`); e ele é o que permite ao
  * teste unitário montar um banco falso por baixo sem abrir conexão. Em código
  * de produção normal, omita-o.
+ *
+ * ## O `tx` de `$transaction` CARREGA a extensão — o que foi medido, e o que não
+ *
+ * Verificado em 2026-08-20 no `@prisma/client` 7.9.1 desta árvore, por duas
+ * vias. Na leitura do runtime: `_transactionWithCallback` monta o cliente
+ * interativo por `this._createItxClient(...)`, e `_createItxClient` REAPLICA
+ * as extensões sobre o cliente da transação. No exercício: essa mesma fábrica,
+ * chamada sobre um cliente já escopado com o banco falso do teste por baixo,
+ * registrou `{"model":"Contact","operation":"findMany","args":{"where":
+ * {"companyId":"cmp_a"}}}` — o `companyId` entrou antes de a operação chegar
+ * ao motor.
+ *
+ * A ressalva honesta: o que foi exercitado é a FÁBRICA do cliente interativo,
+ * não um `$transaction()` de ponta a ponta contra o Postgres — esse continua
+ * exigindo banco vivo, e nenhum teste desta tarefa toca banco. Então o caminho
+ * curto (`prismaDaEmpresa(id).$transaction(cb)`) tem evidência, e o contorno
+ * (`prismaDaEmpresa(id, tx)` dentro do callback) continua sendo o que não
+ * depende de evidência nenhuma.
  *
  * A extensão devolvida é a MAIS EXTERNA da cadeia: medido em 2026-08-20 no
  * Prisma 7.9.1 desta árvore, em `cliente.$extends(A).$extends(B)` a extensão
@@ -232,52 +509,9 @@ export function prismaDaEmpresa(companyId: string, cliente: PrismaClient = prism
     query: {
       $allModels: {
         async $allOperations({ model, operation, args, query }) {
-          if (!MODELOS_DE_TENANT.has(model)) return query(args);
-
-          const onde = `${model}.${operation}`;
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const argumentos = (args ?? {}) as any;
-
-          if (OPERACOES_COM_WHERE.has(operation)) {
-            exigirCoerencia(
-              "where.companyId",
-              argumentos.where?.companyId,
-              companyId,
-              onde
-            );
-            return query({
-              ...argumentos,
-              where: { ...(argumentos.where ?? {}), companyId },
-            });
-          }
-
-          if (OPERACOES_COM_DATA.has(operation)) {
-            const dados = argumentos.data;
-            return query({
-              ...argumentos,
-              data: Array.isArray(dados)
-                ? dados.map((d: unknown) => injetarEmData(d, companyId, onde))
-                : injetarEmData(dados, companyId, onde),
-            });
-          }
-
-          const equivalente = OPERACOES_POR_CHAVE_UNICA[operation];
-          if (equivalente) {
-            throw new EscopoDeEmpresaError(
-              `${onde} não é escopável por empresa: o \`where\` dela só aceita campo único, ` +
-                `e \`companyId\` não é único em ${model} — o Prisma recusa o campo ali. ` +
-                `Use \`${equivalente}\` no cliente escopado. ` +
-                `Devolver a linha sem filtro entregaria dado de outra empresa a quem soubesse o id.`
-            );
-          }
-
-          // Fecha fechado: operação de modelo que este arquivo não classificou
-          // (o Prisma pode acrescentar uma) para em vez de passar sem filtro.
-          throw new EscopoDeEmpresaError(
-            `${onde} é uma operação que o escopo de empresa ainda não classifica. ` +
-              `Classifique-a em core/tenancy/escopo.ts antes de usá-la — passar sem filtro ` +
-              `seria vazamento silencioso entre empresas.`
-          );
+          // A decisão inteira mora em `escoparArgumentos`, fora da extensão,
+          // para que ela seja testável sem o delegate do Prisma no caminho.
+          return query(escoparArgumentos(model, operation, args, companyId));
         },
       },
     },

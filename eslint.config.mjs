@@ -42,11 +42,17 @@ const PRISMA_CRU = {
 // aplicar o escopo em todos os serviços é o próximo ciclo — o Ciclo 1a
 // entrega o mecanismo, não a migração dos chamadores.
 //
-// São 22 (17 em core, 5 em modules), medidos em 2026-08-20 com
-// `grep -rln 'from "@/lib/prisma"' src/core src/modules`. O próximo ciclo os
-// remove um a um, e o tamanho desta lista é o contador de quanto falta:
-// quando ela esvaziar, os dois blocos somem junto. Exceção nomeada conta;
+// São 25 (17 em core, 5 em modules, 3 em src/app), medidos em 2026-08-20 com
+// `grep -rln "lib/prisma" src --include=*.ts --include=*.tsx`. O próximo ciclo
+// os remove um a um, e o tamanho desta lista é o contador de quanto falta:
+// quando ela esvaziar, os blocos somem junto. Exceção nomeada conta;
 // disciplina não conta nada.
+//
+// Os 3 de `src/app` entraram numa segunda passada, e vale registrar por quê: a
+// regra nascera limitada a `core` + `modules`, enquanto `escopo.ts` dizia no
+// próprio comentário que o lint "garante que ninguém alcance o `prisma` cru".
+// Enquanto as páginas do painel ficavam de fora, aquela frase era falsa — e um
+// contador que não conta tudo mente sobre quanto falta.
 const VIOLADORES_TEMPORARIOS_CORE = [
   "src/core/audit/alerta.ts",
   "src/core/audit/log.ts",
@@ -79,6 +85,35 @@ const VIOLADORES_TEMPORARIOS_MODULES = [
   "src/modules/whatsapp/notificacoes.ts",
   "src/modules/whatsapp/queries.ts",
   "src/modules/whatsapp/turno.ts",
+];
+
+// As páginas do painel que ainda leem o banco direto, em ordem de exposição —
+// e a ordem importa, porque ela é a fila de conversão do próximo ciclo:
+//
+// 1. `(painel)/page.tsx` — `prisma.auditLog.findMany({ take, orderBy })`, SEM
+//    `where` NENHUM. É a mais exposta das três: `AuditLog` é modelo de tenant,
+//    e a home do painel mostra hoje os últimos registros de QUALQUER empresa.
+//    Primeira a converter.
+// 2. `(painel)/leads/[id]/page.tsx` — `prisma.lead.findUnique(...)`. Modelo de
+//    tenant, alcançado por id. Converter significa trocar por `findFirst` no
+//    cliente escopado, porque `findUnique` não é escopável (o motivo está em
+//    `src/core/tenancy/escopo.ts`).
+// 3. `(painel)/leads/page.tsx` — só `prisma.user.findMany`. `User` não é
+//    modelo de tenant, então esta não vaza dado de empresa; está aqui porque
+//    importa o prisma cru, não porque haja fuga conhecida.
+//
+// O `\\[id\\]` da segunda linha NÃO é enfeite. Medido em 2026-08-20: escrito
+// como `[id]`, o caminho vira um glob com CLASSE DE CARACTERES ("um caractere
+// entre i e d"), não casa com a pasta literal `[id]`, e o arquivo continua
+// sendo acusado pela regra apesar de estar listado aqui — foi exatamente o que
+// aconteceu na primeira execução. Rota dinâmica do Next precisa das chaves
+// escapadas em qualquer lista de caminhos do eslint. Os parênteses de
+// `(painel)` não têm esse problema: só viram grupo quando precedidos de
+// `?`/`*`/`+`/`@`/`!`.
+const VIOLADORES_TEMPORARIOS_APP = [
+  "src/app/(painel)/page.tsx",
+  "src/app/(painel)/leads/\\[id\\]/page.tsx",
+  "src/app/(painel)/leads/page.tsx",
 ];
 
 // A exceção PERMANENTE. Nada aqui vai para o cliente escopado, nunca:
@@ -133,18 +168,38 @@ const eslintConfig = defineConfig([
       ],
     },
   },
-  // src/modules: só a proibição do prisma cru. A fronteira core↛modules não
-  // se aplica na direção contrária — modules PODE importar de core, é o
-  // sentido permitido.
+  // src/modules e src/app: só a proibição do prisma cru. A fronteira
+  // core↛modules não se aplica a nenhum dos dois — modules PODE importar de
+  // core (é o sentido permitido), e as páginas de `src/app` são justamente
+  // quem compõe core com modules.
+  //
+  // Aqui a exceção entra por `ignores`, e NÃO por um bloco posterior com a
+  // regra desligada. O motivo é a armadilha documentada no topo deste arquivo:
+  // `no-restricted-imports` não se acumula, então um bloco final com
+  // `"off"` não isenta esses arquivos só desta proibição — ele apaga QUALQUER
+  // restrição de import que outro bloco venha a lhes aplicar no futuro, sem
+  // nenhum aviso no dia em que isso acontecer. `ignores` diz a coisa exata que
+  // se quer dizer: "esta proibição não vale para estes arquivos". O bloco de
+  // exceção de core continua existindo logo abaixo porque lá há mesmo algo a
+  // re-declarar (a fronteira core↛modules); aqui não há.
   {
     files: ["src/modules/**/*.{ts,tsx}"],
+    ignores: VIOLADORES_TEMPORARIOS_MODULES,
     rules: {
       "no-restricted-imports": ["error", { patterns: [PRISMA_CRU] }],
     },
   },
-  // As exceções. Cada bloco RE-DECLARA o que continua valendo para aqueles
-  // arquivos, porque o flat config substitui a configuração da regra inteira
-  // em vez de mesclá-la.
+  {
+    files: ["src/app/**/*.{ts,tsx}"],
+    ignores: VIOLADORES_TEMPORARIOS_APP,
+    rules: {
+      "no-restricted-imports": ["error", { patterns: [PRISMA_CRU] }],
+    },
+  },
+  // A exceção de core RE-DECLARA o que continua valendo para aqueles arquivos,
+  // porque o flat config substitui a configuração da regra inteira em vez de
+  // mesclá-la — sem esta re-declaração, os 20 arquivos listados perderiam a
+  // proteção de core↛modules sem ninguém perceber.
   {
     files: [...VIOLADORES_TEMPORARIOS_CORE, ...EXCECAO_PERMANENTE],
     rules: {
@@ -152,12 +207,6 @@ const eslintConfig = defineConfig([
         "error",
         { patterns: [FRONTEIRA_CORE_MODULES] },
       ],
-    },
-  },
-  {
-    files: VIOLADORES_TEMPORARIOS_MODULES,
-    rules: {
-      "no-restricted-imports": "off",
     },
   },
 ]);
