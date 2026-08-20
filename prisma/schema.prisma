@@ -47,6 +47,18 @@ enum WhatsappTipo {
   OUTRO
 }
 
+// NÃO recebe `companyId`. A mesma pessoa pode ter `Membership` em VÁRIAS
+// empresas (ADMIN na própria, VENDEDOR na de um cliente que ela atende) —
+// empresa é atributo do VÍNCULO, não da pessoa. `email` continua único
+// GLOBALMENTE, de propósito: é o mesmo login em qualquer empresa a que a
+// pessoa esteja vinculada.
+//
+// `papel` CONTINUA aqui ao fim desta tarefa, mesmo já existindo em
+// `Membership`. Não é descuido — é ordem: `usuarioAtual()` (Task 2 deste
+// ciclo) ainda lê esta coluna, e derrubá-la agora regeneraria o client do
+// Prisma sem `papel`, quebrando os 26 lugares que fazem `usuario.papel` antes
+// de existir a tarefa que os conserta. Ver a migração da Task 2 para o DROP e
+// a verificação que o protege.
 model User {
   id                 String         @id @default(cuid())
   nome               String
@@ -62,13 +74,68 @@ model User {
   auditLogs          AuditLog[]
   conversasPausadas  Conversation[] @relation("ConversasPausadas")
   botConfigsEditadas BotConfig[]    @relation("BotConfigsEditadas")
+  memberships        Membership[]
+}
+
+/// A empresa — fronteira de tenancy. Cada linha de dado de tenant (`Contact`,
+/// `Lead`, etc.) pertence a exatamente uma `Company`, via `companyId`.
+///
+/// Ciclo 1a mantém a UI servindo uma empresa só (decisão 4 do spec de
+/// tenancy: "sem seletor, sem tela de empresas") — este modelo existe para
+/// que o BANCO já imponha a fronteira antes de a aplicação ganhar uma tela
+/// que crie a segunda empresa.
+model Company {
+  id           String   @id @default(cuid())
+  nome         String
+  criadoEm     DateTime @default(now())
+  atualizadoEm DateTime @updatedAt
+
+  memberships       Membership[]
+  contacts          Contact[]
+  pipelineStages    PipelineStage[]
+  leads             Lead[]
+  leadNotes         LeadNote[]
+  tasks             Task[]
+  notifications     Notification[]
+  conversations     Conversation[]
+  whatsappMessages  WhatsappMessage[]
+  auditLogs         AuditLog[]
+  // `BotConfig?`, não `BotConfig[]`: `@@unique([companyId])` em BotConfig
+  // torna a relação 1-para-1 aos olhos do Prisma.
+  botConfig         BotConfig?
+}
+
+/// Vínculo entre pessoa e empresa, e é ONDE O PAPEL VIVE.
+///
+/// Papel é relação, não atributo: a mesma pessoa pode ser ADMIN na própria
+/// empresa e VENDEDOR na de um cliente que ela atende. Enquanto `papel` era
+/// coluna de `User`, isso era inexprimível.
+///
+/// `@@unique([userId, companyId])` porque dois vínculos da mesma pessoa com a
+/// mesma empresa não significam nada — e permitir isso faria a resolução de
+/// "qual papel?" depender de qual linha o banco devolvesse primeiro.
+model Membership {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  companyId String
+  company   Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  papel     Role
+  criadoEm  DateTime @default(now())
+
+  @@unique([userId, companyId])
+  // `usuarioAtual()` busca por userId em toda requisição.
+  @@index([userId])
+  @@index([companyId])
 }
 
 model Contact {
-  id       String  @id @default(cuid())
-  nome     String
-  telefone String  @unique
-  email    String?
+  id        String  @id @default(cuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id])
+  nome      String
+  telefone  String  @unique
+  email     String?
 
   // ─── Cadastro de pessoa ───────────────────────────────────────────────
   //
@@ -120,10 +187,13 @@ model Contact {
   // em todo `migrate diff`. Gatilho para reabrir: a agenda passar de alguns
   // milhares de linhas e a busca ficar lenta de verdade, medida.
   @@index([criadoEm])
+  @@index([companyId])
 }
 
 model PipelineStage {
   id        String  @id @default(cuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id])
   nome      String
   ordem     Int
   cor       String
@@ -131,7 +201,15 @@ model PipelineStage {
   ehPerdido Boolean @default(false)
   leads     Lead[]
 
+  // `@@unique([ordem])` continua GLOBAL, não `[companyId, ordem]`, de
+  // propósito NESTA tarefa: virar composta exigiria auditar cada consulta que
+  // hoje confia em `ordem` ser única sozinha (`core/pipeline/service.ts`), e
+  // essa é a classe de mudança que este ciclo empurra para depois — a UI
+  // continua servindo uma empresa só (decisão 4 do spec de tenancy), então
+  // nada quebra HOJE. Fica registrado como achado no relatório desta tarefa:
+  // é bloqueador para a SEGUNDA empresa existir, não para esta.
   @@unique([ordem])
+  @@index([companyId])
 }
 
 // TRÊS COLUNAS RESERVADAS, sem código que as leia ou escreva hoje: `itemId`,
@@ -151,6 +229,8 @@ model PipelineStage {
 // reaproveitar sem esse contexto é como herdar significado que nunca existiu.
 model Lead {
   id                String         @id @default(cuid())
+  companyId         String
+  company           Company        @relation(fields: [companyId], references: [id])
   contactId         String?
   contact           Contact?       @relation(fields: [contactId], references: [id])
   itemId            String?
@@ -181,16 +261,19 @@ model Lead {
   @@index([stageId, responsavelId])
   @@index([criadoEm])
   @@index([arquivadoEm])
+  @@index([companyId])
 }
 
 model LeadNote {
-  id       String   @id @default(cuid())
-  leadId   String
-  lead     Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
-  autorId  String
-  autor    User     @relation(fields: [autorId], references: [id])
-  texto    String
-  criadoEm DateTime @default(now())
+  id        String   @id @default(cuid())
+  companyId String
+  company   Company  @relation(fields: [companyId], references: [id])
+  leadId    String
+  lead      Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  autorId   String
+  autor     User     @relation(fields: [autorId], references: [id])
+  texto     String
+  criadoEm  DateTime @default(now())
   // Marca que o texto foi corrigido depois de escrito. Sem isto o histórico
   // mente por omissão: o texto muda e nada indica que mudou.
   editadoEm DateTime?
@@ -202,10 +285,13 @@ model LeadNote {
   // dizer isso em vez de fingir ganho: é seguro barato numa tabela que só
   // cresce.
   @@index([leadId, criadoEm])
+  @@index([companyId])
 }
 
 model Task {
   id            String    @id @default(cuid())
+  companyId     String
+  company       Company   @relation(fields: [companyId], references: [id])
   titulo        String
   descricao     String?
   vencimento    DateTime
@@ -237,25 +323,31 @@ model Task {
   // contato nesta branch, e índice sem consulta é peso morto na escrita.
   @@index([responsavelId, concluidaEm, vencimento])
   @@index([leadId, concluidaEm])
+  @@index([companyId])
 }
 
 model Notification {
-  id       String    @id @default(cuid())
-  userId   String
-  user     User      @relation(fields: [userId], references: [id])
-  tipo     String
-  payload  Json
-  lidaEm   DateTime?
-  criadoEm DateTime  @default(now())
+  id        String    @id @default(cuid())
+  companyId String
+  company   Company   @relation(fields: [companyId], references: [id])
+  userId    String
+  user      User      @relation(fields: [userId], references: [id])
+  tipo      String
+  payload   Json
+  lidaEm    DateTime?
+  criadoEm  DateTime  @default(now())
 
   // Task 19: listarNotificacoesNaoLidas (core/notifications/dispatch.ts) e o
   // sino de PainelNav consultam exatamente este par em toda navegação sob
   // (painel)/layout.tsx — ver o comentário lá sobre a decisão de custo.
   @@index([userId, lidaEm])
+  @@index([companyId])
 }
 
 model AuditLog {
   id         String   @id @default(cuid())
+  companyId  String
+  company    Company  @relation(fields: [companyId], references: [id])
   userId     String
   user       User     @relation(fields: [userId], references: [id])
   acao       String
@@ -271,6 +363,7 @@ model AuditLog {
   // a única do CRM sem índice numa tabela que só cresce. Igualdade antes de
   // faixa: `userId = ?` depois `criadoEm >= ?`.
   @@index([userId, criadoEm])
+  @@index([companyId])
 }
 
 model RateLimit {
@@ -299,6 +392,8 @@ model RateLimit {
  */
 model Conversation {
   id                    String            @id @default(cuid())
+  companyId             String
+  company               Company           @relation(fields: [companyId], references: [id])
   waId                  String            @unique
   telefone              String?
   contactId             String?
@@ -324,20 +419,27 @@ model Conversation {
   // A lista de conversas ordena por este campo em toda navegação para
   // /conversas — mesmo raciocínio do índice em `processandoAte`.
   @@index([aguardandoHumanoDesde])
+  @@index([companyId])
 }
 
-/// Configuração do agente de IA — LINHA ÚNICA, id fixo `bot-config`.
+/// Configuração do agente de IA — uma linha POR EMPRESA.
 ///
-/// A unicidade é imposta pelo banco, não por convenção: `id` tem valor default
-/// constante, então um segundo `create` sem id explícito colide na chave
-/// primária. Nenhum código precisa perguntar "qual das linhas é a certa".
+/// Era linha única, id fixo `bot-config`: um segundo `create` sem id
+/// explícito colidia na chave primária, e nenhum código precisava perguntar
+/// "qual das linhas é a certa". Config por empresa quebra esse truque —
+/// passariam a existir várias linhas legítimas, uma por `companyId`. A
+/// unicidade continua imposta pelo BANCO, não por convenção: agora é
+/// `@@unique([companyId])` em vez de PK constante — uma config por empresa,
+/// pelo mesmo motivo, por outro caminho.
 ///
 /// Semeada por `prisma/seed.ts` a partir de `config/bot.ts`. Em runtime a
 /// verdade é ESTA tabela — `config/bot.ts` só é lido pelo seed e pela ação
 /// explícita de restaurar ao padrão do fork, nunca no caminho de resposta ao
 /// cliente.
 model BotConfig {
-  id              String   @id @default("bot-config")
+  id              String   @id @default(cuid())
+  companyId       String
+  company         Company  @relation(fields: [companyId], references: [id])
   ativo           Boolean  @default(true)
   personaNome     String
   personaPapel    String
@@ -346,6 +448,8 @@ model BotConfig {
   atualizadoEm    DateTime @updatedAt
   atualizadoPorId String?
   atualizadoPor   User?    @relation("BotConfigsEditadas", fields: [atualizadoPorId], references: [id])
+
+  @@unique([companyId])
 }
 
 /**
@@ -365,6 +469,8 @@ model BotConfig {
  */
 model WhatsappMessage {
   id             String          @id @default(cuid())
+  companyId      String
+  company        Company         @relation(fields: [companyId], references: [id])
   conversationId String
   conversation   Conversation    @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   idExterno      String          @unique
@@ -377,5 +483,16 @@ model WhatsappMessage {
 
   // turno.ts filtra por (conversationId, direcao=ENTRADA, processadoEm=null)
   // a cada job — mesmo raciocínio do índice em Conversation.processandoAte.
+  //
+  // `companyId` NÃO entra como primeira coluna deste índice composto, e é
+  // decisão, não esquecimento: toda chamada real (turno.ts) já filtra por
+  // `conversationId`, uma FK de cardinalidade alta — cada conversa é UMA
+  // linha de Conversation, então `conversationId` sozinho já é mais seletivo
+  // do que `companyId` (que agrupa todas as conversas da empresa inteira)
+  // poderia ser como prefixo. Prefixar com `companyId` aqui não serviria
+  // nenhuma consulta existente, só engordaria o índice. `companyId` recebe o
+  // índice PRÓPRIO abaixo — é o que serve uma futura consulta que filtre por
+  // empresa sem passar por `conversationId`.
   @@index([conversationId, direcao, processadoEm])
+  @@index([companyId])
 }

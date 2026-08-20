@@ -13,7 +13,7 @@ import bcrypt from "bcryptjs";
 
 import { prisma } from "../src/lib/prisma";
 import { client } from "../config/client";
-import { BOT_CONFIG_ID, botConfig } from "../config/bot";
+import { botConfig } from "../config/bot";
 import { ID_SISTEMA_WHATSAPP } from "../src/core/users/sistema";
 
 // Id estável e legível (não um cuid gerado) — Fatia 1 do WhatsApp
@@ -76,6 +76,16 @@ const CORES = ["#94a3b8", "#60a5fa", "#fbbf24", "#f97316", "#22c55e"];
  *   apontando para ele.
  */
 export async function seed(): Promise<void> {
+  // Empresa única do Ciclo 1a (a UI continua servindo uma empresa só — ver
+  // decisão 4 do spec de tenancy). `Company` não tem chave natural (nome não
+  // é `@unique` no schema — duas empresas podem legitimamente ter o mesmo
+  // nome), então não dá para fazer `upsert`. A idempotência aqui é "existe
+  // alguma? usa essa. não existe nenhuma? cria UMA" — mesmo padrão do funil
+  // logo abaixo (`quantasEtapasExistem === 0`): sem isso, rodar o seed duas
+  // vezes criaria uma segunda empresa a cada execução.
+  const empresaExistente = await prisma.company.findFirst();
+  const empresa = empresaExistente ?? (await prisma.company.create({ data: { nome: client.nome } }));
+
   // O funil só nasce do config na PRIMEIRA vez. Depois disso quem manda é o
   // banco, porque `/etapas` (ADMIN) cria, renomeia, recolore, reordena e
   // remove etapa.
@@ -90,6 +100,7 @@ export async function seed(): Promise<void> {
     for (const [index, nome] of client.funil.entries()) {
       await prisma.pipelineStage.create({
         data: {
+          companyId: empresa.id,
           nome,
           ordem: index,
           cor: CORES[index % CORES.length],
@@ -137,15 +148,17 @@ export async function seed(): Promise<void> {
     update: atualizarSenhaNaReexecucao ? { senhaHash } : {},
     create: { nome: "Admin Exemplo", email: "admin@exemplo.com", senhaHash, papel: "ADMIN" },
   });
+  await vincularAEmpresa(admin.id, empresa.id, admin.papel);
 
   const vendedor = await prisma.user.upsert({
     where: { email: "vendedor@exemplo.com" },
     update: atualizarSenhaNaReexecucao ? { senhaHash } : {},
     create: { nome: "Vendedor Exemplo", email: "vendedor@exemplo.com", senhaHash, papel: "VENDEDOR" },
   });
+  await vincularAEmpresa(vendedor.id, empresa.id, vendedor.papel);
 
-  await semearUsuarioSistemaWhatsapp();
-  await semearBotConfig();
+  await semearUsuarioSistemaWhatsapp(empresa.id);
+  await semearBotConfig(empresa.id);
 
   const primeiraEtapa = await prisma.pipelineStage.findFirstOrThrow({ orderBy: { ordem: "asc" } });
 
@@ -154,13 +167,14 @@ export async function seed(): Promise<void> {
     const contact = await prisma.contact.upsert({
       where: { telefone: `1199999000${i}` },
       update: {},
-      create: { nome: nomes[i], telefone: `1199999000${i}` },
+      create: { companyId: empresa.id, nome: nomes[i], telefone: `1199999000${i}` },
     });
 
     const leadExistente = await prisma.lead.findFirst({ where: { contactId: contact.id } });
     if (!leadExistente) {
       await prisma.lead.create({
         data: {
+          companyId: empresa.id,
           contactId: contact.id,
           stageId: primeiraEtapa.id,
           responsavelId: i % 2 === 0 ? admin.id : vendedor.id,
@@ -171,6 +185,23 @@ export async function seed(): Promise<void> {
   }
 
   console.log("Seed concluído.");
+}
+
+/**
+ * Cria (ou confirma) o `Membership` de um usuário com a empresa semeada,
+ * carregando o mesmo `papel` que a coluna `User.papel` já declara.
+ *
+ * `upsert` por `userId_companyId` (a chave de `@@unique([userId, companyId])`)
+ * em vez de "existe? não cria de novo": mesma forma que o resto deste arquivo
+ * usa para idempotência, e cobre o caso de alguém rodar o seed depois de MUDAR
+ * `papel` no código de um usuário de exemplo — o vínculo acompanha.
+ */
+async function vincularAEmpresa(userId: string, companyId: string, papel: "ADMIN" | "GESTOR" | "VENDEDOR"): Promise<void> {
+  await prisma.membership.upsert({
+    where: { userId_companyId: { userId, companyId } },
+    update: { papel },
+    create: { userId, companyId, papel },
+  });
 }
 
 /**
@@ -230,14 +261,24 @@ async function confirmarInvarianteEhGanho(): Promise<void> {
  * silenciosamente algo que dependesse dele permanecer estável entre
  * execuções (nada depende hoje, mas não há motivo para reescrever à toa).
  */
-async function semearUsuarioSistemaWhatsapp(): Promise<void> {
+async function semearUsuarioSistemaWhatsapp(companyId: string): Promise<void> {
   const existente = await prisma.user.findUnique({ where: { id: WHATSAPP_SYSTEM_USER_ID } });
-  if (existente) return;
+  if (existente) {
+    // Já existia (banco semeado antes desta tarefa, por exemplo): ainda
+    // assim precisa ter Membership, senão vira o único User sem vínculo —
+    // exatamente o estado que a Task 2 deste ciclo trata como sessão
+    // inválida. Este usuário nunca autentica (ver `ativo: false` abaixo), mas
+    // ficar sem Membership o deixaria fora da invariante "todo User tem pelo
+    // menos um Membership com o papel que `User.papel` declara", que a
+    // migração da Task 2 confere antes de derrubar a coluna.
+    await vincularAEmpresa(existente.id, companyId, existente.papel);
+    return;
+  }
 
   const senhaAleatoriaDescartada = crypto.randomBytes(32).toString("hex");
   const senhaHash = await bcrypt.hash(senhaAleatoriaDescartada, 10);
 
-  await prisma.user.create({
+  const sistema = await prisma.user.create({
     data: {
       id: WHATSAPP_SYSTEM_USER_ID,
       nome: "Atendente WhatsApp (sistema)",
@@ -247,27 +288,34 @@ async function semearUsuarioSistemaWhatsapp(): Promise<void> {
       ativo: false,
     },
   });
+  await vincularAEmpresa(sistema.id, companyId, sistema.papel);
 }
 
 /**
- * Semeia a linha única de `BotConfig` a partir de `config/bot.ts`.
+ * Semeia a linha de `BotConfig` DESTA empresa a partir de `config/bot.ts`.
  *
- * Cria se não existe; NUNCA atualiza. O seed roda em todo deploy — um upsert
- * aqui desfaria, silenciosamente, toda edição feita pelo CRM desde o deploy
- * anterior. Mesmo raciocínio de `semearUsuarioSistemaWhatsapp` logo acima, e
- * deliberadamente DIFERENTE do upsert usado para `PipelineStage`: aquelas são
- * estrutura definida pelo fork, esta é conteúdo editável pelo usuário.
+ * Cria se não existe (para esta `companyId`); NUNCA atualiza. O seed roda em
+ * todo deploy — um upsert aqui desfaria, silenciosamente, toda edição feita
+ * pelo CRM desde o deploy anterior. Mesmo raciocínio de
+ * `semearUsuarioSistemaWhatsapp` logo acima, e deliberadamente DIFERENTE do
+ * upsert usado para `PipelineStage`: aquelas são estrutura definida pelo
+ * fork, esta é conteúdo editável pelo usuário.
+ *
+ * Busca por `companyId` (a chave de `@@unique([companyId])`), não mais por
+ * `id` — `BotConfig.id` deixou de ter valor constante nesta tarefa (Ciclo 1a:
+ * config por empresa quebra o truque de linha única por PK fixa). `BOT_CONFIG_ID`
+ * de `config/bot.ts` não é mais lido aqui.
  *
  * Para voltar ao conteúdo do arquivo existe um caminho explícito: o botão
  * "voltar ao padrão do fork" na tela do agente.
  */
-export async function semearBotConfig(): Promise<void> {
-  const existente = await prisma.botConfig.findUnique({ where: { id: BOT_CONFIG_ID } });
+export async function semearBotConfig(companyId: string): Promise<void> {
+  const existente = await prisma.botConfig.findUnique({ where: { companyId } });
   if (existente) return;
 
   await prisma.botConfig.create({
     data: {
-      id: BOT_CONFIG_ID,
+      companyId,
       personaNome: botConfig.persona.nome,
       personaPapel: botConfig.persona.papel,
       regras: botConfig.regras,
