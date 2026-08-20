@@ -65,9 +65,12 @@ vi.mock("@/core/tenancy/escopo", () => ({
 // reconhecível para a asserção de "a linha nasce DENTRO da transação".
 vi.mock("@/core/audit/log", () => ({
   registrarAuditoria: vi.fn(),
-  dadosDeLinhaDeAuditoria: (params: { acao: string }, companyId: string) => ({
+  // A empresa vem de DENTRO de `params` desde o Ciclo 1d — `ParamsDeAuditoria`
+  // ganhou `companyId` obrigatorio, e o segundo parametro que existia aqui
+  // sumiu. Duas portas para a mesma empresa so criariam a chance de discordarem.
+  dadosDeLinhaDeAuditoria: (params: { acao: string; companyId: string }) => ({
     acao: params.acao,
-    companyId,
+    companyId: params.companyId,
   }),
 }));
 

@@ -555,6 +555,10 @@ describe("GET /export/leads — auditoria da extração em massa", () => {
     expect(resposta.status).toBe(200);
     expect(registrarAuditoriaMock).toHaveBeenCalledTimes(1);
     expect(registrarAuditoriaMock).toHaveBeenCalledWith({
+      // A empresa da SESSAO: `AuditLog` e modelo de tenant, e desde o Ciclo 1d
+      // `registrarAuditoria` a recebe explicita em vez de deduzi-la de um
+      // vinculo arbitrario do autor.
+      companyId: EMPRESA_FAKE,
       userId: "gestor-7",
       acao: "exportar_leads",
       entidade: "Lead",

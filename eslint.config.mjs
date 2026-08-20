@@ -418,11 +418,12 @@ const VIOLADORES_TEMPORARIOS_APP = [];
 //   deixa a suíte vermelha.
 //
 //   Ele continua sendo o MULTIPLICADOR que a anotação antiga descrevia, e o
-//   Ciclo 1d cortou os dois piores usos: `audit/log.ts` e `audit/alerta.ts`
-//   deixaram de tirar a empresa daqui. Sobram 6 chamadas, em `leads/service.ts`
-//   (2), `leads/notes.ts` (3) e `tasks/service.ts` (1) — todas com o mesmo
-//   limite conhecido, o `findFirstOrThrow` que pega um vínculo ARBITRÁRIO de
-//   quem tem dois. Isso é dívida do Ciclo 2 (a origem passa a ser
+//   Ciclo 1d cortou três usos: `audit/log.ts`, `audit/alerta.ts` e
+//   `tasks/service.ts` deixaram de tirar a empresa daqui. Sobram 9 chamadas,
+//   medidas em 2026-08-20 com `grep -rn "await companyIdDoUsuario" src/`:
+//   `leads/service.ts` (6) e `leads/notes.ts` (3) — todas com o mesmo limite
+//   conhecido, o `findFirstOrThrow` que pega um vínculo ARBITRÁRIO de quem tem
+//   dois. Isso é dívida do Ciclo 2 (a origem passa a ser
 //   `UsuarioAtivo.companyId`), não coisa que converter este arquivo resolva.
 const EXCECAO_PERMANENTE = [
   "src/core/auth/credenciais.ts",

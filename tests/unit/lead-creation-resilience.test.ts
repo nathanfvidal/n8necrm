@@ -119,7 +119,9 @@ describe("criarLead — resiliência a falha do módulo de notificação (spec s
 
       // Prova que a falha realmente veio de notificarNovoLead sendo
       // chamada (não de um caminho que a pulou por engano).
-      expect(notificarNovoLeadMock).toHaveBeenCalledWith(lead.id);
+      // `companyId` como PRIMEIRO parametro desde o Ciclo 1d: `notificarNovoLead`
+      // le `Lead` pelo cliente escopado, e `criarLead` ja tinha a empresa em maos.
+      expect(notificarNovoLeadMock).toHaveBeenCalledWith(lead.companyId, lead.id);
     }
   );
 });
