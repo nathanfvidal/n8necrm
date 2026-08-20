@@ -1,4 +1,4 @@
-import { prisma } from "@/lib/prisma";
+import { prismaDaEmpresa } from "@/core/tenancy/escopo";
 import { aplicarTeto, LIMITE_LISTAGEM, type Listagem } from "@/core/listagem";
 import { formatarValorBR } from "@/lib/dinheiro";
 import type { Lead, Contact, User, PipelineStage } from "@prisma/client";
@@ -79,13 +79,17 @@ export type LeadListado = Lead & {
  * funil aparece como chave, mesmo sem nenhum lead (array vazio), para que a
  * UI não precise checar existência antes de renderizar uma coluna.
  */
-export async function listarLeadsPorEtapa(opcoes?: {
-  /** Só para teste — ver `listarLeads`. */
-  limite?: number;
-}): Promise<{ porEtapa: Record<string, LeadDoQuadro[]>; truncado: boolean }> {
+export async function listarLeadsPorEtapa(
+  companyId: string,
+  opcoes?: {
+    /** Só para teste — ver `listarLeads`. */
+    limite?: number;
+  }
+): Promise<{ porEtapa: Record<string, LeadDoQuadro[]>; truncado: boolean }> {
   const limite = opcoes?.limite ?? LIMITE_LISTAGEM;
-  const etapas = await prisma.pipelineStage.findMany({ orderBy: { ordem: "asc" } });
-  const linhas = await prisma.lead.findMany({
+  const db = prismaDaEmpresa(companyId);
+  const etapas = await db.pipelineStage.findMany({ orderBy: { ordem: "asc" } });
+  const linhas = await db.lead.findMany({
     // Teto no TOTAL de leads carregados, não por coluna. Um teto por coluna
     // exigiria uma consulta por etapa; este basta para o que o teto existe
     // para fazer — impedir que uma única requisição carregue a tabela
@@ -162,8 +166,8 @@ export async function listarLeadsPorEtapa(opcoes?: {
  * arquivado sai do funil por definição, e as somas do painel são o lugar onde
  * um arquivado reaparecendo mentiria mais.
  */
-export async function contarLeadsPorEtapa(): Promise<Record<string, number>> {
-  const grupos = await prisma.lead.groupBy({
+export async function contarLeadsPorEtapa(companyId: string): Promise<Record<string, number>> {
+  const grupos = await prismaDaEmpresa(companyId).lead.groupBy({
     by: ["stageId"],
     where: { arquivadoEm: null },
     _count: { _all: true },
@@ -195,27 +199,40 @@ export async function contarLeadsPorEtapa(): Promise<Record<string, number>> {
  * errada por decisão de produto, não só por bug de superfície — daí ter sido
  * removida aqui em vez de espalhada para as outras telas.
  */
-export async function listarLeads(opcoes?: {
-  incluirArquivados?: boolean;
+export async function listarLeads(
   /**
-   * Desliga o teto. Existe para UM chamador: a exportação CSV
-   * (`app/(painel)/export/leads/route.ts`), onde truncar seria pior que
-   * qualquer coisa — um arquivo com 1000 de 1500 leads, indistinguível de um
-   * arquivo completo, viraria decisão de negócio tomada sobre dado faltando.
-   * Aquela rota já documenta o próprio teto de escala e o sintoma de quando
-   * ele chegar.
+   * O escopo, explícito e POSICIONAL — não um campo a mais dentro de
+   * `opcoes`. A diferença importa: como campo opcional, uma chamada existente
+   * continuaria compilando sem escopo nenhum, e o compilador ficaria calado
+   * exatamente onde o silêncio custa caro. Como primeiro parâmetro
+   * obrigatório, TODA chamada precisou ser revisitada nesta tarefa.
    *
-   * O padrão é COM teto, e não o contrário, pelo mesmo raciocínio de
-   * `incluirArquivados` logo abaixo: chamada nova que esqueça o parâmetro erra
-   * para o lado seguro.
+   * A origem em produção é `UsuarioAtivo.companyId` (`core/auth/session.ts`),
+   * nunca um parâmetro vindo do cliente e nunca `prisma.company.findFirst()`.
    */
-  semTeto?: boolean;
-  /** Só para teste — permite exercitar o truncamento sem criar 1001 linhas. */
-  limite?: number;
-}): Promise<Listagem<LeadListado>> {
+  companyId: string,
+  opcoes?: {
+    incluirArquivados?: boolean;
+    /**
+     * Desliga o teto. Existe para UM chamador: a exportação CSV
+     * (`app/(painel)/export/leads/route.ts`), onde truncar seria pior que
+     * qualquer coisa — um arquivo com 1000 de 1500 leads, indistinguível de um
+     * arquivo completo, viraria decisão de negócio tomada sobre dado faltando.
+     * Aquela rota já documenta o próprio teto de escala e o sintoma de quando
+     * ele chegar.
+     *
+     * O padrão é COM teto, e não o contrário, pelo mesmo raciocínio de
+     * `incluirArquivados` acima: chamada nova que esqueça o parâmetro erra
+     * para o lado seguro.
+     */
+    semTeto?: boolean;
+    /** Só para teste — permite exercitar o truncamento sem criar 1001 linhas. */
+    limite?: number;
+  }
+): Promise<Listagem<LeadListado>> {
   const limite = opcoes?.limite ?? LIMITE_LISTAGEM;
 
-  const linhas = await prisma.lead.findMany({
+  const linhas = await prismaDaEmpresa(companyId).lead.findMany({
     // Filtra arquivados por PADRÃO — quem quiser vê-los pede explicitamente
     // (o alternador "mostrar arquivados" da tela `/leads`). O padrão seguro é
     // o de esconder: uma chamada nova que esqueça o parâmetro erra para o lado

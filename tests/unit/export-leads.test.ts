@@ -8,6 +8,7 @@
 // DATABASE_URL — este arquivo testa só a rota, não o banco.
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { User, Lead, Contact, PipelineStage } from "@prisma/client";
+import type { UsuarioAtivo } from "@/core/auth/usuario-ativo";
 
 const usuarioAtualMock = vi.fn();
 vi.mock("@/core/auth/session", () => ({ usuarioAtual: () => usuarioAtualMock() }));
@@ -63,15 +64,29 @@ function requisicaoFake(ip = "203.0.113.7"): Request {
   });
 }
 
-function usuarioFake(overrides: Partial<User>): User {
+/**
+ * `UsuarioAtivo`, e NÃO `User` do Prisma.
+ *
+ * Era `User` — com `senhaHash` e `criadoEm`, sem `companyId`. Isso deixou de
+ * descrever o que `usuarioAtual()` devolve quando a Task 2 do Ciclo 1a trocou
+ * o retorno por `UsuarioAtivo` (`core/auth/usuario-ativo.ts`): a projeção sem
+ * hash de senha, com a EMPRESA da requisição e o papel vindo do `Membership`.
+ *
+ * Enquanto o mock mentia sobre a forma, a rota podia ler `usuario.companyId` e
+ * receber `undefined` sem nenhum caso ficar vermelho — o teste passaria por
+ * cima de uma exportação sem escopo, que é justamente o que esta rota não pode
+ * fazer (ela tira a base inteira de clientes num arquivo só).
+ */
+const EMPRESA_FAKE = "empresa-fake-id";
+
+function usuarioFake(overrides: Partial<UsuarioAtivo>): UsuarioAtivo {
   return {
     id: "usuario-fake-id",
     nome: "Usuário Fake",
     email: "fake@teste.local",
-    senhaHash: "hash",
     papel: "ADMIN",
     ativo: true,
-    criadoEm: new Date("2026-01-01T00:00:00.000Z"),
+    companyId: EMPRESA_FAKE,
     ...overrides,
   };
 }
@@ -164,7 +179,10 @@ describe("GET /export/leads — a exportacao nunca e' truncada", () => {
 
     await GET(requisicaoFake());
 
-    expect(listarLeadsArgsMock).toHaveBeenCalledWith({ semTeto: true });
+    // A empresa vem de `usuarioAtual().companyId`, e é o primeiro
+    // argumento — não um campo dentro de `opcoes`, e nunca algo vindo da
+    // requisição. Ver `listarLeads` em `core/leads/queries.ts`.
+    expect(listarLeadsArgsMock).toHaveBeenCalledWith(EMPRESA_FAKE, { semTeto: true });
   });
 });
 

@@ -83,7 +83,7 @@ describe("contarLeadsQueSeguramEtapa", () => {
 
     try {
       const { contarLeadsPorEtapa } = await import("../../src/core/leads/queries");
-      const ativos = await contarLeadsPorEtapa();
+      const ativos = await contarLeadsPorEtapa(empresa.id);
       const seguram = await contarLeadsQueSeguramEtapa();
 
       // A distinção inteira em duas linhas: o funil não vê o arquivado, a FK vê.

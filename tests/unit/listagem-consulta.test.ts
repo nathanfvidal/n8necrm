@@ -19,15 +19,25 @@ import { semComentarios } from "./helpers/codigo-fonte";
 
 vi.mock("server-only", () => ({}));
 
+const EMPRESA = "empresa-do-teste";
+
 const findManyMock = vi.fn();
 const groupByMock = vi.fn();
-vi.mock("@/lib/prisma", () => ({
-  prisma: {
+
+// O mock é do CLIENTE ESCOPADO, não do `prisma` cru — `queries.ts` deixou de
+// importar `@/lib/prisma` no Ciclo 1a (Task 4). `prismaDaEmpresa` devolve o
+// banco falso direto, sem a extensão do Prisma no caminho: nada aqui prova que
+// `companyId` chega à consulta, e provar isso é
+// `tests/unit/lead-isolamento.test.ts`, contra duas empresas de verdade. O que
+// este arquivo prova continua sendo a FORMA da consulta — que o `take` existe
+// e que a contagem do painel não passa por `findMany`.
+vi.mock("@/core/tenancy/escopo", () => ({
+  prismaDaEmpresa: () => ({
     lead: {
       findMany: (...args: unknown[]) => findManyMock(...args),
       groupBy: (...args: unknown[]) => groupByMock(...args),
     },
-  },
+  }),
 }));
 
 const { listarLeads, contarLeadsPorEtapa } = await import("../../src/core/leads/queries");
@@ -45,7 +55,7 @@ function argumentos(): Record<string, unknown> {
 
 describe("listarLeads — forma da consulta", () => {
   it("pede ao banco LIMITE + 1 linhas por padrao", async () => {
-    await listarLeads();
+    await listarLeads(EMPRESA);
 
     expect(argumentos().take).toBe(LIMITE_LISTAGEM + 1);
   });
@@ -54,23 +64,23 @@ describe("listarLeads — forma da consulta", () => {
   // `limite` linhas" de "`limite` e tem mais". Pedir exatamente `limite`
   // tornaria impossível saber se truncou, e o aviso na tela viraria chute.
   it("com limite explicito, pede limite + 1 — nunca o limite cru", async () => {
-    await listarLeads({ limite: 25 });
+    await listarLeads(EMPRESA, { limite: 25 });
 
     expect(argumentos().take).toBe(26);
   });
 
   it("semTeto NAO manda take nenhum — a exportacao precisa de tudo", async () => {
-    await listarLeads({ semTeto: true });
+    await listarLeads(EMPRESA, { semTeto: true });
 
     expect(argumentos().take).toBeUndefined();
   });
 
   it("o teto nao atropela o filtro de arquivados", async () => {
-    await listarLeads();
+    await listarLeads(EMPRESA);
     expect(argumentos().where).toEqual({ arquivadoEm: null });
 
     findManyMock.mockClear();
-    await listarLeads({ incluirArquivados: true });
+    await listarLeads(EMPRESA, { incluirArquivados: true });
     expect(argumentos().where).toEqual({});
   });
 });
@@ -93,7 +103,7 @@ describe("listarLeads — forma da consulta", () => {
  */
 describe("contarLeadsPorEtapa — o painel conta sem teto", () => {
   it("usa groupBy, e nao findMany", async () => {
-    await contarLeadsPorEtapa();
+    await contarLeadsPorEtapa(EMPRESA);
 
     expect(groupByMock).toHaveBeenCalledTimes(1);
     // A asserção que dá o alarme de verdade: `findMany` é o que traz o teto
@@ -102,7 +112,7 @@ describe("contarLeadsPorEtapa — o painel conta sem teto", () => {
   });
 
   it("agrupa por etapa e nao limita quantas etapas volta", async () => {
-    await contarLeadsPorEtapa();
+    await contarLeadsPorEtapa(EMPRESA);
 
     const args = groupByMock.mock.calls[0][0] as Record<string, unknown>;
     expect(args.by).toEqual(["stageId"]);
@@ -116,7 +126,7 @@ describe("contarLeadsPorEtapa — o painel conta sem teto", () => {
       { stageId: "etapa-b", _count: { _all: 0 } },
     ]);
 
-    expect(await contarLeadsPorEtapa()).toEqual({ "etapa-a": 7, "etapa-b": 0 });
+    expect(await contarLeadsPorEtapa(EMPRESA)).toEqual({ "etapa-a": 7, "etapa-b": 0 });
   });
 
   it("a pagina do painel usa a contagem, nunca a listagem com teto", () => {

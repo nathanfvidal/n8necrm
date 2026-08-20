@@ -70,12 +70,20 @@ async function limparDadosDeTeste() {
 describe("notas de lead", () => {
   let usuarioId: string;
   let leadId: string;
+  // A empresa vem do VÍNCULO do autor, não de uma string fixa: `listarNotas`
+  // passou a exigir o escopo no Ciclo 1a (Task 4), e em produção ele sai de
+  // `UsuarioAtivo.companyId`, que é `Membership.companyId`.
+  let companyId: string;
 
   beforeAll(async () => {
     await limparDadosDeTeste();
 
-    const usuario = await prisma.user.findFirstOrThrow({ where: { papel: "ADMIN", ativo: true } });
+    const usuario = await prisma.user.findFirstOrThrow({
+      where: { papel: "ADMIN", ativo: true },
+      include: { memberships: true },
+    });
     usuarioId = usuario.id;
+    companyId = usuario.memberships[0]!.companyId;
     const lead = await criarLead({
       nome: "Teste Notas",
       telefone: TELEFONE_TESTE,
@@ -97,13 +105,13 @@ describe("notas de lead", () => {
   it("lista as notas em ordem cronológica reversa", async () => {
     await adicionarNota({ leadId, autorId: usuarioId, texto: "Primeira" });
     await adicionarNota({ leadId, autorId: usuarioId, texto: "Segunda" });
-    const notas = await listarNotas(leadId);
+    const notas = await listarNotas(leadId, companyId);
     expect(notas[0].texto).toBe("Segunda");
   });
 
   it("lista as notas com o autor incluído — a página de detalhe mostra quem escreveu", async () => {
     await adicionarNota({ leadId, autorId: usuarioId, texto: "Nota com autor" });
-    const notas = await listarNotas(leadId);
+    const notas = await listarNotas(leadId, companyId);
     expect(notas[0].autor).toBeTruthy();
     expect(notas[0].autor.id).toBe(usuarioId);
   });

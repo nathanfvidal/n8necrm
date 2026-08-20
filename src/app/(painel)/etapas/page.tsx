@@ -28,7 +28,7 @@ export default async function EtapasPage() {
 
   const [etapas, ativosPorEtapa, totaisPorEtapa] = await Promise.all([
     listarEtapas(),
-    contarLeadsPorEtapa(),
+    contarLeadsPorEtapa(usuario.companyId),
     contarLeadsQueSeguramEtapa(),
   ]);
 

@@ -1,10 +1,10 @@
-import { prisma } from "@/lib/prisma";
+import { prismaDaEmpresa } from "@/core/tenancy/escopo";
 import { encontrarOuCriarContact } from "./dedupe";
 import { registrarAuditoria } from "@/core/audit/log";
 import { notificarNovoLead } from "@/core/notifications/dispatch";
 import { companyIdDoUsuario } from "@/core/users/empresa";
 import { parseValorBR } from "@/lib/dinheiro";
-import type { Lead } from "@prisma/client";
+import type { Lead, Prisma } from "@prisma/client";
 
 /**
  * Erro de lead que é SEGURO mostrar a quem preencheu o formulário — mesmo
@@ -24,6 +24,125 @@ export class LeadInvalidoError extends Error {
 }
 
 /**
+ * O cliente escopado, como tipo — para os auxiliares abaixo poderem recebê-lo
+ * sem repetir o `ReturnType` em cada assinatura.
+ */
+type ClienteDaEmpresa = ReturnType<typeof prismaDaEmpresa>;
+
+/**
+ * Confere que `responsavelId` é **pessoa DESTA empresa**, e devolve o que as
+ * chamadoras precisam ler dela.
+ *
+ * ## O achado que criou esta função
+ *
+ * Os três pontos que atribuem responsável (`criarLead`, `atualizarLead`,
+ * `criarLeadDeWhatsapp`) faziam `prisma.user.findUnique({ where: { id } })` e
+ * conferiam que a pessoa EXISTE e está ATIVA — nunca que ela é da mesma
+ * empresa. Server Action é endpoint HTTP público: o `<select>` da tela não é a
+ * fronteira, o serviço é. Um `responsavelId` de outra empresa passava, e o
+ * lead nascia (ou era reatribuído) com dono de fora — que então recebia
+ * notificação in-app e e-mail sobre o cliente de um terceiro
+ * (`core/notifications/dispatch.ts`).
+ *
+ * ## Por que `Membership`, e não `User` com um `where: { companyId }`
+ *
+ * Porque `User` não tem `companyId` — de propósito, e o schema diz o porquê
+ * na linha 50: "A mesma pessoa pode ter `Membership` em VÁRIAS" empresas. É o
+ * VÍNCULO que define "pessoa desta empresa". Mesmo caminho já percorrido por
+ * `core/audit/alerta.ts` (commit 3744e64, destinatários do alerta de rajada) e
+ * `src/modules/whatsapp/notificacoes.ts` (commit 63cecd2, destinatários do
+ * aviso de conversa) — os dois tinham a mesma forma de defeito e a mesma cura.
+ *
+ * `Membership` É modelo de tenant, então o `findFirst` abaixo sai do cliente
+ * escopado já com `companyId` injetado: não existe aqui um filtro de empresa
+ * escrito à mão que alguém possa esquecer numa edição futura.
+ *
+ * ## A mensagem é a MESMA de "não existe"
+ *
+ * De propósito. Distinguir "não existe" de "existe, mas é de outra empresa"
+ * confirmaria, a quem sonda ids, que aquele cuid pertence a alguém — mesmo sem
+ * dizer a quem. Mesmo raciocínio de `editarNota` (`notes.ts`) e de
+ * `buscarUsuario` (`core/users/queries.ts`). O texto é preservado palavra por
+ * palavra porque `actions.ts` o reconhece por prefixo (`MENSAGENS_MELHORADAS`,
+ * `/^Responsável não encontrado/`) para trocá-lo por uma frase de tela.
+ */
+async function responsavelDaEmpresa(
+  db: ClienteDaEmpresa,
+  responsavelId: string
+): Promise<{ nome: string; ativo: boolean }> {
+  const vinculo = await db.membership.findFirst({
+    where: { userId: responsavelId },
+    // `select` campo a campo: `senhaHash` não tem por que sair do banco para
+    // conferir um vínculo. Mesma regra de `CAMPOS_SEGUROS_USER`
+    // (`core/users/queries.ts`).
+    select: { user: { select: { nome: true, ativo: true } } },
+  });
+
+  if (!vinculo) {
+    throw new Error(
+      `Responsável não encontrado: "${responsavelId}" não corresponde a nenhum usuário.`
+    );
+  }
+
+  return vinculo.user;
+}
+
+/**
+ * A primeira etapa do funil DESTA empresa.
+ *
+ * Era `prisma.pipelineStage.findFirstOrThrow({ orderBy: { ordem: "asc" } })`,
+ * sem empresa nenhuma: o lead nascia na etapa de menor `ordem` do banco
+ * INTEIRO. Hoje isso é inofensivo por acidente — `PipelineStage` ainda tem
+ * `@@unique([ordem])` GLOBAL (`prisma/schema.prisma`), o que impede duas
+ * empresas de terem uma etapa "1" cada — mas essa unicidade global é uma
+ * pendência registrada do ciclo, bloqueadora da segunda empresa, e no dia em
+ * que virar `[companyId, ordem]` a consulta sem escopo passa a devolver a
+ * etapa de outra empresa sem nenhum erro. Escopar agora custa nada e remove a
+ * dependência de um acidente.
+ *
+ * A unicidade global NÃO é mexida aqui: é item à parte, com migração e
+ * auditoria das consultas que hoje confiam em `ordem` ser única sozinha
+ * (`core/pipeline/service.ts`).
+ */
+function primeiraEtapaDoFunil(db: ClienteDaEmpresa) {
+  return db.pipelineStage.findFirstOrThrow({ orderBy: { ordem: "asc" } });
+}
+
+/**
+ * `update` por id, reescrita como a equivalente escopável.
+ *
+ * O escopo RECUSA `update` em modelo de tenant, lançando: o `where` dela só
+ * aceita campo único, e `companyId` não é único em `Lead` — não existe onde
+ * pendurar o filtro, e deixar passar sem filtro deixaria qualquer id alcançar
+ * a linha de outra empresa (ver "Recusa, lançando" em
+ * `core/tenancy/escopo.ts`). `updateManyAndReturn` é a equivalente: o escopo
+ * injeta `companyId` no `where` E confere o `data`, e ela devolve as linhas
+ * atualizadas, que é o que as chamadoras precisam para auditar o "depois".
+ *
+ * Lista vazia significa que o `where` composto (`id` + `companyId` do escopo)
+ * não casou com nenhuma linha. As chamadoras já leram o lead antes, com o
+ * mesmo escopo, então isso só acontece se a linha sumir entre as duas
+ * consultas — corrida real, ainda que rara. Lançar aqui é o que impede o
+ * `[0]` de virar `undefined` e o erro aparecer três linhas adiante, sem
+ * relação visível com a causa.
+ */
+async function atualizarLeadEscopado(
+  db: ClienteDaEmpresa,
+  leadId: string,
+  data: Prisma.LeadUncheckedUpdateManyInput
+): Promise<Lead> {
+  const [depois] = await db.lead.updateManyAndReturn({ where: { id: leadId }, data });
+
+  if (!depois) {
+    throw new Error(
+      `Lead não encontrado ao gravar: "${leadId}" não está mais no escopo desta empresa.`
+    );
+  }
+
+  return depois;
+}
+
+/**
  * Cria um lead a partir de entrada manual (formulário interno).
  *
  * `autorId` é explícito aqui de propósito: esta função é a camada testável
@@ -37,7 +156,7 @@ export class LeadInvalidoError extends Error {
  * Deixamos essa exceção propagar como está: a mensagem já é redigida para
  * ser lida por quem preencheu o formulário ("Telefone inválido: ... "), não
  * vaza detalhe de infraestrutura, e nenhum Contact/Lead chega a ser
- * gravado — o `await` abaixo nunca chega ao `prisma.lead.create` nesse caso.
+ * gravado — o `await` abaixo nunca chega ao `db.lead.create` nesse caso.
  * `actions.ts` decide o que fazer com ela na borda pública.
  *
  * `responsavelId` chega, em produção, de `criarLeadManualAction` (`actions.ts`) —
@@ -46,9 +165,13 @@ export class LeadInvalidoError extends Error {
  * `novaStageId` em `moverEtapa` abaixo e `leadId` em `criarTask`
  * (`tasks/service.ts`). `Lead.responsavelId` é uma FK opcional para `User`,
  * então um id que não corresponde a nenhum usuário faria o
- * `prisma.lead.create` abaixo estourar uma violação de constraint (`P2003`)
+ * `db.lead.create` abaixo estourar uma violação de constraint (`P2003`)
  * crua do Postgres em vez de um erro de domínio legível — mesma razão da
  * checagem explícita em `moverEtapa`.
+ *
+ * Desde o Ciclo 1a, Task 4, o `responsavelId` também precisa ter VÍNCULO com
+ * a empresa do autor — ver `responsavelDaEmpresa` acima, onde está o achado
+ * que motivou a mudança.
  */
 export async function criarLead(input: {
   nome: string;
@@ -57,12 +180,17 @@ export async function criarLead(input: {
   responsavelId: string;
   autorId: string;
 }): Promise<Lead> {
-  const responsavel = await prisma.user.findUnique({ where: { id: input.responsavelId } });
-  if (!responsavel) {
-    throw new Error(
-      `Responsável não encontrado: "${input.responsavelId}" não corresponde a nenhum usuário.`
-    );
-  }
+  // A empresa é resolvida ANTES de qualquer consulta, porque agora ela é o
+  // ESCOPO de todas elas — inclusive da checagem do responsável, que antes era
+  // global. `Lead.companyId` é `NOT NULL` desde a Task 1 do Ciclo 1a; o lead
+  // está NASCENDO agora, e a função já recebe `autorId` explícito, então a
+  // origem é o vínculo de quem está cadastrando (ver `core/users/empresa.ts`).
+  // O mesmo valor serve o contato deduplicado abaixo: o contato criado (ou
+  // reaproveitado) nesta operação pertence à empresa DESTE lead.
+  const companyId = await companyIdDoUsuario(input.autorId);
+  const db = prismaDaEmpresa(companyId);
+
+  const responsavel = await responsavelDaEmpresa(db, input.responsavelId);
 
   // Mesma regra de `atualizarLead`, e pelo mesmo motivo: a tela só oferece
   // usuários ativos, mas Server Action é endpoint HTTP público e aceita
@@ -78,13 +206,6 @@ export async function criarLead(input: {
     );
   }
 
-  // `Lead.companyId` é `NOT NULL` desde a Task 1 do Ciclo 1a. O lead está
-  // NASCENDO agora, e a função já recebe `autorId` explícito — a origem é o
-  // vínculo de quem está cadastrando (ver `core/users/empresa.ts`). O mesmo
-  // valor é reaproveitado para o contato deduplicado abaixo: o contato criado
-  // (ou reaproveitado) nesta operação pertence à empresa DESTE lead.
-  const companyId = await companyIdDoUsuario(input.autorId);
-
   const contact = await encontrarOuCriarContact({
     nome: input.nome,
     telefone: input.telefone,
@@ -92,9 +213,9 @@ export async function criarLead(input: {
     companyId,
   });
 
-  const primeiraEtapa = await prisma.pipelineStage.findFirstOrThrow({ orderBy: { ordem: "asc" } });
+  const primeiraEtapa = await primeiraEtapaDoFunil(db);
 
-  const lead = await prisma.lead.create({
+  const lead = await db.lead.create({
     data: {
       companyId,
       contactId: contact.id,
@@ -142,7 +263,7 @@ export async function criarLead(input: {
  * de um cliente HTTP não confiável (drag-and-drop do kanban da Task 15, mas
  * tecnicamente qualquer POST). `Lead.stageId` é uma relação obrigatória com
  * FK, então um id que não corresponde a nenhuma `PipelineStage` FARIA o
- * `prisma.lead.update` abaixo estourar uma violação de constraint — mas só
+ * `updateManyAndReturn` abaixo estourar uma violação de constraint — mas só
  * na hora de escrever, como um erro cru do Postgres (`P2003`), sem mensagem
  * acionável para quem chamou. A checagem explícita abaixo existe para
  * recusar cedo, com um erro de domínio claro, antes de tocar o banco.
@@ -152,18 +273,28 @@ export async function moverEtapa(input: {
   novaStageId: string;
   autorId: string;
 }): Promise<Lead> {
-  const antes = await prisma.lead.findUniqueOrThrow({ where: { id: input.leadId } });
+  // O escopo sai do vínculo de QUEM está movendo, não de um parâmetro à parte:
+  // com um valor só, não existe par (autor, empresa) que possa divergir.
+  const db = prismaDaEmpresa(await companyIdDoUsuario(input.autorId));
 
-  const novaEtapa = await prisma.pipelineStage.findUnique({ where: { id: input.novaStageId } });
+  // `findFirstOrThrow` no lugar de `findUniqueOrThrow`: a segunda é recusada
+  // pelo escopo (ver `atualizarLeadEscopado` acima para o porquê), e a
+  // primeira leva o `companyId` injetado. O efeito é que um `leadId` de outra
+  // empresa deixa de devolver a linha e passa a lançar `NotFoundError` — a
+  // MESMA resposta de um id inexistente, que é o que se quer: quem sonda ids
+  // não descobre nada.
+  const antes = await db.lead.findFirstOrThrow({ where: { id: input.leadId } });
+
+  const novaEtapa = await db.pipelineStage.findFirst({ where: { id: input.novaStageId } });
   if (!novaEtapa) {
     throw new Error(
       `Etapa não encontrada: "${input.novaStageId}" não corresponde a nenhuma etapa do funil.`
     );
   }
 
-  const depois = await prisma.lead.update({
-    where: { id: input.leadId },
-    data: { stageId: novaEtapa.id, ultimaInteracaoEm: new Date() },
+  const depois = await atualizarLeadEscopado(db, input.leadId, {
+    stageId: novaEtapa.id,
+    ultimaInteracaoEm: new Date(),
   });
 
   await registrarAuditoria({
@@ -208,14 +339,11 @@ export async function atualizarLead(input: {
 }): Promise<Lead> {
   const valor = input.valorEstimado === null ? null : parseValorBR(input.valorEstimado);
 
-  const antes = await prisma.lead.findUniqueOrThrow({ where: { id: input.leadId } });
+  const db = prismaDaEmpresa(await companyIdDoUsuario(input.autorId));
 
-  const responsavel = await prisma.user.findUnique({ where: { id: input.responsavelId } });
-  if (!responsavel) {
-    throw new Error(
-      `Responsável não encontrado: "${input.responsavelId}" não corresponde a nenhum usuário.`
-    );
-  }
+  const antes = await db.lead.findFirstOrThrow({ where: { id: input.leadId } });
+
+  const responsavel = await responsavelDaEmpresa(db, input.responsavelId);
 
   // Achado da auditoria de segurança desta branch: a checagem acima confere
   // EXISTÊNCIA, não situação — dava para entregar um lead a quem foi
@@ -234,7 +362,7 @@ export async function atualizarLead(input: {
     );
   }
 
-  const etapa = await prisma.pipelineStage.findUnique({ where: { id: input.stageId } });
+  const etapa = await db.pipelineStage.findFirst({ where: { id: input.stageId } });
   if (!etapa) {
     throw new Error(
       `Etapa não encontrada: "${input.stageId}" não corresponde a nenhuma etapa do funil.`
@@ -243,14 +371,11 @@ export async function atualizarLead(input: {
 
   const etapaMudou = antes.stageId !== input.stageId;
 
-  const depois = await prisma.lead.update({
-    where: { id: input.leadId },
-    data: {
-      valorEstimado: valor,
-      responsavelId: input.responsavelId,
-      stageId: input.stageId,
-      ...(etapaMudou ? { ultimaInteracaoEm: new Date() } : {}),
-    },
+  const depois = await atualizarLeadEscopado(db, input.leadId, {
+    valorEstimado: valor,
+    responsavelId: input.responsavelId,
+    stageId: input.stageId,
+    ...(etapaMudou ? { ultimaInteracaoEm: new Date() } : {}),
   });
 
   const mudancasAntes: Record<string, unknown> = {};
@@ -297,15 +422,14 @@ export async function atualizarLead(input: {
  * único registro de QUANDO saiu do funil.
  */
 export async function arquivarLead(input: { leadId: string; autorId: string }): Promise<Lead> {
-  const antes = await prisma.lead.findUniqueOrThrow({ where: { id: input.leadId } });
+  const db = prismaDaEmpresa(await companyIdDoUsuario(input.autorId));
+
+  const antes = await db.lead.findFirstOrThrow({ where: { id: input.leadId } });
   if (antes.arquivadoEm) {
     throw new Error("Este lead já está arquivado.");
   }
 
-  const depois = await prisma.lead.update({
-    where: { id: input.leadId },
-    data: { arquivadoEm: new Date() },
-  });
+  const depois = await atualizarLeadEscopado(db, input.leadId, { arquivadoEm: new Date() });
 
   await registrarAuditoria({
     userId: input.autorId,
@@ -324,15 +448,14 @@ export async function desarquivarLead(input: {
   leadId: string;
   autorId: string;
 }): Promise<Lead> {
-  const antes = await prisma.lead.findUniqueOrThrow({ where: { id: input.leadId } });
+  const db = prismaDaEmpresa(await companyIdDoUsuario(input.autorId));
+
+  const antes = await db.lead.findFirstOrThrow({ where: { id: input.leadId } });
   if (!antes.arquivadoEm) {
     throw new Error("Este lead não está arquivado.");
   }
 
-  const depois = await prisma.lead.update({
-    where: { id: input.leadId },
-    data: { arquivadoEm: null },
-  });
+  const depois = await atualizarLeadEscopado(db, input.leadId, { arquivadoEm: null });
 
   await registrarAuditoria({
     userId: input.autorId,
@@ -378,16 +501,20 @@ export async function criarLeadDeWhatsapp(input: {
   responsavelId: string;
   autorId: string;
 }): Promise<Lead> {
-  const responsavel = await prisma.user.findUnique({ where: { id: input.responsavelId } });
-  if (!responsavel) {
-    throw new Error(
-      `Responsável não encontrado: "${input.responsavelId}" não corresponde a nenhum usuário.`
-    );
-  }
-
   // Mesmo raciocínio de `criarLead` acima: lead nascendo agora, sem registro
-  // prévio de onde ler a empresa — a origem é o vínculo do autor.
+  // prévio de onde ler a empresa — a origem é o vínculo do autor, resolvida
+  // ANTES de tudo porque é o escopo das consultas seguintes.
   const companyId = await companyIdDoUsuario(input.autorId);
+  const db = prismaDaEmpresa(companyId);
+
+  // O responsável precisa ter vínculo NESTA empresa — ver
+  // `responsavelDaEmpresa`. Este caminho não confere `ativo`, e a diferença
+  // vem de antes desta tarefa: `criarLead` (manual) recusa conta desativada
+  // porque quem escolhe no `<select>` está entregando o lead a uma pessoa;
+  // aqui o responsável vem de código (Fatia 2 do atendente de WhatsApp), não
+  // de formulário. Mantido como estava, para não trocar comportamento sem um
+  // caso de teste que exija a troca.
+  await responsavelDaEmpresa(db, input.responsavelId);
 
   const contact = await encontrarOuCriarContact({
     nome: input.nome,
@@ -395,9 +522,9 @@ export async function criarLeadDeWhatsapp(input: {
     companyId,
   });
 
-  const primeiraEtapa = await prisma.pipelineStage.findFirstOrThrow({ orderBy: { ordem: "asc" } });
+  const primeiraEtapa = await primeiraEtapaDoFunil(db);
 
-  const lead = await prisma.lead.create({
+  const lead = await db.lead.create({
     data: {
       companyId,
       contactId: contact.id,

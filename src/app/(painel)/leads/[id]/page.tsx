@@ -1,8 +1,9 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
-import { prisma } from "@/lib/prisma";
+import { prismaDaEmpresa } from "@/core/tenancy/escopo";
 import { usuarioAtualOuLogin } from "@/core/auth/session";
+import { listarUsuarios } from "@/core/users/queries";
 import { listarNotas, TEXTO_MAX_LENGTH } from "@/core/leads/notes";
 import { listarTasksPendentesDoLead } from "@/core/tasks/queries";
 import { listarEtapas } from "@/core/pipeline/stages";
@@ -103,7 +104,19 @@ export default async function LeadDetalhePage({
   //
   // Se um dia ele tiver de aparecer aqui, o certo é extrair a decisão para uma
   // função só, usada nas duas telas, e não copiar o `hasPermission` para cá.
-  const lead = await prisma.lead.findUnique({
+  // `findFirst` no cliente ESCOPADO, e não `findUnique` no prisma cru.
+  //
+  // Duas coisas mudaram de uma vez, e vale separá-las. A que importa: esta
+  // consulta alcançava lead de QUALQUER empresa pelo id — a página de detalhe
+  // era o caminho mais curto para ler o cliente de outro tenant, incluindo
+  // empresa, cargo, cidade e observações do contato. A consequente: o escopo
+  // RECUSA `findUnique` em modelo de tenant (o `where` dela só aceita campo
+  // único, e `companyId` não é único em `Lead`), então a equivalente escopável
+  // é `findFirst` — ver "Recusa, lançando" em `core/tenancy/escopo.ts`.
+  //
+  // Lead de outra empresa passa a cair no `notFound()` abaixo, que é a mesma
+  // resposta de um id inexistente: quem sonda ids não descobre nada.
+  const lead = await prismaDaEmpresa(usuario.companyId).lead.findFirst({
     where: { id },
     select: {
       id: true,
@@ -134,9 +147,9 @@ export default async function LeadDetalhePage({
     notFound();
   }
 
-  const notas = await listarNotas(id);
+  const notas = await listarNotas(id, usuario.companyId);
 
-  // A lista de usuários vai para TODO papel, sem gate — inclusive VENDEDOR.
+  // A lista de pessoas vai para TODO papel, sem gate — inclusive VENDEDOR.
   //
   // Isto diverge de `leads/page.tsx`, que só busca vendedores para quem tem
   // `ver_dashboard_geral`, e a divergência é DELIBERADA: decisão do dono do
@@ -146,18 +159,25 @@ export default async function LeadDetalhePage({
   // (que os três papéis têm). Esconder a lista aqui daria um `<select>` vazio
   // numa ação que o servidor aceita.
   //
-  // `select` explícito em `id`/`nome`, nunca a linha inteira de `User`:
-  // `senhaHash` não tem por que sair do banco para preencher um `<select>`.
-  // Só usuários ATIVOS — e `atualizarLead` recusa reatribuição para conta
-  // desativada, então a tela e o servidor concordam.
-  const [etapas, vendedores] = await Promise.all([
+  // Era `prisma.user.findMany({ where: { ativo: true } })` — TODA pessoa ativa
+  // do banco, de qualquer empresa; o mesmo defeito que `leads/page.tsx` tinha,
+  // no mesmo `<select>`, na outra tela. `listarUsuarios`
+  // (`core/users/queries.ts`) parte de `Membership`, que é o que define
+  // "pessoa desta empresa", já traz a projeção segura de `User` (sem
+  // `senhaHash`) e já exclui contas de sistema.
+  //
+  // Só ATIVOS no `<select>` — e `atualizarLead` recusa reatribuição para conta
+  // desativada, então tela e servidor concordam. E, como lá, corrigir a tela
+  // NÃO substitui a checagem de vínculo no serviço: Server Action é endpoint
+  // HTTP público e não passa por este `<select>`.
+  const [etapas, equipe] = await Promise.all([
     listarEtapas(),
-    prisma.user.findMany({
-      where: { ativo: true },
-      select: { id: true, nome: true },
-      orderBy: { nome: "asc" },
-    }),
+    listarUsuarios(usuario.companyId),
   ]);
+
+  const vendedores = equipe
+    .filter((pessoa) => pessoa.ativo)
+    .map((pessoa) => ({ id: pessoa.id, nome: pessoa.nome }));
 
   const tasksPendentes = await listarTasksPendentesDoLead(id);
   const tarefasLinhas: TaskLinha[] = tasksPendentes.map((task) => ({

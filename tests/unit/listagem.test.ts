@@ -17,6 +17,21 @@ vi.mock("server-only", () => ({}));
 import { aplicarTeto, LIMITE_LISTAGEM } from "../../src/core/listagem";
 
 const { listarLeads } = await import("../../src/core/leads/queries");
+const { prisma } = await import("../../src/lib/prisma");
+
+/**
+ * A empresa do SEED, lida do vínculo do admin. `listarLeads` passou a exigir o
+ * escopo no Ciclo 1a (Task 4), e a origem legítima dele em produção é
+ * `UsuarioAtivo.companyId`, que sai do `Membership` — nunca uma string fixa
+ * nem `prisma.company.findFirst()`.
+ */
+async function empresaDoSeed(): Promise<string> {
+  const admin = await prisma.user.findUniqueOrThrow({
+    where: { email: "admin@exemplo.com" },
+    include: { memberships: true },
+  });
+  return admin.memberships[0]!.companyId;
+}
 
 describe("aplicarTeto", () => {
   it("abaixo do limite: devolve tudo, sem truncar", () => {
@@ -43,7 +58,7 @@ describe("listarLeads — o teto chega na consulta", () => {
   // pequeno, em vez de criar 1001 linhas: o que precisa ser provado é que o
   // `take` é aplicado, não qual é o número.
   it("com limite 1 devolve UMA linha e avisa que truncou", async () => {
-    const resultado = await listarLeads({ limite: 1 });
+    const resultado = await listarLeads(await empresaDoSeed(), { limite: 1 });
 
     expect(resultado.itens).toHaveLength(1);
     expect(resultado.truncado).toBe(true);
@@ -52,8 +67,9 @@ describe("listarLeads — o teto chega na consulta", () => {
   // Sem esta prova, a exportação CSV poderia passar a truncar em silêncio —
   // um arquivo incompleto indistinguível de um completo.
   it("semTeto devolve mais que o limite pedido, e nunca marca truncado", async () => {
-    const comTeto = await listarLeads({ limite: 1 });
-    const semTeto = await listarLeads({ semTeto: true });
+    const companyId = await empresaDoSeed();
+    const comTeto = await listarLeads(companyId, { limite: 1 });
+    const semTeto = await listarLeads(companyId, { semTeto: true });
 
     expect(semTeto.truncado).toBe(false);
     expect(semTeto.itens.length).toBeGreaterThan(comTeto.itens.length);

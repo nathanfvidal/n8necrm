@@ -91,14 +91,25 @@ beforeAll(async () => {
   const empresa = await prisma.company.findFirstOrThrow();
   const companyId = empresa.id;
 
-  // `registrarAuditoria` (chamada por `editarNota`/`excluirTask` quando o
-  // DONO age) resolve a empresa por `companyIdDoUsuario(autorId)` — sem
-  // `Membership`, essas chamadas lançam antes de qualquer asserção deste
-  // arquivo rodar (achado rodando a suíte, não pego pelo `tsc`: `Membership`
-  // é tabela à parte, não campo obrigatório de `User`). Só o DONO precisa —
-  // o intruso é sempre recusado ANTES de chegar em `companyIdDoUsuario`.
-  await prisma.membership.create({
-    data: { userId: idDono, companyId, papel: "VENDEDOR" },
+  // OS DOIS precisam de `Membership`, e a lista cresceu no Ciclo 1a (Task 4).
+  //
+  // Antes só o dono precisava: `registrarAuditoria` resolvia a empresa por
+  // `companyIdDoUsuario(autorId)`, e o intruso era recusado pela regra de dono
+  // ANTES de chegar lá. Isso deixou de valer quando `editarNota`/`excluirNota`
+  // (`core/leads/notes.ts`) passaram a resolver o ESCOPO como primeira coisa
+  // que fazem — a busca da nota agora sai do cliente escopado, então a empresa
+  // de quem age precisa existir antes de qualquer checagem de dono.
+  //
+  // Os dois na MESMA empresa, de propósito, e agora isso importa mais do que
+  // importava: com o escopo em vigor, um intruso de OUTRA empresa seria
+  // recusado pelo escopo, e os dois primeiros casos deste arquivo passariam
+  // sem exercitar a regra de dono nenhuma vez — verdes pelo motivo errado. É
+  // exatamente a armadilha que este arquivo foi criado para não repetir.
+  await prisma.membership.createMany({
+    data: [
+      { userId: idDono, companyId, papel: "VENDEDOR" },
+      { userId: idIntruso, companyId, papel: "VENDEDOR" },
+    ],
   });
 
   const contato = await prisma.contact.create({

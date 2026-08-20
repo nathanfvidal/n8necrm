@@ -1,7 +1,7 @@
 import { Prisma } from "@prisma/client";
 import type { Contact } from "@prisma/client";
 
-import { prisma } from "@/lib/prisma";
+import { prismaDaEmpresa } from "@/core/tenancy/escopo";
 
 /**
  * Normaliza um telefone brasileiro para a forma canônica usada como chave de
@@ -144,7 +144,7 @@ function unificarNonoDigitoCelular(digitos: string): string {
  * ## Concorrência
  *
  * Duas chamadas simultâneas para o mesmo telefone podem ambas passar pelo
- * `findUnique` abaixo antes de qualquer uma criar a linha (nenhuma ainda viu
+ * `findFirst` abaixo antes de qualquer uma criar a linha (nenhuma ainda viu
  * o registro da outra) e ambas tentarem `create`. O Postgres permite só uma:
  * a segunda colide na constraint UNIQUE de `Contact.telefone` e o Prisma
  * traduz isso em `PrismaClientKnownRequestError` código `P2002`. Em vez de
@@ -173,18 +173,51 @@ export async function encontrarOuCriarContact(dados: {
   companyId: string;
 }): Promise<Contact> {
   const telefone = normalizarTelefone(dados.telefone);
+  const db = prismaDaEmpresa(dados.companyId);
 
-  const existente = await prisma.contact.findUnique({ where: { telefone } });
+  // `findFirst`, e não `findUnique`. Os dois motivos, na ordem em que pesam:
+  //
+  // 1. O escopo RECUSA `findUnique` em modelo de tenant, lançando — o `where`
+  //    dela só aceita campo único e `companyId` não é único em `Contact`
+  //    (ver "Recusa, lançando" em `core/tenancy/escopo.ts`).
+  // 2. Antes disso a consulta era GLOBAL: um telefone já cadastrado na empresa
+  //    B era devolvido para quem criava um lead na empresa A, e o lead da A
+  //    nascia apontando para o `Contact` da B. Contato de um cliente ligado ao
+  //    funil de outro — o vazamento mais silencioso desta superfície, porque
+  //    nada na tela denuncia de qual empresa aquele contato veio.
+  const existente = await db.contact.findFirst({ where: { telefone } });
   if (existente) return existente;
 
   try {
-    return await prisma.contact.create({
+    return await db.contact.create({
       data: { companyId: dados.companyId, nome: dados.nome, telefone, email: dados.email },
     });
   } catch (erro) {
     if (erro instanceof Prisma.PrismaClientKnownRequestError && erro.code === "P2002") {
-      const contatoDaCorrida = await prisma.contact.findUnique({ where: { telefone } });
+      const contatoDaCorrida = await db.contact.findFirst({ where: { telefone } });
       if (contatoDaCorrida) return contatoDaCorrida;
+
+      // Chegou aqui: o `P2002` veio de `Contact.telefone`, que é `@unique`
+      // GLOBAL (`prisma/schema.prisma`), e a busca escopada não encontra o
+      // dono — ou seja, o telefone existe em OUTRA empresa.
+      //
+      // Isto não é a corrida tratada acima; é o limite conhecido do schema. A
+      // unicidade global de `telefone` é irmã de `PipelineStage.@@unique([ordem])`:
+      // as duas bloqueiam a segunda empresa de verdade, as duas estão
+      // registradas como pendência do ciclo, e nenhuma delas é mexida aqui —
+      // trocar unicidade global por composta é item à parte, com migração.
+      //
+      // O que muda é a FORMA da falha. Antes desta tarefa o caso não existia
+      // porque a consulta global reaproveitava o contato da outra empresa (o
+      // vazamento). Agora ele existe, e sem esta mensagem sairia como um
+      // `P2002` cru do Postgres — erro que aponta para "constraint violada",
+      // nunca para "este telefone pertence a outra empresa".
+      throw new Error(
+        `Telefone já cadastrado em outra empresa: "${telefone}" existe como Contact fora do ` +
+          `escopo ${JSON.stringify(dados.companyId)}. \`Contact.telefone\` é \`@unique\` GLOBAL no ` +
+          `schema — enquanto for, o mesmo número não pode existir em duas empresas. Ver a ` +
+          `pendência gêmea em \`PipelineStage.@@unique([ordem])\` (prisma/schema.prisma).`
+      );
     }
     throw erro;
   }

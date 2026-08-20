@@ -42,11 +42,12 @@ const PRISMA_CRU = {
 // aplicar o escopo em todos os serviços é o próximo ciclo — o Ciclo 1a
 // entrega o mecanismo, não a migração dos chamadores.
 //
-// São 25 (17 em core, 5 em modules, 3 em src/app), medidos em 2026-08-20 com
-// `grep -rln "lib/prisma" src --include=*.ts --include=*.tsx`. O próximo ciclo
-// os remove um a um, e o tamanho desta lista é o contador de quanto falta:
-// quando ela esvaziar, os blocos somem junto. Exceção nomeada conta;
-// disciplina não conta nada.
+// Eram 25 (17 em core, 5 em modules, 3 em src/app), medidos em 2026-08-20 com
+// `grep -rln "lib/prisma" src --include=*.ts --include=*.tsx`. Hoje são 19:
+// a Task 4 do Ciclo 1a converteu `leads` inteiro — os 4 arquivos de
+// `src/core/leads/` e as 2 páginas de `src/app/(painel)/leads/`. O tamanho
+// desta lista é o contador de quanto falta: quando ela esvaziar, os blocos
+// somem junto. Exceção nomeada conta; disciplina não conta nada.
 //
 // Os 3 de `src/app` entraram numa segunda passada, e vale registrar por quê: a
 // regra nascera limitada a `core` + `modules`, enquanto `escopo.ts` dizia no
@@ -59,10 +60,11 @@ const VIOLADORES_TEMPORARIOS_CORE = [
   "src/core/auth/credenciais.ts",
   "src/core/contacts/queries.ts",
   "src/core/contacts/service.ts",
-  "src/core/leads/dedupe.ts",
-  "src/core/leads/notes.ts",
-  "src/core/leads/queries.ts",
-  "src/core/leads/service.ts",
+  // `src/core/leads/*` SAIU desta lista na Task 4 do Ciclo 1a — os quatro
+  // arquivos (`dedupe`, `notes`, `queries`, `service`) passaram a alcançar o
+  // banco só por `prismaDaEmpresa`. O lint passar com eles fora daqui é a
+  // prova de que o serviço não alcança mais o `prisma` cru; a prova de que o
+  // escopo FUNCIONA é outra, e mora em `tests/unit/lead-isolamento.test.ts`.
   "src/core/notifications/dispatch.ts",
   "src/core/pipeline/service.ts",
   "src/core/pipeline/stages.ts",
@@ -87,34 +89,35 @@ const VIOLADORES_TEMPORARIOS_MODULES = [
   "src/modules/whatsapp/turno.ts",
 ];
 
-// As páginas do painel que ainda leem o banco direto, em ordem de exposição —
-// e a ordem importa, porque ela é a fila de conversão do próximo ciclo:
+// A página do painel que ainda lê o banco direto. Eram três; duas saíram na
+// Task 4 do Ciclo 1a, junto com o serviço que elas consomem:
+//
+// - `(painel)/leads/[id]/page.tsx` fazia `prisma.lead.findUnique(...)` —
+//   modelo de tenant alcançado por id, o caminho mais curto para ler o cliente
+//   de outro tenant. Virou `findFirst` no cliente escopado.
+// - `(painel)/leads/page.tsx` fazia `prisma.user.findMany({ ativo: true })`.
+//   A entrada anterior desta lista dizia que ela "não vaza dado de empresa,
+//   porque `User` não é modelo de tenant". Estava certa sobre o modelo e
+//   errada sobre a consequência: o `<select>` de responsável listava gente de
+//   TODA empresa, e escolher uma delas gravava o lead no nome de alguém de
+//   outro cliente. Hoje chama `listarUsuarios(companyId)`, que parte de
+//   `Membership`.
+//
+// A que sobra é a mais exposta das três, e continua sendo a primeira da fila:
 //
 // 1. `(painel)/page.tsx` — `prisma.auditLog.findMany({ take, orderBy })`, SEM
-//    `where` NENHUM. É a mais exposta das três: `AuditLog` é modelo de tenant,
-//    e a home do painel mostra hoje os últimos registros de QUALQUER empresa.
-//    Primeira a converter.
-// 2. `(painel)/leads/[id]/page.tsx` — `prisma.lead.findUnique(...)`. Modelo de
-//    tenant, alcançado por id. Converter significa trocar por `findFirst` no
-//    cliente escopado, porque `findUnique` não é escopável (o motivo está em
-//    `src/core/tenancy/escopo.ts`).
-// 3. `(painel)/leads/page.tsx` — só `prisma.user.findMany`. `User` não é
-//    modelo de tenant, então esta não vaza dado de empresa; está aqui porque
-//    importa o prisma cru, não porque haja fuga conhecida.
+//    `where` NENHUM. `AuditLog` é modelo de tenant, e a home do painel mostra
+//    hoje os últimos registros de QUALQUER empresa.
 //
-// O `\\[id\\]` da segunda linha NÃO é enfeite. Medido em 2026-08-20: escrito
-// como `[id]`, o caminho vira um glob com CLASSE DE CARACTERES ("um caractere
-// entre i e d"), não casa com a pasta literal `[id]`, e o arquivo continua
-// sendo acusado pela regra apesar de estar listado aqui — foi exatamente o que
-// aconteceu na primeira execução. Rota dinâmica do Next precisa das chaves
-// escapadas em qualquer lista de caminhos do eslint. Os parênteses de
-// `(painel)` não têm esse problema: só viram grupo quando precedidos de
-// `?`/`*`/`+`/`@`/`!`.
-const VIOLADORES_TEMPORARIOS_APP = [
-  "src/app/(painel)/page.tsx",
-  "src/app/(painel)/leads/\\[id\\]/page.tsx",
-  "src/app/(painel)/leads/page.tsx",
-];
+// O `\\[id\\]` que estava na linha do detalhe de lead NÃO era enfeite, e o
+// registro fica aqui porque a próxima rota dinâmica a entrar nesta lista vai
+// precisar dele. Medido em 2026-08-20: escrito como `[id]`, o caminho vira um
+// glob com CLASSE DE CARACTERES ("um caractere entre i e d"), não casa com a
+// pasta literal `[id]`, e o arquivo continua sendo acusado pela regra apesar
+// de estar listado aqui — foi exatamente o que aconteceu na primeira execução.
+// Os parênteses de `(painel)` não têm esse problema: só viram grupo quando
+// precedidos de `?`/`*`/`+`/`@`/`!`.
+const VIOLADORES_TEMPORARIOS_APP = ["src/app/(painel)/page.tsx"];
 
 // A exceção PERMANENTE. Nada aqui vai para o cliente escopado, nunca:
 //

@@ -30,17 +30,27 @@ import { formatarDataHoraBR } from "@/lib/date";
  */
 export default async function DashboardPage() {
   /**
-   * Duas rodadas, não três.
+   * A sessão vem PRIMEIRO, sozinha, e isso mudou no Ciclo 1a (Task 4).
    *
-   * Só `listarTasksPendentes` depende de quem está logado — ela é escopada ao
-   * usuário de propósito (ver o comentário acima). Todo o resto é do funil
-   * inteiro e não olha para `usuario`, inclusive a atividade recente, que
-   * antes esperava as outras três terminarem para só então começar.
+   * Antes as quatro consultas saíam numa `Promise.all` só, `usuarioAtualOuLogin()`
+   * inclusive. Não dá mais: `contarLeadsPorEtapa` passou a exigir o escopo de
+   * empresa, e a única origem legítima dele é `UsuarioAtivo.companyId` — que
+   * só existe depois que a sessão resolve. Uma consulta de tenant que começa
+   * antes de a empresa ser conhecida é, por definição, uma consulta sem
+   * escopo.
    *
-   * Medido: esta página emitia 6 consultas em ~1000 ms, com mediana de 85 ms
-   * por consulta contra `sa-east-1`. O tempo é viagem, não trabalho de banco,
-   * então o que se corta é a espera em fila — não dá para ficar em uma rodada
-   * só enquanto uma das consultas precisar do `usuario.id`.
+   * O custo é uma rodada a mais de espera, e ele é menor do que parece:
+   * `usuarioAtual()` é memoizada por requisição com `cache()` do React
+   * (`core/auth/session.ts`), e `(painel)/layout.tsx` já a chamou — layout e
+   * página renderizam em paralelo, então na maioria das requisições esta
+   * chamada encontra a promessa em voo, não uma consulta nova. "Na maioria" é
+   * dedução do contrato de `cache()`, não medição: nada aqui cronometra a
+   * diferença, e afirmar ganho medido seria inventar.
+   *
+   * O que se GANHA em troca é concreto: nenhuma consulta chega ao banco antes
+   * de a sessão estar confirmada. A versão anterior desta página disparava
+   * três `SELECT` para quem carregava cookie de conta desativada, e
+   * documentava isso como troca consciente. A troca deixou de ser necessária.
    *
    * `contarLeadsPorEtapa` e não `listarLeadsPorEtapa`: esta página só mostra
    * NÚMEROS, e contava o tamanho de arrays com teto de 1000 linhas — ver o
@@ -53,10 +63,17 @@ export default async function DashboardPage() {
    * `leads/queries.ts` e `tasks/queries.ts`). Ninguém consome senha aqui;
    * ela simplesmente nunca sai do banco.
    */
-  const [usuario, etapas, leadsPorEtapa, atividadeRecente] = await Promise.all([
-    usuarioAtualOuLogin(),
+  const usuario = await usuarioAtualOuLogin();
+
+  const [etapas, leadsPorEtapa, atividadeRecente] = await Promise.all([
     listarEtapas(),
-    contarLeadsPorEtapa(),
+    contarLeadsPorEtapa(usuario.companyId),
+    // ATENÇÃO: esta consulta continua SEM `where` nenhum, e `AuditLog` é
+    // modelo de tenant. A home do painel mostra hoje os últimos registros de
+    // QUALQUER empresa — é o item 1 da fila de conversão anotada em
+    // `eslint.config.mjs`, e o motivo de este arquivo continuar na exceção
+    // temporária do lint. A Task 4 converte `leads`; esta página é da fila
+    // seguinte, e mexer nela aqui misturaria duas conversões num commit só.
     prisma.auditLog.findMany({
       take: 10,
       orderBy: { criadoEm: "desc" },
