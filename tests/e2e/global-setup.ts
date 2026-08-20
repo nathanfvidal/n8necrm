@@ -88,6 +88,41 @@ async function garantirContasDeTeste(prisma: PrismaClient): Promise<void> {
 }
 
 /**
+ * Carimbo desta EXECUÇÃO da suíte, visível a todos os workers.
+ *
+ * ## Para que serve
+ *
+ * Uma fixture que grava numa coluna com unicidade GLOBAL não pode usar valor
+ * fixo: `test.beforeAll` roda uma vez POR WORKER, não por arquivo
+ * (`node_modules/playwright/lib/runner/`, `createTestGroups`), então com
+ * `workers: 3` o segundo worker bate na constraint. O caso concreto que
+ * motivou isto: `seguranca-headers.spec.ts` criava um `Contact` com telefone
+ * fixo e `Contact.telefone` é `@unique` global — 22 verdes com `--workers=1`,
+ * `Unique constraint failed on the fields: (telefone)` com 3.
+ *
+ * Só o índice do worker não basta. Ele resolve a colisão DENTRO de uma
+ * execução, mas deixa o valor igual entre execuções, e aí a limpeza de
+ * resíduo de uma execução anterior não tem como distinguir "linha velha, pode
+ * apagar" de "linha do worker vizinho, ainda em uso". Com este carimbo a
+ * distinção é literal: o que não começa com o carimbo desta execução é
+ * resíduo.
+ *
+ * `globalSetup` roda no processo PAI, antes de qualquer worker existir, e o
+ * Playwright forka cada worker com `env: { ...process.env, ...extraEnv }`
+ * (`node_modules/playwright/lib/runner/index.js`, `startRunner`) — então
+ * escrever em `process.env` aqui é o caminho suportado de passar um valor
+ * único para todos os workers da mesma execução.
+ *
+ * Dois dígitos porque é só um desempate entre execuções VIZINHAS: a fixture
+ * apaga o valor exato antes de criar, então uma repetição de carimbo a cada
+ * 100 execuções não quebra nada — só faz aquela execução não varrer o
+ * resíduo da homônima anterior.
+ */
+function carimbarExecucao(): void {
+  process.env.E2E_ID_EXECUCAO = String(Date.now() % 100).padStart(2, "0");
+}
+
+/**
  * Zera o contador de tentativas de login antes da suíte E2E.
  *
  * ## Por que isto é necessário
@@ -115,6 +150,7 @@ export default async function globalSetup() {
   });
 
   try {
+    carimbarExecucao();
     await garantirContasDeTeste(prisma);
 
     const { count } = await prisma.rateLimit.deleteMany({

@@ -54,7 +54,24 @@ const SENHA_USUARIO_TESTE = "senha-teste-e2e-123";
  */
 async function limparDadosDeTeste(): Promise<void> {
   await prisma.conversation.deleteMany({ where: { waId: { startsWith: PREFIXO_WAID } } });
-  await prisma.user.deleteMany({ where: { email: EMAIL_USUARIO_TESTE } });
+
+  // Ordem de chave estrangeira, e não um `user.deleteMany` solto:
+  // `Notification.userId` e `AuditLog.userId` são `RESTRICT` (padrão do Prisma
+  // para relação obrigatória). O usuário descartável tem `Membership` desde
+  // esta correção, então é membro ativo da empresa enquanto existe — e
+  // `marcarAguardandoHumano` (`src/modules/whatsapp/notificacoes.ts`) grava
+  // uma `Notification` por membro ativo da empresa da conversa. Uma linha
+  // dessas sobrando trava o `delete` e a fixture deixa a conta para trás: foi
+  // exatamente o quadro que `63cecd2` desmontou nas fixtures de unidade.
+  // `Membership` é `Cascade` e some junto, sem linha própria aqui.
+  const usuario = await prisma.user.findUnique({
+    where: { email: EMAIL_USUARIO_TESTE },
+    select: { id: true },
+  });
+  if (!usuario) return;
+  await prisma.notification.deleteMany({ where: { userId: usuario.id } });
+  await prisma.auditLog.deleteMany({ where: { userId: usuario.id } });
+  await prisma.user.delete({ where: { id: usuario.id } });
 }
 
 // MODO SERIAL DE PROPÓSITO — não é excesso de cautela, é o que evita uma
@@ -244,7 +261,26 @@ test.describe(() => {
   test("editar a persona muda a prévia do prompt", async ({ page }) => {
     await page.goto("/conversas/agente");
     await page.getByLabel("Nome da persona").fill("Beatriz");
-    await expect(page.getByTestId("previa-prompt")).toContainText("Você é Beatriz");
+    // `visible: true` pela MESMA razão de `seloVisivel`, e este caso é a prova
+    // mais nítida dela: medido em 2026-08-20, uma execução focada em cada
+    // quatro morria com
+    //
+    //     strict mode violation: getByTestId('previa-prompt') resolved to 2
+    //     elements
+    //
+    // e os dois textos eram DIFERENTES — "Você é Ana" (a cópia de streaming
+    // ainda dentro do `<div hidden>`, com a persona que veio do servidor) e
+    // "Você é Beatriz" (a de verdade, já com o estado local do formulário).
+    // Sem o filtro, o teste não escolhia entre as duas: morria por existirem
+    // duas.
+    //
+    // Este era o `:244` que o relatório da Task 7 do Ciclo 1c reportou como
+    // determinístico. Não é — e a impressão de determinismo tinha causa: o
+    // `mode: "serial"` deste arquivo faz o primeiro vermelho PULAR os casos
+    // seguintes, então cada execução mostrava um defeito de cada vez.
+    await expect(page.getByTestId("previa-prompt").filter({ visible: true })).toContainText(
+      "Você é Beatriz",
+    );
     // Nenhum clique em "Salvar" — a prévia é estado local (`AgenteForm` monta o
     // texto no cliente com a mesma `montarPromptSistema` que o servidor usa,
     // sobre o `useState` do formulário), então este teste nunca escreve na
@@ -288,6 +324,18 @@ test("erro de sessão inválida chega à tela ao tentar pausar a IA", async ({ p
       email: EMAIL_USUARIO_TESTE,
       senhaHash,
       papel: "VENDEDOR",
+      // O VÍNCULO. Sem ele esta conta LOGA e não entra em lugar nenhum:
+      // desde o Ciclo 1a `usuarioAtual()` resolve `companyId`/`papel` pelo
+      // `Membership` e LANÇA sem vínculo, e `(painel)/layout.tsx` manda para
+      // `/login`. O sintoma era este caso falhando ao esperar o selo "IA
+      // respondendo" numa tela que nunca chegou a abrir — terceira ocorrência
+      // da mesma família de `e67e1e6` (fixtures de unidade) e `c06b1fe`
+      // (`global-setup.ts`).
+      //
+      // `VENDEDOR` na empresa das conversas deste arquivo, que é a mesma
+      // `empresaId` lida no `beforeAll`: `/conversas/[id]` só encontra a
+      // conversa se o leitor for da empresa dela.
+      memberships: { create: { companyId: empresaId, papel: "VENDEDOR" } },
     },
   });
   const conversa = await prisma.conversation.create({
