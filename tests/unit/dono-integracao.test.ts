@@ -34,6 +34,11 @@ let idIntruso = "";
 let idLead = "";
 let idNota = "";
 let idTask = "";
+// Hoisted para os casos: `editarTask`/`excluirTask` passaram a receber
+// `companyId` no Ciclo 1d, e ele e o mesmo da fixture — dono e intruso estao na
+// MESMA empresa aqui de proposito, para que o que barre o intruso seja a regra
+// de DONO e nada mais.
+let companyId = "";
 
 async function limpar() {
   const contatos = await prisma.contact.findMany({
@@ -89,7 +94,7 @@ beforeAll(async () => {
   // duas empresas diferentes tornariam o cenário ambíguo sobre qual regra
   // barrou o intruso.
   const empresa = await prisma.company.findFirstOrThrow();
-  const companyId = empresa.id;
+  companyId = empresa.id;
 
   // OS DOIS precisam de `Membership`, e a lista cresceu no Ciclo 1a (Task 4).
   //
@@ -170,6 +175,7 @@ describe("regra de dono contra o banco real", () => {
   it("intruso NAO edita a tarefa de outra pessoa", async () => {
     await expect(
       editarTask({
+        companyId,
         taskId: idTask,
         titulo: "invadido",
         vencimento: new Date(Date.UTC(2026, 11, 31)),
@@ -182,7 +188,7 @@ describe("regra de dono contra o banco real", () => {
   });
 
   it("intruso NAO exclui a tarefa de outra pessoa, e nao gera auditoria", async () => {
-    await expect(excluirTask({ taskId: idTask, autorId: idIntruso })).rejects.toThrow(
+    await expect(excluirTask({ companyId, taskId: idTask, autorId: idIntruso })).rejects.toThrow(
       "Tarefa não encontrada"
     );
     expect(await prisma.task.count({ where: { id: idTask } })).toBe(1);
@@ -225,7 +231,7 @@ describe("regra de dono contra o banco real", () => {
   // Decisão do dono do projeto na auditoria: exclusão de tarefa deixa rastro,
   // porque a linha some para sempre.
   it("o DONO exclui a propria tarefa e a auditoria guarda o que foi destruido", async () => {
-    await excluirTask({ taskId: idTask, autorId: idDono });
+    await excluirTask({ companyId, taskId: idTask, autorId: idDono });
 
     expect(await prisma.task.count({ where: { id: idTask } })).toBe(0);
 

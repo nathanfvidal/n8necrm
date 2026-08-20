@@ -179,7 +179,11 @@ export default async function LeadDetalhePage({
     .filter((pessoa) => pessoa.ativo)
     .map((pessoa) => ({ id: pessoa.id, nome: pessoa.nome }));
 
-  const tasksPendentes = await listarTasksPendentesDoLead(id);
+  // `usuario.companyId` além do `id` do lead: `Task.leadId` é FK e não carrega
+  // empresa, então "tarefa da outra empresa pendurada neste lead" é estado
+  // expressável — e era o que esta seção mostraria. Ver
+  // `listarTasksPendentesDoLead` (`core/tasks/queries.ts`).
+  const tasksPendentes = await listarTasksPendentesDoLead(usuario.companyId, id);
   const tarefasLinhas: TaskLinha[] = tasksPendentes.map((task) => ({
     id: task.id,
     titulo: task.titulo,

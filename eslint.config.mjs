@@ -202,26 +202,28 @@ const VIOLADORES_TEMPORARIOS_CORE = [
   // `travarEstruturaDoFunil` — lá o `WHERE "companyId"` é escrito à mão, e
   // quem cobra é a Parte 2b de `tests/unit/catraca-prisma-cru.test.ts`, que
   // passou a valer para aquele arquivo no instante em que ele saiu daqui.
-  // 2 defeitos, os dois BAIXA: `listarMinhasTasks` filtra por `responsavelId`
-  // e `listarTasksPendentesDoLead` por `leadId` — escopo por dono e por FK,
-  // que seguram hoje. `listarTasksPendentesDoLead` deixa de segurar no dia em
-  // que o `leadId` a montante não for validado; com o reparo de 2026-08-20 em
-  // `tasks/service.ts`, ele é.
-  "src/core/tasks/queries.ts",
-  // 0 defeitos desde 2026-08-20. Eram dois, os dois da mesma família e no
-  // mesmo par de funções: `leadId` (fechado em `da2a402`,
-  // `exigirLeadDaEmpresa`) e `contactId` (fechado no reparo seguinte,
-  // `exigirContatoDaEmpresa`). Os dois chegam das Server Actions
-  // `criarMinhaTaskAction`/`editarTaskAction` e eram validados só por
-  // EXISTÊNCIA. `tests/unit/task-isolamento.test.ts` trava os dois, com as
-  // duas metades cada (recusa o registro da empresa de fora, aceita o da
-  // própria).
+
+  // `src/core/tasks/*` SAIU desta lista no Ciclo 1d. As 2 BAIXA de `queries.ts`
+  // eram as duas formas de "escopo que não é escopo de empresa":
+  // `listarMinhasTasks` filtrava por `responsavelId` (escopo por DONO — coincide
+  // com a empresa só enquanto ninguém tem dois vínculos) e
+  // `listarTasksPendentesDoLead` por `leadId` (escopo por FK — e `Task.leadId`
+  // não carrega empresa, então "tarefa da A pendurada no Lead da B" é estado
+  // expressável). As duas sondas de `tests/unit/task-isolamento.test.ts`
+  // fabricam os dois estados e AFIRMAM que a consulta antiga os alcançava.
   //
-  // Continua nesta fila porque a fila é do IMPORT, não da contagem: o arquivo
-  // ainda alcança `@/lib/prisma` e escreve `Task`, que É modelo de tenant.
-  // Converter para `prismaDaEmpresa` é do próximo ciclo, e é o que faz o
-  // filtro deixar de depender de alguém lembrar de escrevê-lo à mão.
-  "src/core/tasks/service.ts",
+  // `service.ts` já estava em 0 defeitos desde 2026-08-20 (`da2a402` e
+  // `f2f05cf` fecharam `leadId` e `contactId`), e o que a conversão acrescentou
+  // foi tirar o filtro das mãos de quem edita: as sete funções públicas passaram
+  // a receber `companyId` — em Server Action, sempre de `usuarioAtual()` —, e as
+  // quatro escritas por id passaram por `tarefaMinhaNestaEmpresa`, onde a regra
+  // de DONO e o escopo de EMPRESA são duas travas independentes num ponto só. A
+  // segunda escondia a falta da primeira no caso comum; o caso que as separa
+  // (tarefa da B cujo dono tem vínculo também na A) está no teste.
+  //
+  // `criarTask` deixou de deduzir a empresa por
+  // `companyIdDoUsuario(responsavelId)` — uma consulta a mais para chegar num
+  // vínculo arbitrário, tendo `usuarioAtual().companyId` disponível no chamador.
   // `src/core/users/{queries,service}.ts` SAÍRAM desta lista no Ciclo 1d, e a
   // resposta que faltava era a que a anotação antiga pedia: "o que o cliente
   // escopado faz com `User`?". Faz nada, e isso é o correto — `User` está fora

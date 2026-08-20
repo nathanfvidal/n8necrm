@@ -16,7 +16,15 @@ import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from "vites
 vi.mock("server-only", () => ({}));
 
 import { prisma } from "../../src/lib/prisma";
-import { criarTask, editarTask } from "../../src/core/tasks/service";
+import {
+  concluirTask,
+  criarTask,
+  editarTask,
+  excluirTask,
+  listarTasksPendentes,
+  reabrirTask,
+} from "../../src/core/tasks/service";
+import { listarMinhasTasks, listarTasksPendentesDoLead } from "../../src/core/tasks/queries";
 
 /**
  * O vazamento que este arquivo trava: **uma Task da empresa A podia nascer (ou
@@ -74,6 +82,30 @@ const CONTATO_B = `${P}-contact-b`;
 const LEAD_A = `${P}-lead-a`;
 const LEAD_B = `${P}-lead-b`;
 const TASK_A = `${P}-task-a`;
+const TASK_B = `${P}-task-b`;
+/**
+ * Tarefa da empresa A pendurada no `Lead` da empresa B.
+ *
+ * `Task.leadId` é FK para `Lead` e não carrega empresa nenhuma, então este
+ * estado é EXPRESSÁVEL no schema — e é exatamente o que
+ * `listarTasksPendentesDoLead` mostraria a quem abre `/leads/<id da B>` se ela
+ * filtrasse só por `leadId`, que é o que ela fazia. A fixture o fabrica de
+ * propósito, do mesmo jeito que `contact-isolamento.test.ts` fabrica o lead da
+ * B no contato da A.
+ */
+const TASK_CRUZADA = `${P}-task-cruzada`;
+/**
+ * A pessoa com vínculo nas DUAS empresas, e as duas tarefas dela — uma em cada.
+ *
+ * É o que separa "escopo por dono" de "escopo por empresa". Enquanto ninguém
+ * tem dois vínculos, `where: { responsavelId }` sozinho parece suficiente:
+ * toda tarefa de quem eu sou dono é da minha empresa. Com dois vínculos deixa
+ * de ser — e `criarUsuario` já sabe criar `Membership`, então o estado é
+ * expressável hoje.
+ */
+const USUARIO_DUPLO = `${P}-user-duplo`;
+const TASK_DUPLO_NA_A = `${P}-task-duplo-a`;
+const TASK_DUPLO_NA_B = `${P}-task-duplo-b`;
 
 /**
  * `PipelineStage.@@unique([ordem])` ainda é GLOBAL (`prisma/schema.prisma`,
@@ -112,7 +144,7 @@ const VENCIMENTO = new Date("2026-12-01T12:00:00.000Z");
  * `User`, `Company`.
  */
 async function limpar() {
-  const usuarios = [USUARIO_A, USUARIO_B];
+  const usuarios = [USUARIO_A, USUARIO_B, USUARIO_DUPLO];
   const empresas = [EMPRESA_A, EMPRESA_B];
 
   await prisma.notification.deleteMany({ where: { userId: { in: usuarios } } });
@@ -139,15 +171,50 @@ async function limpar() {
 async function semearTarefas() {
   await prisma.task.deleteMany({ where: { companyId: { in: [EMPRESA_A, EMPRESA_B] } } });
 
-  await prisma.task.create({
-    data: {
-      id: TASK_A,
-      companyId: EMPRESA_A,
-      titulo: "tarefa da empresa A",
-      vencimento: VENCIMENTO,
-      responsavelId: USUARIO_A,
-      leadId: LEAD_A,
-    },
+  await prisma.task.createMany({
+    data: [
+      {
+        id: TASK_A,
+        companyId: EMPRESA_A,
+        titulo: "tarefa da empresa A",
+        vencimento: VENCIMENTO,
+        responsavelId: USUARIO_A,
+        leadId: LEAD_A,
+      },
+      {
+        id: TASK_B,
+        companyId: EMPRESA_B,
+        titulo: "tarefa da empresa B",
+        vencimento: VENCIMENTO,
+        // Dono é a pessoa de vínculo DUPLO, de propósito: assim a regra de dono
+        // NÃO recusa quando a empresa A tenta alcançar esta linha, e o que
+        // sobra a recusar é o escopo. Com um dono só da B, todo caso passaria
+        // pela regra de dono e nenhum provaria escopo nenhum.
+        responsavelId: USUARIO_DUPLO,
+      },
+      {
+        id: TASK_CRUZADA,
+        companyId: EMPRESA_A,
+        titulo: "tarefa da A no lead da B",
+        vencimento: VENCIMENTO,
+        responsavelId: USUARIO_A,
+        leadId: LEAD_B,
+      },
+      {
+        id: TASK_DUPLO_NA_A,
+        companyId: EMPRESA_A,
+        titulo: "lembrete do duplo na A",
+        vencimento: VENCIMENTO,
+        responsavelId: USUARIO_DUPLO,
+      },
+      {
+        id: TASK_DUPLO_NA_B,
+        companyId: EMPRESA_B,
+        titulo: "lembrete do duplo na B",
+        vencimento: VENCIMENTO,
+        responsavelId: USUARIO_DUPLO,
+      },
+    ],
   });
 }
 
@@ -177,6 +244,13 @@ beforeAll(async () => {
         senhaHash: SENHA_FALSA,
         papel: "ADMIN",
       },
+      {
+        id: USUARIO_DUPLO,
+        nome: "Duda das Duas",
+        email: `${USUARIO_DUPLO}@exemplo.invalido`,
+        senhaHash: SENHA_FALSA,
+        papel: "ADMIN",
+      },
     ],
   });
 
@@ -188,6 +262,8 @@ beforeAll(async () => {
     data: [
       { userId: USUARIO_A, companyId: EMPRESA_A, papel: "ADMIN" },
       { userId: USUARIO_B, companyId: EMPRESA_B, papel: "ADMIN" },
+      { userId: USUARIO_DUPLO, companyId: EMPRESA_A, papel: "ADMIN" },
+      { userId: USUARIO_DUPLO, companyId: EMPRESA_B, papel: "ADMIN" },
     ],
   });
 
@@ -237,6 +313,7 @@ describe("criarTask — o Lead precisa ser da empresa de quem age", () => {
   it("recusa leadId de outra empresa", async () => {
     await expect(
       criarTask({
+        companyId: EMPRESA_A,
         titulo: "tarefa forjada",
         vencimento: VENCIMENTO,
         responsavelId: USUARIO_A,
@@ -254,6 +331,7 @@ describe("criarTask — o Lead precisa ser da empresa de quem age", () => {
 
   it("aceita leadId da PRÓPRIA empresa e grava o vínculo", async () => {
     const criada = await criarTask({
+      companyId: EMPRESA_A,
       titulo: "tarefa legitima",
       vencimento: VENCIMENTO,
       responsavelId: USUARIO_A,
@@ -274,6 +352,7 @@ describe("criarTask — o Lead precisa ser da empresa de quem age", () => {
     // A metade que impede "recusar tudo" de passar por correção: o MESMO
     // `LEAD_B` que a empresa A não alcança é aceito por quem é da B.
     const criada = await criarTask({
+      companyId: EMPRESA_B,
       titulo: "tarefa da B",
       vencimento: VENCIMENTO,
       responsavelId: USUARIO_B,
@@ -289,6 +368,7 @@ describe("editarTask — reapontar o Lead não atravessa a empresa", () => {
   it("recusa leadId de outra empresa e não reaponta a tarefa", async () => {
     await expect(
       editarTask({
+        companyId: EMPRESA_A,
         taskId: TASK_A,
         titulo: "tarefa da empresa A",
         vencimento: VENCIMENTO,
@@ -305,6 +385,7 @@ describe("editarTask — reapontar o Lead não atravessa a empresa", () => {
     // Desvincula e revincula ao lead da própria empresa: o caminho que a
     // recusa acima NÃO pode ter fechado junto.
     await editarTask({
+      companyId: EMPRESA_A,
       taskId: TASK_A,
       titulo: "tarefa da empresa A",
       vencimento: VENCIMENTO,
@@ -314,6 +395,7 @@ describe("editarTask — reapontar o Lead não atravessa a empresa", () => {
     expect((await prisma.task.findUniqueOrThrow({ where: { id: TASK_A } })).leadId).toBeNull();
 
     await editarTask({
+      companyId: EMPRESA_A,
       taskId: TASK_A,
       titulo: "tarefa da empresa A",
       vencimento: VENCIMENTO,
@@ -347,6 +429,7 @@ describe("criarTask — o Contato precisa ser da empresa de quem age", () => {
   it("recusa contactId de outra empresa", async () => {
     await expect(
       criarTask({
+        companyId: EMPRESA_A,
         titulo: "tarefa com contato forjado",
         vencimento: VENCIMENTO,
         responsavelId: USUARIO_A,
@@ -362,6 +445,7 @@ describe("criarTask — o Contato precisa ser da empresa de quem age", () => {
 
   it("aceita contactId da PRÓPRIA empresa e grava o vínculo", async () => {
     const criada = await criarTask({
+      companyId: EMPRESA_A,
       titulo: "tarefa com contato legitimo",
       vencimento: VENCIMENTO,
       responsavelId: USUARIO_A,
@@ -377,6 +461,7 @@ describe("criarTask — o Contato precisa ser da empresa de quem age", () => {
     // A metade que impede "recusar todo `contactId`" de passar por correção: o
     // MESMO `CONTATO_B` que a empresa A não alcança é aceito por quem é da B.
     const criada = await criarTask({
+      companyId: EMPRESA_B,
       titulo: "tarefa da B com contato",
       vencimento: VENCIMENTO,
       responsavelId: USUARIO_B,
@@ -392,6 +477,7 @@ describe("editarTask — reapontar o Contato não atravessa a empresa", () => {
   it("recusa contactId de outra empresa e não reaponta a tarefa", async () => {
     await expect(
       editarTask({
+        companyId: EMPRESA_A,
         taskId: TASK_A,
         titulo: "tarefa da empresa A",
         vencimento: VENCIMENTO,
@@ -406,6 +492,7 @@ describe("editarTask — reapontar o Contato não atravessa a empresa", () => {
 
   it("aceita contactId da PRÓPRIA empresa", async () => {
     await editarTask({
+      companyId: EMPRESA_A,
       taskId: TASK_A,
       titulo: "tarefa da empresa A",
       vencimento: VENCIMENTO,
@@ -414,5 +501,151 @@ describe("editarTask — reapontar o Contato não atravessa a empresa", () => {
     });
 
     expect((await prisma.task.findUniqueOrThrow({ where: { id: TASK_A } })).contactId).toBe(CONTATO_A);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// Ciclo 1d — a conversão para `prismaDaEmpresa`
+// ─────────────────────────────────────────────────────────────────────────
+//
+// Os casos acima travam a família "valida que EXISTE, nunca que é da mesma
+// empresa" nos dois pontos onde ela morava em `tasks/`. Os de baixo travam o
+// que a CONVERSÃO acrescenta: as sete funções públicas do módulo passaram a
+// receber `companyId` e a alcançar o banco só pelo cliente escopado.
+//
+// Cada bloco tem uma SONDA da consulta ANTIGA quando ela é a única forma de
+// provar que havia o que vazar. A sonda não testa produção: testa a FIXTURE —
+// se ela ficar verde, não há dado cruzado e o caso ao lado passaria por
+// vacuidade. É a armadilha 3 deste ciclo, e ela já custou dois blocos.
+
+describe("listarMinhasTasks — escopo por dono NÃO é escopo por empresa", () => {
+  it("SONDA (consulta ANTIGA): só `responsavelId` juntava as duas empresas numa lista", async () => {
+    const antigo = await prisma.task.findMany({
+      where: { responsavelId: USUARIO_DUPLO, concluidaEm: null },
+    });
+
+    const empresas = new Set(antigo.map((t) => t.companyId));
+    expect(empresas.has(EMPRESA_A)).toBe(true);
+    expect(empresas.has(EMPRESA_B)).toBe(true);
+  });
+
+  it("a lista da A traz só as tarefas da A, e traz as dela", async () => {
+    const { itens } = await listarMinhasTasks(EMPRESA_A, USUARIO_DUPLO);
+    const ids = itens.map((t) => t.id);
+
+    expect(ids).toContain(TASK_DUPLO_NA_A);
+    expect(ids).not.toContain(TASK_DUPLO_NA_B);
+  });
+
+  it("a lista da B traz só as tarefas da B — a recusa é de EMPRESA, não do dono", async () => {
+    const { itens } = await listarMinhasTasks(EMPRESA_B, USUARIO_DUPLO);
+    const ids = itens.map((t) => t.id);
+
+    expect(ids).toContain(TASK_DUPLO_NA_B);
+    expect(ids).not.toContain(TASK_DUPLO_NA_A);
+  });
+});
+
+describe("listarTasksPendentesDoLead — a FK do Lead não carrega empresa", () => {
+  it("SONDA (consulta ANTIGA): só `leadId` trazia a tarefa da A pendurada no Lead da B", async () => {
+    const antigo = await prisma.task.findMany({ where: { leadId: LEAD_B, concluidaEm: null } });
+
+    expect(antigo.map((t) => t.id)).toContain(TASK_CRUZADA);
+  });
+
+  it("o detalhe do Lead da B não mostra a tarefa da A pendurada nele", async () => {
+    const tarefas = await listarTasksPendentesDoLead(EMPRESA_B, LEAD_B);
+
+    expect(tarefas.map((t) => t.id)).not.toContain(TASK_CRUZADA);
+  });
+
+  it("o detalhe do Lead da A continua mostrando a tarefa da A", async () => {
+    const tarefas = await listarTasksPendentesDoLead(EMPRESA_A, LEAD_A);
+
+    expect(tarefas.map((t) => t.id)).toContain(TASK_A);
+  });
+});
+
+describe("escrita por id — a regra de dono passa, o escopo é quem recusa", () => {
+  // `USUARIO_DUPLO` É dono de `TASK_B`, então a checagem de dono ACEITA em
+  // todos os casos abaixo. O que recusa é o `companyId` do cliente — e é por
+  // isso que o dono precisou ser o de vínculo duplo: com um dono só da B, a
+  // recusa viria da regra antiga e nada aqui provaria escopo.
+  it("concluirTask não alcança a tarefa da outra empresa", async () => {
+    await expect(
+      concluirTask({ companyId: EMPRESA_A, taskId: TASK_B, autorId: USUARIO_DUPLO })
+    ).rejects.toThrow("Tarefa não encontrada");
+
+    const noBanco = await prisma.task.findUniqueOrThrow({ where: { id: TASK_B } });
+    expect(noBanco.concluidaEm).toBeNull();
+  });
+
+  it("concluirTask alcança a tarefa da PRÓPRIA empresa", async () => {
+    const depois = await concluirTask({
+      companyId: EMPRESA_B,
+      taskId: TASK_B,
+      autorId: USUARIO_DUPLO,
+    });
+
+    expect(depois.concluidaEm).not.toBeNull();
+  });
+
+  it("editarTask não alcança a tarefa da outra empresa", async () => {
+    await expect(
+      editarTask({
+        companyId: EMPRESA_A,
+        taskId: TASK_B,
+        titulo: "sequestrada",
+        vencimento: VENCIMENTO,
+        autorId: USUARIO_DUPLO,
+      })
+    ).rejects.toThrow("Tarefa não encontrada");
+
+    const noBanco = await prisma.task.findUniqueOrThrow({ where: { id: TASK_B } });
+    expect(noBanco.titulo).toBe("tarefa da empresa B");
+  });
+
+  it("editarTask alcança a tarefa da PRÓPRIA empresa", async () => {
+    const depois = await editarTask({
+      companyId: EMPRESA_B,
+      taskId: TASK_B,
+      titulo: "renomeada pela própria empresa",
+      vencimento: VENCIMENTO,
+      autorId: USUARIO_DUPLO,
+    });
+
+    expect(depois.titulo).toBe("renomeada pela própria empresa");
+  });
+
+  it("reabrirTask não alcança a tarefa da outra empresa", async () => {
+    await expect(
+      reabrirTask({ companyId: EMPRESA_A, taskId: TASK_B, autorId: USUARIO_DUPLO })
+    ).rejects.toThrow("Tarefa não encontrada");
+  });
+
+  it("excluirTask não alcança a tarefa da outra empresa, e a linha continua lá", async () => {
+    await expect(
+      excluirTask({ companyId: EMPRESA_A, taskId: TASK_B, autorId: USUARIO_DUPLO })
+    ).rejects.toThrow("Tarefa não encontrada");
+
+    expect(await prisma.task.findUnique({ where: { id: TASK_B } })).not.toBeNull();
+  });
+
+  it("excluirTask alcança a tarefa da PRÓPRIA empresa", async () => {
+    await excluirTask({ companyId: EMPRESA_B, taskId: TASK_B, autorId: USUARIO_DUPLO });
+
+    expect(await prisma.task.findUnique({ where: { id: TASK_B } })).toBeNull();
+  });
+});
+
+describe("listarTasksPendentes — o utilitário sem responsável também é escopado", () => {
+  it("sem `responsavelId`, lista TODA tarefa pendente DESTA empresa e nenhuma da outra", async () => {
+    const pendentes = await listarTasksPendentes(EMPRESA_A);
+    const ids = pendentes.map((t) => t.id);
+
+    expect(ids).toContain(TASK_A);
+    expect(ids).toContain(TASK_DUPLO_NA_A);
+    expect(ids).not.toContain(TASK_B);
+    expect(ids).not.toContain(TASK_DUPLO_NA_B);
   });
 });

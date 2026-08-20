@@ -84,7 +84,7 @@ export default async function DashboardPage() {
     listarAtividadeRecente(usuario.companyId),
   ]);
 
-  const tasksPendentes = await listarTasksPendentes(usuario.id);
+  const tasksPendentes = await listarTasksPendentes(usuario.companyId, usuario.id);
 
   const resumo = etapas.map((etapa) => ({
     id: etapa.id,

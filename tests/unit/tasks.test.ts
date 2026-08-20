@@ -37,6 +37,7 @@ describe("tarefas", () => {
   let usuarioId: string;
   let outroUsuarioId: string;
   let leadId: string;
+  let companyId: string;
 
   beforeAll(async () => {
     await limparDadosDeTeste();
@@ -54,14 +55,21 @@ describe("tarefas", () => {
     // Lead real do seed (Task 9: 4 leads) para o teste de vínculo — não
     // criamos um lead novo aqui para não duplicar a responsabilidade de
     // limpeza de dedupe.test.ts/stage-transition.test.ts.
+    // A empresa do lead do seed. As sete funcoes publicas de `tasks/` passaram a
+    // receber `companyId` no Ciclo 1d, e a origem em producao e sempre
+    // `usuarioAtual().companyId` (`core/tasks/actions.ts`). Aqui ela vem do
+    // proprio dado da fixture, que e o equivalente honesto: o admin e o
+    // vendedor do seed tem `Membership` nesta mesma empresa.
     const lead = await prisma.lead.findFirstOrThrow();
     leadId = lead.id;
+    companyId = lead.companyId;
   });
 
   afterAll(limparDadosDeTeste);
 
   it("cria uma tarefa sem lead vinculado", async () => {
     const task = await criarTask({
+      companyId,
       titulo: `${PREFIXO_TESTE}Ligar para fornecedor`,
       vencimento: new Date(Date.now() + 86_400_000),
       responsavelId: usuarioId,
@@ -72,6 +80,7 @@ describe("tarefas", () => {
 
   it("cria uma tarefa vinculada a um lead existente", async () => {
     const task = await criarTask({
+      companyId,
       titulo: `${PREFIXO_TESTE}Follow-up do lead`,
       vencimento: new Date(Date.now() + 86_400_000),
       responsavelId: usuarioId,
@@ -83,6 +92,7 @@ describe("tarefas", () => {
   it("rejeita leadId que não corresponde a nenhum lead, sem gravar nada", async () => {
     await expect(
       criarTask({
+        companyId,
         titulo: `${PREFIXO_TESTE}Lead inexistente`,
         vencimento: new Date(Date.now() + 86_400_000),
         responsavelId: usuarioId,
@@ -94,6 +104,7 @@ describe("tarefas", () => {
   it("apara e rejeita título vazio/só-espaço", async () => {
     await expect(
       criarTask({
+        companyId,
         titulo: "   ",
         vencimento: new Date(Date.now() + 86_400_000),
         responsavelId: usuarioId,
@@ -104,6 +115,7 @@ describe("tarefas", () => {
   it("rejeita vencimento inválido (Date NaN) — última linha de defesa além de parseDataCivil", async () => {
     await expect(
       criarTask({
+        companyId,
         titulo: `${PREFIXO_TESTE}Vencimento ruim`,
         vencimento: new Date("data-nao-e-uma-data"),
         responsavelId: usuarioId,
@@ -113,11 +125,12 @@ describe("tarefas", () => {
 
   it("marca uma tarefa como concluída pelo próprio dono", async () => {
     const task = await criarTask({
+      companyId,
       titulo: `${PREFIXO_TESTE}Enviar proposta`,
       vencimento: new Date(Date.now() + 86_400_000),
       responsavelId: usuarioId,
     });
-    const concluida = await concluirTask({ taskId: task.id, autorId: usuarioId });
+    const concluida = await concluirTask({ companyId, taskId: task.id, autorId: usuarioId });
     expect(concluida.concluidaEm).not.toBeNull();
   });
 
@@ -126,12 +139,13 @@ describe("tarefas", () => {
       "Task 18, deliberadamente diferente de moverEtapa (leads/service.ts), que nunca checa dono",
     async () => {
       const task = await criarTask({
+        companyId,
         titulo: `${PREFIXO_TESTE}Tarefa de outro dono`,
         vencimento: new Date(Date.now() + 86_400_000),
         responsavelId: usuarioId,
       });
 
-      await expect(concluirTask({ taskId: task.id, autorId: outroUsuarioId })).rejects.toThrow(
+      await expect(concluirTask({ companyId, taskId: task.id, autorId: outroUsuarioId })).rejects.toThrow(
         "Tarefa não encontrada"
       );
 
@@ -144,7 +158,7 @@ describe("tarefas", () => {
 
   it("rejeita conclusão de um id de tarefa inexistente com a MESMA mensagem (não distingue os dois casos)", async () => {
     await expect(
-      concluirTask({ taskId: "task-que-nao-existe", autorId: usuarioId })
+      concluirTask({ companyId, taskId: "task-que-nao-existe", autorId: usuarioId })
     ).rejects.toThrow("Tarefa não encontrada");
   });
 
@@ -165,7 +179,7 @@ describe("tarefas", () => {
           ativo: false,
         },
       });
-      // `criarTask` resolve `Task.companyId` via `companyIdDoUsuario`, que
+      // `criarTask` recebe `companyId` por parametro desde o Ciclo 1d, mas o
       // consulta `Membership` — sem vínculo, `findFirstOrThrow` lança antes
       // mesmo de chegar na checagem de posse que este teste cobre (mesmo
       // fixture faltando em `alerta-atividade.test.ts`, já corrigido lá).
@@ -182,13 +196,14 @@ describe("tarefas", () => {
 
       try {
         const task = await criarTask({
+          companyId,
           titulo: `${PREFIXO_TESTE}Tarefa de usuário desativado`,
           vencimento: new Date(Date.now() + 86_400_000),
           responsavelId: usuarioDesativado.id,
         });
 
         await expect(
-          concluirTask({ taskId: task.id, autorId: outroUsuarioId })
+          concluirTask({ companyId, taskId: task.id, autorId: outroUsuarioId })
         ).rejects.toThrow("Tarefa não encontrada");
 
         const aindaPendente = await prisma.task.findUniqueOrThrow({ where: { id: task.id } });
@@ -207,18 +222,20 @@ describe("tarefas", () => {
 
   it("lista apenas tarefas pendentes de um responsável", async () => {
     const pendente = await criarTask({
+      companyId,
       titulo: `${PREFIXO_TESTE}Tarefa pendente`,
       vencimento: new Date(Date.now() + 86_400_000),
       responsavelId: usuarioId,
     });
     const concluida = await criarTask({
+      companyId,
       titulo: `${PREFIXO_TESTE}Tarefa que será concluída`,
       vencimento: new Date(Date.now() + 86_400_000),
       responsavelId: usuarioId,
     });
-    await concluirTask({ taskId: concluida.id, autorId: usuarioId });
+    await concluirTask({ companyId, taskId: concluida.id, autorId: usuarioId });
 
-    const pendentes = await listarTasksPendentes(usuarioId);
+    const pendentes = await listarTasksPendentes(companyId, usuarioId);
     const ids = pendentes.map((t) => t.id);
     expect(ids).toContain(pendente.id);
     expect(ids).not.toContain(concluida.id);

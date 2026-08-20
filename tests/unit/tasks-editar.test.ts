@@ -1,7 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
+import { prismaFalsoEscopavel } from "./helpers/prisma-falso-escopavel";
+
 const prismaMock = vi.hoisted(() => ({
-  task: { findUnique: vi.fn(), update: vi.fn(), delete: vi.fn() },
+  // `findFirst`/`updateManyAndReturn`/`deleteMany` e nao
+  // `findUnique`/`update`/`delete`: o escopo por empresa RECUSA as tres
+  // segundas em modelo de tenant, lancando (ver "Recusa, lancando" em
+  // `core/tenancy/escopo.ts`). `Task` e modelo de tenant.
+  task: { findFirst: vi.fn(), updateManyAndReturn: vi.fn(), deleteMany: vi.fn() },
   // `findFirst`, e nao `findUnique`: a checagem de `leadId` passou a exigir
   // que o lead seja da empresa da tarefa (`exigirLeadDaEmpresa`,
   // `tasks/service.ts`), e `companyId` nao e chave unica em `Lead` — nao ha
@@ -13,7 +19,12 @@ const auditoriaMock = vi.hoisted(() => vi.fn());
 // `tasks/service.ts` tem `import "server-only"`, que lança fora do pipeline
 // de build do Next. Mesmo no-op dos outros testes deste diretório.
 vi.mock("server-only", () => ({}));
-vi.mock("@/lib/prisma", () => ({ prisma: prismaMock }));
+// O `$extends` de verdade: sem ele `prismaDaEmpresa` quebra com `TypeError`, e
+// com um `$extends` que devolvesse o proprio objeto o escopo viraria no-op
+// silencioso — a assercao de `companyId` abaixo passaria a afirmar o que o
+// codigo escreve a mao em vez do que o escopo injeta. Ver
+// `tests/unit/helpers/prisma-falso-escopavel.ts`.
+vi.mock("@/lib/prisma", () => ({ prisma: prismaFalsoEscopavel(prismaMock) }));
 vi.mock("@/core/audit/log", () => ({ registrarAuditoria: auditoriaMock }));
 
 import { editarTask, excluirTask } from "../../src/core/tasks/service";
@@ -35,14 +46,16 @@ const VENCIMENTO = new Date(Date.UTC(2026, 7, 20));
 
 beforeEach(() => {
   vi.clearAllMocks();
-  prismaMock.task.findUnique.mockResolvedValue(TASK);
-  prismaMock.task.update.mockImplementation(({ data }) => ({ ...TASK, ...data }));
+  prismaMock.task.findFirst.mockResolvedValue(TASK);
+  prismaMock.task.updateManyAndReturn.mockImplementation(({ data }) => [{ ...TASK, ...data }]);
+  prismaMock.task.deleteMany.mockResolvedValue({ count: 1 });
   prismaMock.lead.findFirst.mockResolvedValue({ id: "lead-1" });
 });
 
 describe("editarTask", () => {
   it("grava titulo, descricao e vencimento", async () => {
     await editarTask({
+      companyId: "empresa-1",
       taskId: "task-1",
       titulo: "  corrigido  ",
       descricao: "  detalhe  ",
@@ -50,7 +63,7 @@ describe("editarTask", () => {
       autorId: "user-1",
     });
 
-    const dados = prismaMock.task.update.mock.calls[0][0].data;
+    const dados = prismaMock.task.updateManyAndReturn.mock.calls[0][0].data;
     expect(dados.titulo).toBe("corrigido");
     expect(dados.descricao).toBe("detalhe");
     expect(dados.vencimento).toBe(VENCIMENTO);
@@ -58,20 +71,21 @@ describe("editarTask", () => {
 
   it("recusa quem nao e o dono, com a mesma mensagem de inexistente", async () => {
     await expect(
-      editarTask({ taskId: "task-1", titulo: "x", vencimento: VENCIMENTO, autorId: "user-2" })
+      editarTask({ companyId: "empresa-1", taskId: "task-1", titulo: "x", vencimento: VENCIMENTO, autorId: "user-2" })
     ).rejects.toThrow("Tarefa não encontrada");
-    expect(prismaMock.task.update).not.toHaveBeenCalled();
+    expect(prismaMock.task.updateManyAndReturn).not.toHaveBeenCalled();
   });
 
   it("recusa titulo vazio", async () => {
     await expect(
-      editarTask({ taskId: "task-1", titulo: "   ", vencimento: VENCIMENTO, autorId: "user-1" })
+      editarTask({ companyId: "empresa-1", taskId: "task-1", titulo: "   ", vencimento: VENCIMENTO, autorId: "user-1" })
     ).rejects.toThrow(/Título obrigatório/);
   });
 
   it("recusa vencimento invalido", async () => {
     await expect(
       editarTask({
+        companyId: "empresa-1",
         taskId: "task-1",
         titulo: "x",
         vencimento: new Date("nao-e-data"),
@@ -84,6 +98,7 @@ describe("editarTask", () => {
     prismaMock.lead.findFirst.mockResolvedValue(null);
     await expect(
       editarTask({
+        companyId: "empresa-1",
         taskId: "task-1",
         titulo: "x",
         vencimento: VENCIMENTO,
@@ -99,6 +114,7 @@ describe("editarTask", () => {
   // `tests/unit/task-isolamento.test.ts` — banco real, duas empresas.
   it("consulta o lead com o companyId da PRÓPRIA tarefa, nunca só pelo id", async () => {
     await editarTask({
+      companyId: "empresa-1",
       taskId: "task-1",
       titulo: "x",
       vencimento: VENCIMENTO,
@@ -107,26 +123,32 @@ describe("editarTask", () => {
     });
 
     expect(prismaMock.lead.findFirst).toHaveBeenCalledWith(
+      // `companyId` chega aqui INJETADO pelo escopo — nao ha mais nenhuma linha
+      // do servico que o escreva. E a assercao continua sendo a mesma: sem ele,
+      // um `leadId` forjado de outra empresa passaria.
       expect.objectContaining({ where: { id: "lead-1", companyId: "empresa-1" } })
     );
   });
 
   it("aceita null em leadId para desvincular", async () => {
     await editarTask({
+      companyId: "empresa-1",
       taskId: "task-1",
       titulo: "x",
       vencimento: VENCIMENTO,
       leadId: null,
       autorId: "user-1",
     });
-    expect(prismaMock.task.update.mock.calls[0][0].data.leadId).toBeNull();
+    expect(prismaMock.task.updateManyAndReturn.mock.calls[0][0].data.leadId).toBeNull();
   });
 });
 
 describe("excluirTask", () => {
   it("apaga a propria tarefa", async () => {
-    await excluirTask({ taskId: "task-1", autorId: "user-1" });
-    expect(prismaMock.task.delete).toHaveBeenCalledWith({ where: { id: "task-1" } });
+    await excluirTask({ companyId: "empresa-1", taskId: "task-1", autorId: "user-1" });
+    expect(prismaMock.task.deleteMany).toHaveBeenCalledWith({
+      where: { id: "task-1", companyId: "empresa-1" },
+    });
   });
 
   // Decisão do dono do projeto, tomada na auditoria de segurança desta
@@ -135,7 +157,7 @@ describe("excluirTask", () => {
   // lembretes da equipe e não sobra nada que mostre o que existia.
   // `editarTask` continua SEM auditoria — só a exclusão mudou de regra.
   it("audita a exclusao guardando o que foi destruido", async () => {
-    await excluirTask({ taskId: "task-1", autorId: "user-1" });
+    await excluirTask({ companyId: "empresa-1", taskId: "task-1", autorId: "user-1" });
 
     expect(auditoriaMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -149,12 +171,13 @@ describe("excluirTask", () => {
   });
 
   it("nao audita quando a exclusao e recusada", async () => {
-    await expect(excluirTask({ taskId: "task-1", autorId: "user-2" })).rejects.toThrow();
+    await expect(excluirTask({ companyId: "empresa-1", taskId: "task-1", autorId: "user-2" })).rejects.toThrow();
     expect(auditoriaMock).not.toHaveBeenCalled();
   });
 
   it("NAO audita edicao — so exclusao mudou de regra", async () => {
     await editarTask({
+      companyId: "empresa-1",
       taskId: "task-1",
       titulo: "corrigido",
       vencimento: VENCIMENTO,
@@ -164,9 +187,9 @@ describe("excluirTask", () => {
   });
 
   it("recusa a tarefa de outra pessoa", async () => {
-    await expect(excluirTask({ taskId: "task-1", autorId: "user-2" })).rejects.toThrow(
+    await expect(excluirTask({ companyId: "empresa-1", taskId: "task-1", autorId: "user-2" })).rejects.toThrow(
       "Tarefa não encontrada"
     );
-    expect(prismaMock.task.delete).not.toHaveBeenCalled();
+    expect(prismaMock.task.deleteMany).not.toHaveBeenCalled();
   });
 });

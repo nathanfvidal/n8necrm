@@ -99,7 +99,7 @@ const SCHEMA = join(RAIZ_PROJETO, "prisma", "schema.prisma");
  * cada conversão): é a igualdade exata entre árvore e listas, no caso logo
  * abaixo, que nomeia o arquivo que entrou.
  */
-const LINHA_DE_BASE_DE_IMPORTADORES_TEMPORARIOS = 8;
+const LINHA_DE_BASE_DE_IMPORTADORES_TEMPORARIOS = 4;
 
 /**
  * Arquivos que podem nomear o tipo do cliente CRU sem estar na fila de
