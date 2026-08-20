@@ -3,10 +3,10 @@
 import { useState, useTransition } from "react";
 import { toast } from "sonner";
 
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { ConfirmarDialogo } from "@/components/confirmar-dialogo";
+import { StatusExecucao } from "@/components/automation/status-execucao";
 import { formatarDataHoraBR } from "@/lib/date";
 import { reexecutarExecucaoAction } from "@/modules/automation/actions";
 import type { Execucao } from "@/modules/automation/n8n/tipos";
@@ -54,7 +54,16 @@ export function ExecucoesTable({ execucoes }: { execucoes: Execucao[] }) {
         {execucoes.map((execucao) => (
           <TableRow key={execucao.id}>
             <TableCell>
-              <Badge variant={execucao.status === "success" ? "default" : "destructive"}>{execucao.status}</Badge>
+              {/* Componente compartilhado com `fluxos-table.tsx` — antes disto,
+                  esta célula usava `variant={status === "success" ?
+                  "default" : "destructive"}` e mostrava `execucao.status` cru
+                  em inglês. Dois defeitos na mesma linha: `running` e
+                  `waiting` viravam vermelho (uma execução rodando agora
+                  aparecia como falha, nesta que é a tela de diagnóstico), e o
+                  texto não batia com o português que `fluxos-table.tsx` já
+                  usava para o mesmo conceito. Ver `status-execucao.tsx` para
+                  o raciocínio completo por trás da variante de cada status. */}
+              <StatusExecucao status={execucao.status} />
             </TableCell>
             <TableCell>{execucao.iniciadoEm ? formatarDataHoraBR(new Date(execucao.iniciadoEm)) : "—"}</TableCell>
             <TableCell>{duracao(execucao)}</TableCell>
