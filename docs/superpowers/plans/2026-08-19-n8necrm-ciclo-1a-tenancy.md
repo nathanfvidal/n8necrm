@@ -37,18 +37,42 @@ tabelas novas em `rls_enabled_no_policy` — `Company` e `Membership` nascem com
 RLS ligada pelo gatilho `rls_auto_enable()` da plataforma, e sem política é o
 estado correto.
 
+## CORREÇÃO DE ROTA — lida antes de qualquer coisa
+
+Este plano nasceu com um erro de premissa, descoberto ao aplicar a Task 1.
+
+**O que eu escrevi:** o escopo seria aplicado só em `leads` neste ciclo, e os
+demais serviços ficariam numa exceção de lint que o próximo ciclo removeria.
+
+**Por que não sobrevive ao contato com a realidade:** `companyId` é `NOT NULL`.
+Uma coluna obrigatória força **todo `create` do sistema** a fornecê-la, no
+mesmo instante em que a migração roda. Não existe "um serviço por vez" — a
+mudança de schema é global por construção. Medido logo após a Task 1:
+**71 erros de tipo**, sendo 15 em `src/` (13 arquivos), 50 em testes e 6 no
+seed de demonstração.
+
+**A alternativa que existia e foi descartada:** `companyId` nulável primeiro,
+apertando para `NOT NULL` num ciclo posterior (expand/contract). Descartada
+porque coluna nulável permite linha que não pertence a empresa nenhuma — e é
+justamente esse estado que torna o isolamento entre tenants impossível de
+verificar. Com uma única empresa existindo hoje, cada ponto de escrita tem
+resposta inequívoca, então o custo de fazer certo agora é mecânico, não
+arquitetural.
+
+**O que muda no plano:** entram duas tarefas de reparo, e a antiga Task 4
+("provar em `leads`") deixa de existir como estava — todos os serviços são
+tocados de qualquer jeito, porque o compilador exige.
+
 ## O que este ciclo NÃO faz, e por quê
 
-**Aplicar o escopo em todos os serviços do `core`.** É o volume mecânico da
-mudança — dezenas de funções em `leads`, `contacts`, `tasks`, `pipeline`,
-`notifications`, `users` — e cada uma é uma chance de filtrar pela coluna errada
-ou esquecer um caminho de escrita. Merece ciclo e revisão próprios.
+**Converter os serviços para o client escopado.** Fornecer `companyId` no
+`create` (obrigatório, feito aqui) é diferente de **filtrar por ele em toda
+leitura** (o isolamento de verdade). O primeiro o compilador exige; o segundo
+não, e é onde o vazamento mora.
 
-Este ciclo entrega o mecanismo e **prova em um serviço de ponta a ponta**
-(`leads`), com teste de isolamento. Os demais ficam importando o `prisma` cru
-por uma exceção **nomeada e datada** na regra de ESLint, que o próximo ciclo
-remove uma a uma. A exceção é visível e conta quantos faltam; disciplina não
-conta nada.
+Este ciclo entrega o mecanismo de escopo e o aplica em `leads`. Os demais
+serviços ficam numa exceção de lint **nomeada e datada**, que conta quantos
+faltam. Exceção nomeada conta; disciplina não conta nada.
 
 ---
 
