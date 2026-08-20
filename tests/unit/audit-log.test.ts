@@ -28,22 +28,42 @@ import { registrarAuditoria } from "../../src/core/audit/log";
 // padrão: apagar o usuário antes dos logs falharia).
 describe("registrarAuditoria", () => {
   let userId: string;
+  let companyId: string;
 
+  // O vínculo é obrigatório desde o Ciclo 1a, e não é detalhe de fixture:
+  // `registrarAuditoria` resolve a empresa da linha por
+  // `companyIdDoUsuario(userId)`, que lê `Membership`. Um usuário sem vínculo
+  // faz a função LANÇAR — foi assim que estes dois testes quebraram quando a
+  // coluna `AuditLog.companyId` passou a existir.
+  //
+  // A empresa é criada aqui, e não reaproveitada do seed, para o teste não
+  // depender do que já está no banco de desenvolvimento compartilhado: o
+  // `afterAll` apaga exatamente o que este arquivo criou.
   beforeAll(async () => {
+    const empresa = await prisma.company.create({
+      data: { nome: "Empresa de teste (audit log)" },
+    });
+    companyId = empresa.id;
+
     const usuario = await prisma.user.create({
       data: {
         nome: "Usuário de teste (audit log)",
         email: "teste-audit-log@teste.local",
         senhaHash: "hash-fake-nao-usado-em-login",
         papel: "VENDEDOR",
+        memberships: { create: { companyId, papel: "VENDEDOR" } },
       },
     });
     userId = usuario.id;
   });
 
+  // Ordem obrigatória: as linhas de auditoria referenciam o usuário e a
+  // empresa, e o vínculo referencia os dois. Apagar a empresa primeiro
+  // esbarraria em chave estrangeira.
   afterAll(async () => {
     await prisma.auditLog.deleteMany({ where: { userId } });
     await prisma.user.delete({ where: { id: userId } });
+    await prisma.company.delete({ where: { id: companyId } });
   });
 
   it("grava antes/depois e permite ler de volta os valores gravados", async () => {
