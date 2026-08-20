@@ -66,8 +66,8 @@ conta nada.
   `@@unique([userId, companyId])`; coluna `companyId String` **NOT NULL** com FK
   e índice em `Contact`, `PipelineStage`, `Lead`, `LeadNote`, `Task`,
   `Notification`, `Conversation`, `WhatsappMessage`, `AuditLog`, `BotConfig`.
-  `User.papel` **removida**. `BotConfig.id` passa a `cuid()` com
-  `@@unique([companyId])`.
+  `BotConfig.id` passa a `cuid()` com `@@unique([companyId])`.
+  `User.papel` **continua existindo** ao fim desta tarefa — a Task 2 a derruba.
 
 **OBRIGATÓRIO antes de começar:** invocar `supabase`,
 `supabase-postgres-best-practices` e `auditing-supabase-security`, as três.
