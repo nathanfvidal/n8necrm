@@ -49,6 +49,18 @@ que dependem dela — ver `docs/superpowers/specs/2026-08-19-n8necrm-fundacao-de
    feature em aberto da origem não vieram.
 8. **Identidade do produto: EM ABERTO.** `config/client.ts` está genérico de
    propósito. Isto é uma decisão adiada, não um esquecimento.
+9. **O chat mora no CRM. Chatwoot considerado e recusado** (2026-08-20). Não
+   por ser ruim — por já existirem 1.603 linhas em `src/modules/whatsapp/`,
+   16 arquivos de teste, três telas e os modelos `Conversation`,
+   `WhatsappMessage` e `BotConfig`. Receber, responder, pausar e religar a IA
+   e o repasse para humano já funcionam; falta só o push, que é o Ciclo 3.
+   Integrar o Chatwoot daria a `Contact` dois donos, poria a máquina de estado
+   dele contra as 498 linhas de lease IA/humano de `turno.ts`, e traria um
+   segundo modelo de isolamento (`accounts`) ao lado do `companyId` do Ciclo
+   1a — e o mais fraco dos dois define o piso. Os recursos de caixa de entrada
+   que motivaram a pergunta (atribuição, etiquetas, respostas prontas, notas,
+   CSAT) viram ciclo próprio dentro deste modelo de dados. Instagram Direct sai
+   pela Graph API que o Ciclo 2 já liga para a Meta Cloud API.
 
 ## Armadilhas conhecidas
 
