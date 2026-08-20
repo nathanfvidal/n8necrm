@@ -229,6 +229,26 @@ export interface EvolutionGatewayConfig {
 }
 
 /**
+ * Substitui a apikey por `[apikey]` num texto vindo da Evolution.
+ *
+ * `split`/`join` em vez de `replace` com expressão regular: a apikey é dado de
+ * configuração e pode conter `.`, `+`, `$` ou barra invertida — caracteres que
+ * uma regex montada a partir dela interpretaria, produzindo uma redação que
+ * falha justamente nas chaves mais incomuns. Substituição literal não tem esse
+ * problema.
+ *
+ * `apiKey` vazia devolve o texto intacto: sem isso, `split("")` estilhaçaria
+ * a string caractere a caractere e o corpo do erro sairia como uma fileira de
+ * `[apikey]`. Há caso de teste para as três metades — a apikey ecoada, a chave
+ * com caractere de regex dentro, e a apikey vazia — em
+ * `tests/unit/whatsapp-evolution-gateway.test.ts`.
+ */
+function redigirApiKey(texto: string, apiKey: string): string {
+  if (apiKey.length === 0) return texto;
+  return texto.split(apiKey).join("[apikey]");
+}
+
+/**
  * Adapter da Evolution API (self-hosted). Não lê `process.env` diretamente —
  * recebe a configuração já validada pelo construtor, lida e validada em
  * `gateway/index.ts` (mesmo raciocínio de isolar a validação de env num só
@@ -323,8 +343,21 @@ export class EvolutionGateway implements WhatsappGateway {
 
     if (!resposta.ok) {
       const corpo = await resposta.text().catch(() => "");
+      // A apikey sai do corpo ANTES de virar mensagem. Uma API que recusa
+      // autenticação costuma devolver a credencial recebida, e esta mensagem
+      // vai para `console.error` e para o Sentry — onde fica fora do controle
+      // de quem opera o CRM, para sempre.
+      //
+      // A redação é aqui e não em `src/lib/sentry-scrub.ts` porque só ESTE
+      // objeto sabe qual é a apikey: o formato dela não é fixo, então nenhuma
+      // expressão regular a reconheceria sem redigir meio mundo junto. Isto é
+      // substituição exata; aquele arquivo cuida do que dá para reconhecer por
+      // forma (blob do cofre, chave base64, bcrypt, e-mail, telefone).
       throw new Error(
-        `Falha ao enviar mensagem via Evolution (HTTP ${resposta.status}): ${corpo.slice(0, 500)}`
+        `Falha ao enviar mensagem via Evolution (HTTP ${resposta.status}): ${redigirApiKey(
+          corpo.slice(0, 500),
+          this.config.apiKey
+        )}`
       );
     }
 

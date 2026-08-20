@@ -411,3 +411,90 @@ describe("EvolutionGateway.enviarTexto", () => {
     expect(resultado.idExterno).toMatch(/^evolution-sem-id-/);
   });
 });
+
+describe("a apikey nunca entra na mensagem de erro (Ciclo 2a)", () => {
+  const APIKEY = "chave-secreta-da-instancia-9f3c1a2b";
+
+  it("corpo de erro que ECOA a apikey sai redigido", async () => {
+    // Isto não é hipótese: uma API que recusa autenticação frequentemente
+    // devolve a credencial recebida no corpo do erro, e `enviarTexto` põe os
+    // primeiros 500 caracteres do corpo dentro da mensagem lançada. Daí a
+    // mensagem vai para `console.error` e para o Sentry.
+    //
+    // A defesa é EXATA e não heurística: o adaptador conhece a própria
+    // apikey. Uma expressão regular não conseguiria — o formato da apikey da
+    // Evolution não é fixo, e por isso `sentry-scrub.ts` não tem padrão para
+    // ela.
+    const gateway = new EvolutionGateway({
+      domain: "https://evo.exemplo.com",
+      instance: "instancia-teste",
+      apiKey: APIKEY,
+    });
+
+    const fetchOriginal = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ erro: "unauthorized", apikey: APIKEY }), {
+        status: 401,
+      })) as typeof fetch;
+
+    try {
+      await expect(gateway.enviarTexto("5511999998888", "oi")).rejects.toThrow(/\[apikey\]/);
+      await expect(gateway.enviarTexto("5511999998888", "oi")).rejects.not.toThrow(
+        new RegExp(APIKEY)
+      );
+    } finally {
+      globalThis.fetch = fetchOriginal;
+    }
+  });
+
+  /** Constrói um gateway com a apikey dada e um fetch que responde 401 ecoando `corpo`. */
+  function gatewayQueRecebe401(apiKey: string, corpo: string) {
+    const gateway = new EvolutionGateway({
+      domain: "https://evo.exemplo.com",
+      instance: "instancia-teste",
+      apiKey,
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({ ok: false, status: 401, text: async () => corpo })
+    );
+    return gateway;
+  }
+
+  it("apikey com caractere de expressão regular dentro também sai redigida", async () => {
+    // Esta é a prova de que `split`/`join` era necessário. A apikey é dado de
+    // configuração: nada impede um `.`, um `+` ou um `$` nela. Montada numa
+    // `new RegExp(apiKey)`, `a.b+c$d` casaria com quase nada do texto literal
+    // — a redação passaria verde e a credencial sairia inteira no erro.
+    const chaveEstranha = "a.b+c$d*e?f[g]^h";
+    const gateway = gatewayQueRecebe401(
+      chaveEstranha,
+      JSON.stringify({ erro: "unauthorized", apikey: chaveEstranha })
+    );
+
+    try {
+      await expect(gateway.enviarTexto("5511999998888", "oi")).rejects.toThrow(/\[apikey\]/);
+      await expect(gateway.enviarTexto("5511999998888", "oi")).rejects.not.toThrow(chaveEstranha);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("apikey vazia devolve o corpo intacto, não uma fileira de [apikey]", async () => {
+    // `"".split("")` estilhaça a string caractere a caractere; sem a guarda de
+    // comprimento zero, `instância desconectada` viraria
+    // `[apikey]i[apikey]n[apikey]s...` e o diagnóstico do erro morreria junto.
+    // Apikey vazia não é hipótese acadêmica: é o estado de uma conexão recém
+    // cadastrada cujo segredo ainda não foi preenchido.
+    const gateway = gatewayQueRecebe401("", "instância desconectada");
+
+    try {
+      await expect(gateway.enviarTexto("5511999998888", "oi")).rejects.toThrow(
+        "instância desconectada"
+      );
+      await expect(gateway.enviarTexto("5511999998888", "oi")).rejects.not.toThrow("[apikey]");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
