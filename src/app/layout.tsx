@@ -25,7 +25,16 @@ export const metadata: Metadata = {
  * cliente.
  *
  * O layout raiz continua SÍNCRONO: `client` é importação estática, não há
- * `headers()` aqui. Ler o nonce na raiz tornaria toda rota dinâmica.
+ * `headers()` aqui. Ler o nonce na raiz tornaria dinâmica a única rota que
+ * ainda é estática — medido em 2026-08-20 com `npm run build`: `/_not-found`,
+ * e nada mais (as outras já são dinâmicas, `/login` inclusive, porque ela
+ * chama `usuarioAtual()`). Esta frase dizia "toda rota dinâmica"; o número
+ * medido é 1.
+ *
+ * O motivo de a raiz não ler a marca da empresa NÃO é esse custo, e sim que
+ * ela envolve `/login`, onde não existe sessão e portanto não existe empresa.
+ * Quem aplica a marca por empresa é `(painel)/layout.tsx`, que já é
+ * `force-dynamic` e já tem `companyId` em mãos — Ciclo 1c, decisão 4.3.
  */
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
@@ -41,7 +50,10 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
           build derivada de `config/client.ts` — arquivo versionado, não
           entrada de usuário — e todo valor passa por `formatarOklch`, que
           emite exclusivamente números. Nenhum texto do config chega a este
-          string.
+          string. O painel emite um SEGUNDO bloco, com a marca da empresa
+          (`(painel)/layout.tsx`), e lá a origem é o banco — o que fecha o caso
+          lá é `formatarOklch` mais a validação de `marcaSchema` na leitura,
+          não a origem.
         */}
         <style dangerouslySetInnerHTML={{ __html: tema }} />
       </head>
