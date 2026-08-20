@@ -79,3 +79,21 @@ que dependem dela — ver `docs/superpowers/specs/2026-08-19-n8necrm-fundacao-de
 - **Validar env em escopo de módulo derruba o build.** `next build` avalia
   módulos alcançáveis; validação no topo do arquivo roda sem as variáveis. O
   padrão da base é construção preguiçosa (ver `gateway/index.ts` e `fila/`).
+- **`auth.uid()` é inutilizável neste projeto.** Ela faz cast de `sub` para
+  `uuid` e o `User.id` desta base é **cuid**. Medido em 2026-08-20 contra
+  `uzumzfxjcxrbxaucvfsr`: `ERROR: 22P02: invalid input syntax for type uuid:
+  "cmt11hfuu0000gc6jy1sbu1f7"`. Uma política que a chame não devolve falso —
+  **levanta exceção** e derruba a consulta, com uma mensagem que fala de UUID
+  e não de política. Toda política usa `auth.jwt() ->> 'sub'` e
+  `auth.jwt() ->> 'company_id'` (este último também medido no mesmo dia: lê o
+  claim customizado). Registrado no JSDoc de `src/core/supabase-jwt/emitir.ts`;
+  o e2e que trava isso contra o Postgres real, `tests/e2e/claims-jwt.spec.ts`,
+  é criado na Task 7 deste ciclo e **ainda não existe**.
+- **O schema `realtime` já concede 8 privilégios a `anon`/`authenticated` de
+  fábrica**, e isso não é defeito: `realtime.messages` e `realtime.subscription`
+  nascem assim quando o Supabase instala o Realtime. Medido em 2026-08-20. O
+  que tranca a porta é `realtime.messages` estar com RLS ligada e ZERO
+  políticas — mesma postura do schema `public`. Por isso a vigilância desse
+  schema em `tests/e2e/banco-blindado.spec.ts` fixa o CONJUNTO EXATO de grants
+  em vez de exigir lista vazia: exigir vazio seria vermelho no primeiro dia e
+  o "conserto" arrancaria o Realtime que o Ciclo 3 precisa.
