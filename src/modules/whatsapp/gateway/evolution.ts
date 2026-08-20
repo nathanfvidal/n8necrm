@@ -249,11 +249,12 @@ function redigirApiKey(texto: string, apiKey: string): string {
 }
 
 /**
- * Adapter da Evolution API (self-hosted). Não lê `process.env` diretamente —
- * recebe a configuração já validada pelo construtor, lida e validada em
- * `gateway/index.ts` (mesmo raciocínio de isolar a validação de env num só
- * lugar, mas aqui separado em dois arquivos: este contém só a lógica do
- * protocolo Evolution, testável sem nenhuma variável de ambiente definida).
+ * Adapter da Evolution API (self-hosted). Não lê `process.env` — nunca leu, e
+ * desde o Ciclo 2a não há o que ler: recebe `{ domain, instance, apiKey }`
+ * pelo construtor, e quem os resolve é `gateway/fabrica.ts`, a partir da linha
+ * de `WhatsappConnection` daquela empresa. Este arquivo contém só a lógica do
+ * protocolo Evolution, testável sem nenhuma variável de ambiente definida
+ * (`tests/unit/whatsapp-evolution-gateway.test.ts` constrói a classe direto).
  */
 export class EvolutionGateway implements WhatsappGateway {
   constructor(private readonly config: EvolutionGatewayConfig) {}

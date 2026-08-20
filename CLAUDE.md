@@ -41,7 +41,10 @@ que dependem dela — ver `docs/superpowers/specs/2026-08-19-n8necrm-fundacao-de
    e RLS desde o Ciclo 1; a interface serve uma empresa só.
 3. **n8n: painel via API + editor em iframe.** O painel é a base de sustentação
    se o iframe cair.
-4. **Evolution: conexões com QR Code pelo CRM**, multi-instância.
+4. **Evolution: conexões com QR Code pelo CRM**, multi-instância. O Ciclo 2a
+   entregou o cofre, a tabela por empresa e a aba de administração; **o QR Code
+   e o estado de pareamento ficaram para o Ciclo 2c** — nada disso é provável
+   sem uma instância Evolution acessível, e este ambiente não tem uma.
 5. **Tempo real: Supabase Realtime**, com RLS como trava do canal.
 6. **Hospedagem: Vercel.** A fila continua Vercel Queues; o que mudou no Ciclo 0
    é que ela virou adaptador atrás de uma interface.
@@ -79,6 +82,19 @@ que dependem dela — ver `docs/superpowers/specs/2026-08-19-n8necrm-fundacao-de
 - **Validar env em escopo de módulo derruba o build.** `next build` avalia
   módulos alcançáveis; validação no topo do arquivo roda sem as variáveis. O
   padrão da base é construção preguiçosa (ver `gateway/index.ts` e `fila/`).
+  O último arquivo que ainda faz do jeito antigo é `src/lib/env.ts`
+  (`DATABASE_URL` e `AUTH_SECRET`, parseadas no topo) — não é dívida do Ciclo
+  2a e está nomeada em `gateway/index.ts` para não ser lida como esquecimento.
+- **Credencial de canal não mora no ambiente.** `EVOLUTION_*` morreram no Ciclo
+  2a. A apikey vive cifrada em `WhatsappConnection.segredoCifrado`, por empresa,
+  e a chave mestra é `COFRE_CHAVE_MESTRA` — a única peça que continua fora do
+  banco, e a razão de o dump valer nada sozinho. **Sem ela o WhatsApp não sobe**,
+  e não existe fallback: um padrão por deploy responderia clientes de uma
+  empresa pela instância de outra.
+- **O webhook da Evolution carrega `companyId` E token no path.** O `companyId`
+  é hipótese, não autoridade — quem decide é o token, porque a busca é escopada
+  naquela empresa. Trocar a URL do webhook no painel da Evolution é parte de
+  cadastrar uma conexão.
 - **`auth.uid()` é inutilizável neste projeto.** Ela faz cast de `sub` para
   `uuid` e o `User.id` desta base é **cuid**. Medido em 2026-08-20 contra
   `uzumzfxjcxrbxaucvfsr`: `ERROR: 22P02: invalid input syntax for type uuid:

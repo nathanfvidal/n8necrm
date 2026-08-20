@@ -1,8 +1,9 @@
 // Sem Prisma nem "server-only" — EvolutionGateway (gateway/evolution.ts) não
-// importa nenhum dos dois (só gateway/index.ts, que faz a validação de env e
-// instancia o singleton, tem "server-only" — não testado aqui de propósito,
-// testar a classe direto evita precisar de EVOLUTION_DOMAIN/INSTANCE/APIKEY
-// num teste que não toca rede de verdade).
+// importa nenhum dos dois. Quem tem "server-only" é a porta do pacote
+// (gateway/index.ts) e a fábrica que ela reexporta, e nenhuma das duas é
+// tocada aqui de propósito: testar a classe direto mantém este arquivo livre
+// de banco e de credencial, e por isso ele não precisou mudar quando a
+// credencial saiu do ambiente e foi para WhatsappConnection (Ciclo 2a).
 import { describe, it, expect, vi, afterEach } from "vitest";
 
 import { EvolutionGateway } from "../../src/modules/whatsapp/gateway/evolution";

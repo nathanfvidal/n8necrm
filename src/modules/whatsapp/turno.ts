@@ -358,7 +358,8 @@ async function processarMensagensPendentes(
   // ## De onde sai a conexão do envio (Ciclo 2a, Tarefa 8)
   //
   // Era `whatsappGateway`, um singleton por PROCESSO com a credencial de
-  // `EVOLUTION_*` (`gateway/index.ts`). Um processo serve várias empresas, e
+  // `EVOLUTION_*`. Ele morava em `gateway/index.ts` e foi apagado de lá pela
+  // Tarefa 10, junto com as variáveis. Um processo serve várias empresas, e
   // uma empresa pode ter mais de uma conexão (decisão travada 4 do
   // `CLAUDE.md`): com credencial por empresa, aquele singleton responderia o
   // cliente da empresa B pela instância da A.

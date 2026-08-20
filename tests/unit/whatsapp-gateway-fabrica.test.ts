@@ -3,9 +3,11 @@
 // O que este arquivo prende, além do caminho feliz:
 //
 //   1. o caminho NOVO (credencial vinda do banco, por empresa);
-//   2. o caminho ANTIGO (`whatsappGateway`, singleton de `EVOLUTION_*`)
-//      CONTINUA funcionando — é a definição de "expande", e sem este caso a
-//      tarefa não teria como afirmar que não quebrou nada;
+//   2. (era: o caminho ANTIGO -- o singleton de `EVOLUTION_*` -- CONTINUA
+//      funcionando, que era a definição de "expande". A Tarefa 10 CONTRAIU e
+//      apagou o singleton; o que restou daquele bloco é o caso que afirma que
+//      a instância conferida sai da CONEXÃO. A prova de que o singleton morreu
+//      mudou de arquivo: `whatsapp-config-preguicosa.test.ts`.)
 //   3. a apikey decifrada não sai na mensagem de erro quando a Evolution
 //      recusa — pendência que a Tarefa 3 (scrub do Sentry) deixou nomeada
 //      para quem construísse um caminho novo até a Evolution;
@@ -31,7 +33,6 @@ import {
   ConexaoIncompletaError,
 } from "../../src/modules/whatsapp/gateway/fabrica";
 import { EvolutionGateway } from "../../src/modules/whatsapp/gateway/evolution";
-import { whatsappGateway } from "../../src/modules/whatsapp/gateway/index";
 
 const CRED = {
   id: "conn_1",
@@ -208,34 +209,28 @@ describe("a apikey decifrada não vaza quando a Evolution recusa", () => {
   });
 });
 
-describe("o caminho ANTIGO continua vivo — é o que 'expande' quer dizer", () => {
-  it("`whatsappGateway` ainda constrói a partir de `EVOLUTION_*`, ao lado da fábrica", async () => {
-    // A Tarefa 10 é quem CONTRAI (mata as variáveis). Enquanto ela não roda, a
-    // suíte inteira e as rotas em produção dependem deste singleton. Sem este
-    // caso, "não removi nada" seria afirmação sem prova — e o modo de falha é
-    // silencioso: só apareceria como envio quebrado em produção.
-    vi.stubEnv("EVOLUTION_DOMAIN", "https://evo-antiga.exemplo.com");
-    vi.stubEnv("EVOLUTION_INSTANCE", "instancia-do-ambiente");
-    vi.stubEnv("EVOLUTION_APIKEY", "apikey-do-ambiente");
-
-    expect(whatsappGateway.verificarOrigem({ instance: "instancia-do-ambiente" })).toBe(true);
-    expect(whatsappGateway.verificarOrigem({ instance: "inst-1" })).toBe(false);
-  });
-
-  it("os dois caminhos são objetos SEPARADOS — a fábrica não reusa o singleton", () => {
-    // Se a fábrica devolvesse o singleton, `verificarOrigem` compararia contra
-    // `EVOLUTION_INSTANCE` e não contra a instância da CONEXÃO — e o webhook de
-    // uma empresa passaria a aceitar payload da instância do deploy.
-    //
-    // As três variáveis são repostas aqui, e não herdadas do caso anterior: o
-    // singleton de `index.ts` guarda a instância na primeira construção, então
-    // um caso que dependesse da ordem passaria em suíte e falharia sozinho.
-    vi.stubEnv("EVOLUTION_DOMAIN", "https://evo-antiga.exemplo.com");
-    vi.stubEnv("EVOLUTION_INSTANCE", "instancia-do-ambiente");
-    vi.stubEnv("EVOLUTION_APIKEY", "apikey-do-ambiente");
-
+describe("o caminho ANTIGO acabou — a Tarefa 10 CONTRAIU", () => {
+  // Este describe tinha dois casos afirmando que `whatsappGateway`, o singleton
+  // de `EVOLUTION_*`, continuava vivo AO LADO da fábrica. Era a prova de que a
+  // fase EXPANDE não havia quebrado nada, e ela cumpriu o papel até a Tarefa 10
+  // apagar o singleton junto com as três variáveis.
+  //
+  // O caso que sobrevive é o que nunca foi sobre o singleton: a instância
+  // conferida por `verificarOrigem` sai da CONEXÃO. Enquanto havia dois
+  // caminhos, ele era escrito como "a fábrica não reusa o singleton"; sem o
+  // singleton, a mesma afirmação se escreve direto, e é ela que impede o
+  // webhook de uma empresa de aceitar payload da instância de outra.
+  //
+  // Onde está a prova de que o singleton morreu de fato:
+  // `tests/unit/whatsapp-config-preguicosa.test.ts` — um caso afirmando que o
+  // módulo não exporta mais `whatsappGateway`, e uma varredura de fonte
+  // afirmando que nenhuma linha de código de `src/` cita as três variáveis.
+  it("a instância conferida sai da CONEXÃO, não de variável de ambiente nenhuma", () => {
+    // Nada é reposto no ambiente aqui de propósito: se `verificarOrigem` ainda
+    // dependesse de uma variável, este caso falharia por ela estar ausente em
+    // vez de passar por ela ser irrelevante.
     const daFabrica = gatewayDaCredencial(CRED);
-    expect(daFabrica).not.toBe(whatsappGateway);
+    expect(daFabrica.verificarOrigem({ instance: CRED.instancia })).toBe(true);
     expect(daFabrica.verificarOrigem({ instance: "instancia-do-ambiente" })).toBe(false);
   });
 });

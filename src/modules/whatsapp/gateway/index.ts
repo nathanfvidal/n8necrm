@@ -1,111 +1,89 @@
 import "server-only";
 
-import { z } from "zod";
-
-import { EvolutionGateway } from "./evolution";
-import type { WhatsappGateway } from "./tipos";
-
-export type { WhatsappGateway, EventoWhatsapp, TipoMensagemWhatsapp } from "./tipos";
-
-// Validação isolada neste módulo, não em src/lib/env.ts — mesmo raciocínio
-// de src/lib/storage.ts: só quem realmente importa o gateway do WhatsApp
-// precisa dessas variáveis. Se elas fossem exigidas no schema central,
-// qualquer teste ou build que importe algo que dependa de env.ts passaria a
-// exigir credenciais da Evolution mesmo sem usar o módulo de WhatsApp.
-const gatewayEnvSchema = z.object({
-  EVOLUTION_DOMAIN: z.string().url({
-    message: "EVOLUTION_DOMAIN ausente ou inválida — defina no .env (URL da sua instância Evolution)",
-  }),
-  EVOLUTION_INSTANCE: z.string().min(1, {
-    message: "EVOLUTION_INSTANCE ausente — defina no .env (nome da instância pareada na Evolution)",
-  }),
-  EVOLUTION_APIKEY: z.string().min(1, {
-    message: "EVOLUTION_APIKEY ausente — defina no .env (apikey da instância Evolution)",
-  }),
-});
-
-function getGatewayEnv() {
-  const resultado = gatewayEnvSchema.safeParse({
-    EVOLUTION_DOMAIN: process.env.EVOLUTION_DOMAIN,
-    EVOLUTION_INSTANCE: process.env.EVOLUTION_INSTANCE,
-    EVOLUTION_APIKEY: process.env.EVOLUTION_APIKEY,
-  });
-
-  if (!resultado.success) {
-    // O NOME da variável entra à força, e não só `issue.message`. Quando o
-    // valor é `undefined`, o Zod falha na checagem de tipo e nunca chega a
-    // `.url()`/`.min()` — então a mensagem customizada acima não aparece, e o
-    // que sobra é "Invalid input: expected string, received undefined", três
-    // vezes, sem dizer qual variável. Foi exatamente o que o log de build da
-    // Vercel mostrou em 2026-08-07, e descobrir quais faltavam exigiu ler o
-    // rastreio de pilha até o módulo.
-    const detalhes = resultado.error.issues
-      .map((issue) => `${issue.path.join(".") || "(desconhecida)"}: ${issue.message}`)
-      .join("; ");
-    throw new Error(`Configuração do gateway de WhatsApp inválida: ${detalhes}`);
-  }
-
-  return resultado.data;
-}
-
-let instancia: WhatsappGateway | null = null;
-
 /**
- * Constrói o gateway na PRIMEIRA USO, não ao importar o módulo.
+ * A porta única do pacote `gateway`.
  *
- * ## Por que preguiçoso, e não `const env = getGatewayEnv()` no topo
+ * ## O que morreu aqui, no Ciclo 2a, e por quê
  *
- * Era assim, e derrubou o deploy de produção por três dias sem ninguém
- * perceber. `next build` avalia cada módulo alcançável para coletar a
- * configuração das rotas; a cadeia
+ * Este arquivo tinha um schema Zod lendo `EVOLUTION_DOMAIN`,
+ * `EVOLUTION_INSTANCE` e `EVOLUTION_APIKEY`, e um `Proxy` que construía UM
+ * `EvolutionGateway` por processo, na primeira propriedade acessada.
+ *
+ * As duas coisas eram certas para um deploy de uma empresa só e são erradas
+ * agora, por motivos diferentes:
+ *
+ * - **As variáveis** eram credencial por DEPLOY para um dado que é por
+ *   EMPRESA. Não davam lugar para a segunda empresa, e trocar a chave era um
+ *   redeploy.
+ * - **O singleton** era uma credencial por processo, e um processo serve
+ *   várias empresas. Com credencial por empresa, ele responderia o cliente de
+ *   uma pela instância de outra.
+ *
+ * Elas não viraram "padrão de arquivo, sobreposto pelo banco", que é o que o
+ * Ciclo 1c fez com a marca em `config/client.ts`, e a diferença é o custo do
+ * padrão errado: marca errada abre o painel na cor genérica e se vê na hora;
+ * credencial errada faz a empresa B responder clientes pelo número da A, e não
+ * se vê nunca. Um padrão de credencial por deploy é `Company.findFirst()` com
+ * outro nome.
+ *
+ * O que NÃO morreu é a lição que este arquivo carregava: **nada de validação
+ * em escopo de módulo.** `next build` avalia cada módulo alcançável para
+ * coletar a configuração das rotas, e a cadeia
  * `api/queues/whatsapp-turn` → `turno.ts` → `gateway/index.ts` fazia a
- * validação rodar em tempo de BUILD, onde variável de integração não tem por
- * que existir. Sem `EVOLUTION_*` na Vercel, o build inteiro falhava:
+ * validação rodar em tempo de BUILD:
  *
  *     Failed to collect configuration for /api/queues/whatsapp-turn
  *     [cause]: Configuração do gateway de WhatsApp inválida: ...
  *
- * E falhava por completo — as telas de leads, o funil e o login não têm
- * relação nenhuma com a Evolution e paravam de ser publicados junto.
+ * O build inteiro falhava — leads, funil e login inclusos, que não têm relação
+ * nenhuma com WhatsApp. Ninguém percebeu por três dias porque o sintoma só
+ * aparece na Vercel: numa máquina de desenvolvimento o `.env` tem tudo.
  *
- * O comentário do schema acima já declarava a intenção certa ("só quem
- * realmente importa o gateway precisa dessas variáveis"), mas chamar no
- * escopo do módulo a anulava: importar já era o bastante para lançar.
- * `fila.ts`, no mesmo módulo, sempre fez do jeito certo — `getSegredoFila()`
- * só roda dentro de quem publica na fila.
+ * Meia dúzia de arquivos aponta para cá quando explica a própria construção
+ * preguiçosa (`fila/index.ts`, `fila/vercel.ts`, `llm/index.ts`,
+ * `core/cofre/chave.ts`, `core/supabase-jwt/chave.ts` e `emitir.ts`,
+ * `automation/n8n/index.ts`). O relato acima é o que essas referências vêm
+ * buscar; ele fica, e é por isso que a contração apagou o schema e não a
+ * história.
  *
- * A validação continua existindo e continua estrita: ela só mudou de momento.
- * Quem chamar o gateway sem as variáveis recebe o mesmo erro claro de antes,
- * agora em tempo de execução e afetando só o WhatsApp.
+ * ## O alcance exato da regra, medido
+ *
+ * A regra continua e agora é mais larga: importar este módulo não exige
+ * **nenhuma credencial de canal** — nem as três da Evolution, que não existem
+ * mais, nem `COFRE_CHAVE_MESTRA` — **e não consulta o banco**. Quem resolve
+ * credencial é `./fabrica`, e ela só toca o banco quando é CHAMADA. Há caso de
+ * teste para as duas metades em
+ * `tests/unit/whatsapp-config-preguicosa.test.ts` — importar não lança, usar
+ * com um canal não atendido lança com nome.
+ *
+ * O que a frase acima NÃO afirma, e a diferença importa: importar isto ainda
+ * alcança `lib/env.ts` (via `core/conexoes/leitura` → `core/tenancy/escopo` →
+ * `lib/prisma`), e AQUELE arquivo valida `DATABASE_URL` e `AUTH_SECRET` em
+ * escopo de módulo. Medido em 2026-08-20: sem as duas, o import lança
+ * `Invalid input: expected string, received undefined` com
+ * `path: ["DATABASE_URL"]`. É o último ponto do repositório com o padrão
+ * antigo, e não é dívida deste ciclo — está escrito aqui e no teste para que
+ * ninguém leia "importar não lê ambiente" como garantia mais larga do que é.
+ *
+ * ## Onde a credencial vive agora
+ *
+ * Em `WhatsappConnection`, por empresa, com a apikey cifrada
+ * (`src/core/cofre/`). A resolução é `src/core/conexoes/leitura.ts`, e a
+ * construção do adaptador é `./fabrica`.
  */
-function obterGateway(): WhatsappGateway {
-  if (instancia) return instancia;
 
-  const env = getGatewayEnv();
+export type { WhatsappGateway, EventoWhatsapp, TipoMensagemWhatsapp } from "./tipos";
 
-  // Troca de gateway (ex.: Fatia 5, Meta Cloud API) é trocar esta linha por
-  // uma leitura de uma variável tipo WHATSAPP_GATEWAY, sem tocar em
-  // ingest.ts, turno.ts ou nas rotas — nenhum dos dois conhece
-  // `EvolutionGateway`, só a interface `WhatsappGateway`.
-  instancia = new EvolutionGateway({
-    domain: env.EVOLUTION_DOMAIN,
-    instance: env.EVOLUTION_INSTANCE,
-    apiKey: env.EVOLUTION_APIKEY,
-  });
-
-  return instancia;
-}
-
-/**
- * Mesma forma de sempre para quem consome — `whatsappGateway.enviarTexto(...)`
- * segue funcionando, e os mocks de teste que substituem este módulo continuam
- * valendo sem alteração. O Proxy existe só para adiar a construção até o
- * primeiro acesso a uma propriedade, que é o que separa "importar" de "usar".
- */
-export const whatsappGateway: WhatsappGateway = new Proxy({} as WhatsappGateway, {
-  get(_alvo, propriedade) {
-    const real = obterGateway() as unknown as Record<string | symbol, unknown>;
-    const valor = real[propriedade];
-    return typeof valor === "function" ? valor.bind(real) : valor;
-  },
-});
+// `ConexaoIncompletaError` entra junto com `CanalNaoImplementadoError`, e não
+// por simetria decorativa: a Tarefa 6 separou as duas de propósito porque cada
+// uma manda quem lê para um lugar diferente ("espere o Ciclo 2b" contra
+// "corrija a linha em Configurações → Conexões"). Uma porta que exportasse só
+// uma das duas convidaria a tratar a outra por `catch` genérico, que é
+// exatamente o que a separação existe para evitar.
+export {
+  gatewayDaCredencial,
+  gatewayDaConversa,
+  gatewayDaEmpresa,
+  CanalNaoImplementadoError,
+  ConexaoIncompletaError,
+} from "./fabrica";

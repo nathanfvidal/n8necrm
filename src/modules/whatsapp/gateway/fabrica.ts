@@ -14,23 +14,25 @@ import type { WhatsappGateway } from "./tipos";
  *
  * ## Por que o singleton não serve mais
  *
- * `whatsappGateway` (`./index.ts`) é um objeto por PROCESSO com uma credencial
- * só, lida de `EVOLUTION_*`. Um processo serve várias empresas — e uma empresa
- * pode ter mais de uma conexão (multi-instância é decisão travada do programa,
- * `CLAUDE.md`, decisão 4). Um singleton nesse mundo é a credencial da empresa
- * A respondendo pelo cliente da B.
+ * `whatsappGateway` (`./index.ts`) ERA um objeto por PROCESSO com uma
+ * credencial só, lida de `EVOLUTION_*`. Um processo serve várias empresas — e
+ * uma empresa pode ter mais de uma conexão (multi-instância é decisão travada
+ * do programa, `CLAUDE.md`, decisão 4). Um singleton nesse mundo é a
+ * credencial da empresa A respondendo pelo cliente da B.
  *
- * ## Este arquivo ADICIONA, não substitui — e isso é de propósito
+ * ## Este arquivo NASCEU ao lado do singleton, e hoje é o único caminho
  *
- * O ciclo é *expande → migra → contrai*: esta fábrica nasce AO LADO do
- * `whatsappGateway`, as Tarefas 7 e 8 migram os dois consumidores (rota do
- * webhook; `turno.ts`/`agente.ts`) e só a Tarefa 10 apaga o antigo junto com
- * as variáveis `EVOLUTION_*`. Fazer tudo de uma vez deixaria alguma tarefa
- * intermediária com o `typecheck` vermelho. Há caso de teste afirmando que o
- * caminho antigo continua funcionando
- * (`tests/unit/whatsapp-gateway-fabrica.test.ts`, describe "o caminho ANTIGO
- * continua vivo"), porque "não removi nada" sem prova é a forma de afirmação
- * que quebra em produção em silêncio.
+ * O ciclo foi *expande → migra → contrai*: esta fábrica nasceu AO LADO do
+ * `whatsappGateway` (Tarefa 6), as Tarefas 7 e 8 migraram os dois consumidores
+ * (rota do webhook; `turno.ts`/`agente.ts`) e a Tarefa 10 apagou o antigo
+ * junto com as variáveis `EVOLUTION_*`. Fazer tudo de uma vez deixaria alguma
+ * tarefa intermediária com o `typecheck` vermelho.
+ *
+ * O parágrafo acima está no passado porque a contração já aconteceu — não há
+ * mais "caminho antigo" a preservar. O que existe no lugar é a prova de que
+ * ele morreu: `tests/unit/whatsapp-config-preguicosa.test.ts` afirma que o
+ * módulo não exporta mais `whatsappGateway` e varre `src/` inteiro atrás de
+ * qualquer linha de código que volte a citar as três variáveis.
  *
  * ## Nada aqui é memoizado, e isso é a decisão, não o esquecimento
  *
