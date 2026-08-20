@@ -85,7 +85,7 @@ export default async function PainelLayout({ children }: { children: React.React
   // e ele mora na raiz de composição de propósito — ver o comentário em
   // `apresentar-notificacoes.ts` sobre o acoplamento que isso desfaz.
   const notificacoesNaoLidas = apresentarNotificacoes(
-    await listarNotificacoesNaoLidas(usuario.id)
+    await listarNotificacoesNaoLidas(usuario.companyId, usuario.id)
   );
 
   // `headers()` é assíncrona no Next 16. Ler o nonce aqui não custa nada:

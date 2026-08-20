@@ -58,7 +58,7 @@ export async function marcarNotificacaoComoLidaAction(
 ): Promise<ResultadoAcao> {
   try {
     const autor = await usuarioAtual();
-    await marcarComoLida({ notificationId, userId: autor.id });
+    await marcarComoLida({ companyId: autor.companyId, notificationId, userId: autor.id });
   } catch (erro) {
     if (erro instanceof Error && /^Notificação não encontrada/.test(erro.message)) {
       return { ok: false, erro: MENSAGEM_NAO_ENCONTRADA };

@@ -9,7 +9,7 @@ import "server-only";
 import { after } from "next/server";
 import { Resend } from "resend";
 
-import { prisma } from "@/lib/prisma";
+import { prismaDaEmpresa } from "@/core/tenancy/escopo";
 import { NovoLeadEmail } from "./email";
 import type { NovoLeadPayload } from "./types";
 import type { Notification } from "@prisma/client";
@@ -50,8 +50,16 @@ const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KE
  *   sem fila (a spec descreve entrega com retry via QStash como alvo
  *   futuro; esta fase implementa só o "melhor esforço" mais simples).
  */
-export async function notificarNovoLead(leadId: string): Promise<void> {
-  const lead = await prisma.lead.findUniqueOrThrow({
+export async function notificarNovoLead(companyId: string, leadId: string): Promise<void> {
+  const db = prismaDaEmpresa(companyId);
+
+  // `findFirstOrThrow` e não `findUniqueOrThrow`: a segunda é recusada pelo
+  // escopo, porque o `where` dela só aceita campo único e `companyId` não é
+  // único em `Lead` (ver "Recusa, lançando" em `core/tenancy/escopo.ts`). O
+  // efeito prático é o desejado: um `leadId` de outra empresa deixa de devolver
+  // a linha e passa a lançar `NotFoundError` — a MESMA resposta de um id
+  // inexistente.
+  const lead = await db.lead.findFirstOrThrow({
     where: { id: leadId },
     // `select` explícito, e NUNCA `include: { ... responsavel: true }`.
     //
@@ -133,7 +141,7 @@ export async function notificarNovoLead(leadId: string): Promise<void> {
   // trava a regressão é "a notificação do lead criado fica na empresa do lead"
   // (`tests/unit/lead-isolamento.test.ts`), e ele exerce o caminho de
   // `criarLead` — não os caminhos que ainda não existem.
-  await prisma.notification.create({
+  await db.notification.create({
     data: {
       companyId: lead.companyId,
       userId: lead.responsavel.id,
@@ -161,17 +169,27 @@ export async function notificarNovoLead(leadId: string): Promise<void> {
 
 /**
  * Lista as notificações não lidas de um usuário, mais recente primeiro.
- * Sempre escopada por `userId` — quem chama (o sino, `notification-bell.tsx`,
- * via layout do painel) sempre passa o id do usuário da sessão atual, nunca
- * um id arbitrário vindo do cliente.
+ * Escopada por `userId` E por empresa, e o "e" é o ponto: escopo por DONO não é
+ * escopo por EMPRESA. Enquanto ninguém tem vínculo em duas empresas os dois
+ * coincidem — toda notificação minha é da minha empresa —, e é por isso que
+ * `userId` sozinho parecia bastar. Com dois vínculos o sino misturaria os avisos
+ * das duas: o rótulo do cliente de uma empresa (`payload.nomeExibicao`, ver
+ * `modules/whatsapp/notificacoes.ts`) apareceria numa sessão da outra.
+ *
+ * `userId` continua vindo do usuário da sessão atual (o sino,
+ * `notification-bell.tsx`, via layout do painel), nunca de um id arbitrário do
+ * cliente — e `companyId` vem da mesma sessão.
  */
-export async function listarNotificacoesNaoLidas(userId: string): Promise<Notification[]> {
-  const naoLidas = await prisma.notification.findMany({
+export async function listarNotificacoesNaoLidas(
+  companyId: string,
+  userId: string
+): Promise<Notification[]> {
+  const naoLidas = await prismaDaEmpresa(companyId).notification.findMany({
     where: { userId, lidaEm: null },
     orderBy: { criadoEm: "desc" },
   });
 
-  agendarPoda();
+  agendarPoda(companyId);
 
   return naoLidas;
 }
@@ -214,9 +232,9 @@ export async function listarNotificacoesNaoLidas(userId: string): Promise<Notifi
  * volta a sorteá-la, e `podarNotificacoes` tem testes que a exercitam
  * diretamente (`tests/unit/notificacoes-poda.test.ts`).
  */
-function agendarPoda(): void {
+function agendarPoda(companyId: string): void {
   try {
-    after(() => podarDeVezEmQuando());
+    after(() => podarDeVezEmQuando(companyId));
   } catch (erro) {
     console.error("Falha ao agendar a poda de notificações:", erro);
   }
@@ -255,15 +273,34 @@ export const RETENCAO_ABSOLUTA_MS = 180 * 24 * 60 * 60_000;
  * o que o sino existe para mostrar. A segunda janela é o limite dessa
  * proteção.
  */
-export async function podarNotificacoes(opcoes?: {
-  retencaoLidaMs?: number;
-  retencaoAbsolutaMs?: number;
-}): Promise<number> {
+export async function podarNotificacoes(
+  companyId: string,
+  opcoes?: {
+    retencaoLidaMs?: number;
+    retencaoAbsolutaMs?: number;
+  }
+): Promise<number> {
   const agora = Date.now();
   const corteLida = new Date(agora - (opcoes?.retencaoLidaMs ?? RETENCAO_LIDA_MS));
   const corteAbsoluto = new Date(agora - (opcoes?.retencaoAbsolutaMs ?? RETENCAO_ABSOLUTA_MS));
 
-  const { count } = await prisma.notification.deleteMany({
+  // `companyId` obrigatório desde o Ciclo 1d, e a mudança de COMPORTAMENTO é
+  // real — vale dizer qual é, porque um `deleteMany` que apaga menos coisa
+  // parece regressão.
+  //
+  // Antes, uma navegação de QUALQUER empresa podava a tabela INTEIRA. Isso era
+  // uma escrita destrutiva cross-tenant disparada por requisição de terceiro:
+  // a empresa A apagando linhas da B. Não vazava dado (apagar não devolve
+  // nada), mas é exatamente o tipo de operação que o escopo existe para
+  // impedir, e nada aqui distinguia "faxina do deploy" de "uma empresa mexendo
+  // no dado da outra".
+  //
+  // Hoje cada empresa poda a própria. O custo é convergência mais lenta: uma
+  // empresa que ninguém abre não tem quem pode as notificações dela, e elas
+  // ficam. Isso é aceitável pelo que a poda é — higiene oportunista, por
+  // sorteio (`CHANCE_DE_PODA`), sem cron — e a tabela de uma empresa que
+  // ninguém usa não cresce, porque o que a faz crescer é uso.
+  const { count } = await prismaDaEmpresa(companyId).notification.deleteMany({
     where: {
       OR: [
         { lidaEm: { not: null }, criadoEm: { lt: corteLida } },
@@ -286,10 +323,10 @@ export async function podarNotificacoes(opcoes?: {
  */
 const CHANCE_DE_PODA = 0.01;
 
-async function podarDeVezEmQuando(): Promise<void> {
+async function podarDeVezEmQuando(companyId: string): Promise<void> {
   if (Math.random() >= CHANCE_DE_PODA) return;
   try {
-    await podarNotificacoes();
+    await podarNotificacoes(companyId);
   } catch (erro) {
     // Limpeza é higiene, não decisão de produto: falhar aqui nunca pode
     // impedir alguém de ver as próprias notificações.
@@ -320,13 +357,27 @@ async function podarDeVezEmQuando(): Promise<void> {
  * não tem como aplicar a checagem de dono acima, e viraria a mesma classe de
  * falha que a Task 13/18 já fechou para lead/tarefa.
  */
-export async function marcarComoLida(input: { notificationId: string; userId: string }): Promise<void> {
-  const notificacao = await prisma.notification.findUnique({ where: { id: input.notificationId } });
+export async function marcarComoLida(input: {
+  companyId: string;
+  notificationId: string;
+  userId: string;
+}): Promise<void> {
+  const db = prismaDaEmpresa(input.companyId);
+
+  // Duas travas INDEPENDENTES, e é assim que elas precisam ser lidas: o escopo
+  // recusa notificação de outra empresa (`findFirst` não a encontra), a regra
+  // de dono recusa notificação de outra pessoa. A segunda escondia a falta da
+  // primeira no caso comum, porque quase toda notificação de outra empresa
+  // também é de outra pessoa — o caso que as separa é a pessoa com vínculo nas
+  // duas.
+  const notificacao = await db.notification.findFirst({ where: { id: input.notificationId } });
   if (!notificacao || notificacao.userId !== input.userId) {
     throw new Error("Notificação não encontrada");
   }
 
-  await prisma.notification.update({
+  // `updateMany` e não `update`: o escopo recusa `update` em modelo de tenant.
+  // O retorno não é usado — a função devolve `void`.
+  await db.notification.updateMany({
     where: { id: input.notificationId },
     data: { lidaEm: new Date() },
   });

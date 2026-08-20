@@ -20,21 +20,29 @@
 // SUPABASE_URL/SUPABASE_SERVICE_ROLE_KEY entre casos.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
+import { prismaFalsoEscopavel } from "./helpers/prisma-falso-escopavel";
+
 vi.mock("server-only", () => ({}));
 
+// `findFirstOrThrow`, e nao `findUniqueOrThrow`: o escopo por empresa recusa a
+// segunda em modelo de tenant, lancando (ver "Recusa, lancando" em
+// `core/tenancy/escopo.ts`). `Lead` e modelo de tenant.
 const {
-  leadFindUniqueOrThrowMock,
+  leadFindFirstOrThrowMock,
   notificationCreateMock,
 } = vi.hoisted(() => ({
-  leadFindUniqueOrThrowMock: vi.fn(),
+  leadFindFirstOrThrowMock: vi.fn(),
   notificationCreateMock: vi.fn(),
 }));
 
+// O `$extends` de verdade (ver `tests/unit/helpers/prisma-falso-escopavel.ts`):
+// `dispatch.ts` alcanca o banco por `prismaDaEmpresa(companyId)`, e um mock sem
+// `$extends` quebra com `TypeError`.
 vi.mock("@/lib/prisma", () => ({
-  prisma: {
-    lead: { findUniqueOrThrow: leadFindUniqueOrThrowMock },
+  prisma: prismaFalsoEscopavel({
+    lead: { findFirstOrThrow: leadFindFirstOrThrowMock },
     notification: { create: notificationCreateMock },
-  },
+  }),
 }));
 
 const { resendSendMock, ResendMock } = vi.hoisted(() => {
@@ -48,8 +56,10 @@ const { resendSendMock, ResendMock } = vi.hoisted(() => {
 });
 vi.mock("resend", () => ({ Resend: ResendMock }));
 
+const EMPRESA = "empresa-1";
 const LEAD_FAKE = {
   id: "lead-1",
+  companyId: EMPRESA,
   contact: { id: "contact-1", nome: "Carlos Silva" },
   stage: { id: "stage-1", nome: "Novo" },
   responsavel: { id: "user-1", email: "responsavel@exemplo.com" },
@@ -65,11 +75,11 @@ async function importarDispatch() {
 
 describe("notificarNovoLead — resiliência do envio de e-mail (Resend mockado)", () => {
   beforeEach(() => {
-    leadFindUniqueOrThrowMock.mockReset();
+    leadFindFirstOrThrowMock.mockReset();
     notificationCreateMock.mockReset();
     ResendMock.mockClear();
     resendSendMock.mockReset();
-    leadFindUniqueOrThrowMock.mockResolvedValue(LEAD_FAKE);
+    leadFindFirstOrThrowMock.mockResolvedValue(LEAD_FAKE);
     notificationCreateMock.mockResolvedValue({});
   });
 
@@ -88,7 +98,7 @@ describe("notificarNovoLead — resiliência do envio de e-mail (Resend mockado)
       delete process.env.RESEND_API_KEY;
       const { notificarNovoLead } = await importarDispatch();
 
-      await notificarNovoLead("lead-1");
+      await notificarNovoLead(EMPRESA, "lead-1");
 
       expect(notificationCreateMock).toHaveBeenCalledTimes(1);
       expect(ResendMock).not.toHaveBeenCalled();
@@ -106,7 +116,7 @@ describe("notificarNovoLead — resiliência do envio de e-mail (Resend mockado)
 
       const { notificarNovoLead } = await importarDispatch();
 
-      await expect(notificarNovoLead("lead-1")).resolves.toBeUndefined();
+      await expect(notificarNovoLead(EMPRESA, "lead-1")).resolves.toBeUndefined();
 
       expect(notificationCreateMock).toHaveBeenCalledTimes(1);
       expect(resendSendMock).toHaveBeenCalledTimes(1);
@@ -118,10 +128,10 @@ describe("notificarNovoLead — resiliência do envio de e-mail (Resend mockado)
 
   it("lead sem responsável: não grava notificação nem tenta enviar e-mail", async () => {
     delete process.env.RESEND_API_KEY;
-    leadFindUniqueOrThrowMock.mockResolvedValue({ ...LEAD_FAKE, responsavel: null });
+    leadFindFirstOrThrowMock.mockResolvedValue({ ...LEAD_FAKE, responsavel: null });
     const { notificarNovoLead } = await importarDispatch();
 
-    await notificarNovoLead("lead-1");
+    await notificarNovoLead(EMPRESA, "lead-1");
 
     expect(notificationCreateMock).not.toHaveBeenCalled();
     expect(resendSendMock).not.toHaveBeenCalled();

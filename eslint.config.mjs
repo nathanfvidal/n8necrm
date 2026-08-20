@@ -180,13 +180,22 @@ const VIOLADORES_TEMPORARIOS_CORE = [
   // prova de que o serviço não alcança mais o `prisma` cru; a prova de que o
   // escopo FUNCIONA é outra, e mora em `tests/unit/lead-isolamento.test.ts`.
   //
-  // 1 defeito (BAIXA): `listarNotificacoesNaoLidas` filtra só por `userId`,
-  // sem `companyId` — escopo por dono, que é mais forte, mas mistura empresas
-  // para quem tiver dois vínculos. O ponto que ERA grave aqui
-  // (`notificarNovoLead` gravando `companyId` do lead com `userId` de outra
-  // empresa) fechou por consequência do 6dfb325, e a invariante está escrita
-  // no próprio `create` — inclusive QUEM a garante e ONDE.
-  "src/core/notifications/dispatch.ts",
+  // `src/core/notifications/dispatch.ts` SAIU desta lista no Ciclo 1d. O
+  // defeito BAIXA era `listarNotificacoesNaoLidas` filtrando só por `userId` —
+  // escopo por DONO, que coincide com o de empresa só enquanto ninguém tem dois
+  // vínculos. Com dois, o sino mistura os avisos das duas, e o `payload` de uma
+  // notificação de WhatsApp carrega o RÓTULO do cliente: não é desarrumação, é
+  // o nome de um cliente aparecendo na sessão de outra empresa.
+  //
+  // O que a conversão revelou de novo foi `podarNotificacoes`, que não estava na
+  // contagem: ela apagava a tabela INTEIRA, de todas as empresas, disparada
+  // (por sorteio, via `after()`) pela navegação de qualquer uma. Escrita
+  // destrutiva cross-tenant a partir de requisição de terceiro. Hoje cada
+  // empresa poda a própria, e a troca está escrita no corpo da função —
+  // convergência mais lenta em troca de a empresa A não mexer no dado da B.
+  //
+  // `tests/unit/notificacoes-isolamento.test.ts` tem as duas metades para as
+  // três funções, com a sonda de cada consulta antiga ao lado.
   // `src/core/pipeline/*` SAIU desta lista no Ciclo 1d — os dois arquivos que
   // alcançavam o banco (`service.ts` e `stages.ts`) passaram a alcançá-lo só
   // por `prismaDaEmpresa`. Era a maior concentração da fila, 13 defeitos, e a

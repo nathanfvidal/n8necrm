@@ -97,7 +97,7 @@ describe("poda de notificacoes", () => {
     const dias = RETENCAO_LIDA_MS / DIA_MS + 1;
     const alvo = await criar({ diasAtras: dias, lida: true });
 
-    await podarNotificacoes();
+    await podarNotificacoes(companyId);
 
     expect(await sobreviveu(alvo.id)).toBe(false);
   });
@@ -105,7 +105,7 @@ describe("poda de notificacoes", () => {
   it("PRESERVA notificacao lida recente", async () => {
     const alvo = await criar({ diasAtras: 1, lida: true });
 
-    await podarNotificacoes();
+    await podarNotificacoes(companyId);
 
     expect(await sobreviveu(alvo.id)).toBe(true);
   });
@@ -118,7 +118,7 @@ describe("poda de notificacoes", () => {
     const dias = RETENCAO_LIDA_MS / DIA_MS + 30;
     const alvo = await criar({ diasAtras: dias, lida: false });
 
-    await podarNotificacoes();
+    await podarNotificacoes(companyId);
 
     expect(await sobreviveu(alvo.id)).toBe(true);
   });
@@ -130,7 +130,7 @@ describe("poda de notificacoes", () => {
     const dias = RETENCAO_ABSOLUTA_MS / DIA_MS + 1;
     const alvo = await criar({ diasAtras: dias, lida: false });
 
-    await podarNotificacoes();
+    await podarNotificacoes(companyId);
 
     expect(await sobreviveu(alvo.id)).toBe(false);
   });
@@ -144,7 +144,7 @@ describe("poda de notificacoes", () => {
     await criar({ diasAtras: RETENCAO_LIDA_MS / DIA_MS + 5, lida: true });
     const preservada = await criar({ diasAtras: 1, lida: false });
 
-    const removidas = await podarNotificacoes();
+    const removidas = await podarNotificacoes(companyId);
 
     expect(removidas).toBeGreaterThanOrEqual(2);
     expect(await sobreviveu(preservada.id)).toBe(true);

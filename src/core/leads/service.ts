@@ -249,7 +249,7 @@ export async function criarLead(input: {
   // ao criar" só porque a notificação não gravou seria pior — e mais
   // confuso, porque o registro já estaria no banco apesar do erro.
   try {
-    await notificarNovoLead(lead.id);
+    await notificarNovoLead(companyId, lead.id);
   } catch (erro) {
     console.error("Falha ao notificar novo lead (lead já criado, prosseguindo):", erro);
   }
