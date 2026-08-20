@@ -311,10 +311,11 @@ describe("prismaDaEmpresa", () => {
       const a = escopadoPara(EMPRESA_A);
 
       await expect(
-        (a as any).contact.create({
+        (a as any).lead.create({
           data: {
-            nome: "Fachada",
-            notes: { create: [{ texto: "n", companyId: EMPRESA_B }] },
+            canal: "WHATSAPP",
+            stageId: "st_1",
+            notes: { create: [{ texto: "n", autorId: "u1", companyId: EMPRESA_B }] },
           },
         })
       ).rejects.toThrow(EscopoDeEmpresaError);
@@ -327,10 +328,11 @@ describe("prismaDaEmpresa", () => {
       const a = escopadoPara(EMPRESA_A);
 
       await expect(
-        (a as any).contact.create({
+        (a as any).lead.create({
           data: {
-            nome: "Coerente",
-            notes: { create: [{ texto: "n", companyId: EMPRESA_A }] },
+            canal: "WHATSAPP",
+            stageId: "st_1",
+            notes: { create: [{ texto: "n", autorId: "u1", companyId: EMPRESA_A }] },
           },
         })
       ).resolves.toMatchObject({ companyId: EMPRESA_A });
@@ -345,8 +347,12 @@ describe("prismaDaEmpresa", () => {
             nome: "Fundo",
             leads: {
               create: [
-                { titulo: "ok", companyId: EMPRESA_A },
-                { titulo: "intruso", notes: { create: { texto: "x", companyId: EMPRESA_B } } },
+                { canal: "WHATSAPP", stageId: "st_1", companyId: EMPRESA_A },
+                {
+                  canal: "MANUAL",
+                  stageId: "st_1",
+                  notes: { create: { texto: "x", autorId: "u1", companyId: EMPRESA_B } },
+                },
               ],
             },
           },
@@ -358,10 +364,13 @@ describe("prismaDaEmpresa", () => {
       const a = escopadoPara(EMPRESA_A);
 
       await expect(
-        (a as any).contact.create({
+        (a as any).lead.create({
           data: {
-            nome: "Por relação",
-            notes: { create: [{ texto: "n", company: { connect: { id: EMPRESA_B } } }] },
+            canal: "WHATSAPP",
+            stageId: "st_1",
+            notes: {
+              create: [{ texto: "n", autorId: "u1", company: { connect: { id: EMPRESA_B } } }],
+            },
           },
         })
       ).rejects.toThrow(EscopoDeEmpresaError);
@@ -379,9 +388,15 @@ describe("prismaDaEmpresa", () => {
     //
     // A lista branca é fechada porque `Company` tem `id` como ÚNICO campo
     // único (prisma/schema.prisma): não sobra forma legítima por descobrir.
+    // `Lead` e `LeadNote`, e não `Contact`: a relação `notes` mora em `Lead`
+    // (`prisma/schema.prisma`), e `Contact` não tem `notes` nenhum. Com o
+    // modelo errado, o banco falso aceitaria — ele não valida forma — e o caso
+    // provaria só a varredura; com o certo, prova a varredura E que o payload
+    // é o que o Prisma de verdade aceitaria.
     const aninhar = (company: unknown) => ({
-      nome: "Aninhado",
-      notes: { create: [{ texto: "n", company }] },
+      canal: "WHATSAPP",
+      stageId: "st_1",
+      notes: { create: [{ texto: "n", autorId: "u1", company }] },
     });
 
     const recusadas: [string, unknown][] = [
@@ -398,7 +413,7 @@ describe("prismaDaEmpresa", () => {
         const a = escopadoPara(EMPRESA_A);
 
         await expect(
-          (a as any).contact.create({ data: aninhar(company) })
+          (a as any).lead.create({ data: aninhar(company) })
         ).rejects.toThrow(EscopoDeEmpresaError);
         expect(chamadas).toHaveLength(0);
       });
@@ -408,7 +423,7 @@ describe("prismaDaEmpresa", () => {
       const a = escopadoPara(EMPRESA_A);
 
       await expect(
-        (a as any).contact.create({ data: aninhar({ connect: { id: EMPRESA_A } }) })
+        (a as any).lead.create({ data: aninhar({ connect: { id: EMPRESA_A } }) })
       ).resolves.toMatchObject({ companyId: EMPRESA_A });
     });
   });
@@ -435,7 +450,7 @@ describe("prismaDaEmpresa", () => {
     it("`where` aninhado dentro de `data` é recusado, com a saída na mensagem", async () => {
       const a = escopadoPara(EMPRESA_A);
 
-      const promessa = (a as any).contact.updateMany({
+      const promessa = (a as any).lead.updateMany({
         data: { notes: { updateMany: { where: { companyId: EMPRESA_B }, data: { texto: "x" } } } },
       });
 
@@ -443,6 +458,94 @@ describe("prismaDaEmpresa", () => {
       await expect(promessa).rejects.toThrow("`where` ANINHADO");
       await expect(promessa).rejects.toThrow("chamada separada no cliente escopado");
     });
+
+    // Uma chave `company` dentro de blob Json -- descricao de empresa em
+    // `payload` ou `antes` -- cai na lista branca da relacao, que nao sabe que
+    // atravessou um Json. Na rodada 1 isto passava; o aperto da rodada 2 o
+    // criou. Continua sendo recusa alta, nao vazamento, e por isso a saida e a
+    // mesma dos outros dois: nomear o caso na mensagem.
+    it("chave `company` dentro de coluna Json é recusada, e a dica nomeia esse caso", async () => {
+      const a = escopadoPara(EMPRESA_A);
+
+      const promessa = (a as any).notification.create({
+        data: { tipo: "LEAD_NOVO", payload: { company: { nome: "ACME", cnpj: "1" } } },
+      });
+
+      await expect(promessa).rejects.toThrow(EscopoDeEmpresaError);
+      await expect(promessa).rejects.toThrow("falso positivo conhecido");
+      await expect(promessa).rejects.toThrow("chave `company` que seja só descrição");
+      await expect(promessa).rejects.toThrow("empresaDoContato");
+    });
+
+    // As QUATRO combinações de (o que recusou) × (onde). A afirmação de que a
+    // dica acompanha recusa aninhada já foi escrita duas vezes sem teste que a
+    // exercitasse, e nas duas estava errada: na segunda, NENHUMA recusa de
+    // FORMA carregava a dica e o TOPO carregava. Estes casos são a trava.
+    const combinacoes: [string, boolean, () => unknown][] = [
+      [
+        "companyId ANINHADO",
+        true,
+        () => ({ model: "auditLog", args: { data: { acao: "x", antes: { companyId: EMPRESA_B } } } }),
+      ],
+      [
+        "companyId no TOPO",
+        false,
+        () => ({ model: "auditLog", args: { data: { acao: "x", companyId: EMPRESA_B } } }),
+      ],
+      [
+        "FORMA da relação company, ANINHADA",
+        true,
+        () => ({
+          model: "lead",
+          args: {
+            data: {
+              canal: "WHATSAPP",
+              stageId: "st_1",
+              notes: { create: [{ texto: "n", autorId: "u1", company: { create: { nome: "X" } } }] },
+            },
+          },
+        }),
+      ],
+      [
+        // O vetor exato que a revisão mediu como "TOPO [COM DICA]": a recusa
+        // por VALOR divergente dentro de `company.connect.id`, no topo do
+        // `data`. Passava a dica sem consultar o `aninhado`.
+        "valor divergente em company.connect.id, no TOPO",
+        false,
+        () => ({
+          model: "lead",
+          args: { data: { company: { connect: { id: EMPRESA_B } } } },
+          operacao: "updateMany",
+        }),
+      ],
+      [
+        "FORMA da relação company, no TOPO",
+        false,
+        () => ({
+          model: "lead",
+          // `updateMany` chega à varredura sem passar por `injetarEmData`, que
+          // é o que torna o `data.company` de TOPO alcançável aqui.
+          args: { data: { company: { create: { nome: "X" } } } },
+          operacao: "updateMany",
+        }),
+      ],
+    ];
+
+    for (const [nome, esperaDica, montar] of combinacoes) {
+      it(`recusa por ${nome} ${esperaDica ? "CARREGA" : "não carrega"} a dica`, async () => {
+        const a = escopadoPara(EMPRESA_A);
+        const { model, args, operacao } = montar() as any;
+
+        const erro = await (a as any)[model][operacao ?? "create"](args).catch((e: Error) => e);
+
+        expect(erro).toBeInstanceOf(EscopoDeEmpresaError);
+        if (esperaDica) {
+          expect(erro.message).toContain("falso positivo conhecido");
+        } else {
+          expect(erro.message).not.toContain("falso positivo");
+        }
+      });
+    }
 
     it("no TOPO do data a mensagem NÃO carrega a dica — ali é sempre a coluna", async () => {
       const a = escopadoPara(EMPRESA_A);
@@ -478,13 +581,14 @@ describe("prismaDaEmpresa", () => {
 
     it("referência cíclica não esconde a divergência do outro lado do ciclo", () => {
       const cicloSujo: Record<string, unknown> = {
-        nome: "Ciclo sujo",
-        notes: { create: [{ texto: "n", companyId: EMPRESA_B }] },
+        canal: "WHATSAPP",
+        stageId: "st_1",
+        notes: { create: [{ texto: "n", autorId: "u1", companyId: EMPRESA_B }] },
       };
       cicloSujo.euMesmo = cicloSujo;
 
       expect(() =>
-        escoparArgumentos("Contact", "create", { data: cicloSujo }, EMPRESA_A)
+        escoparArgumentos("Lead", "create", { data: cicloSujo }, EMPRESA_A)
       ).toThrow(EscopoDeEmpresaError);
     });
   });
@@ -646,7 +750,210 @@ describe("prismaDaEmpresa", () => {
     expect((await a.contact.findMany())[0].id).toBe("a1");
     expect((await b.contact.findMany())[0].id).toBe("b1");
   });
+
+  /**
+   * As travas das AFIRMAÇÕES UNIVERSAIS do arquivo.
+   *
+   * Três vezes seguidas este arquivo afirmou fechamento em prosa sem exercitar a
+   * afirmação ("os dois buracos ficam fechados" com dois abertos; "toda recusa
+   * em caminho aninhado" com quase nenhuma; "companyId não é único em nenhum dos
+   * 11 modelos" com `BotConfig` tendo `@@unique([companyId])`). O padrão não é
+   * descuido, é falta de trava — então toda frase de `escopo.ts` que diga "todo",
+   * "sempre", "nenhum", "qualquer" ou "só" passa a ter, aqui, ou o caso que a
+   * prova, ou uma qualificação escrita na própria frase dizendo o que não foi
+   * verificado.
+   */
+  // Mesma razao do bloco anterior: payload incompleto de proposito e
+  // operacoes que o tipo do delegate nao conhece -- e o runtime que esta
+  // sob teste, nao o tipo.
+  /* eslint-disable @typescript-eslint/no-explicit-any */
+  describe("afirmações universais de escopo.ts", () => {
+    it("modelo fora do tenant passa INTACTO — mesma referência de args, em toda operação", () => {
+      const args = { where: { id: "u1" }, data: { nome: "x" } };
+
+      for (const operacao of [
+        "findMany",
+        "findUnique",
+        "update",
+        "upsert",
+        "deleteMany",
+        "groupBy",
+        "operacaoQueNaoExiste",
+      ]) {
+        for (const model of ["User", "RateLimit", "Company"]) {
+          // Identidade, não igualdade: prova que nada foi copiado nem acrescentado.
+          expect(escoparArgumentos(model, operacao, args, EMPRESA_A)).toBe(args);
+        }
+      }
+    });
+
+    it("`Company` tem `id` como ÚNICO campo único — é o que fecha a lista branca", () => {
+      const bloco = blocoDoModelo("Company");
+
+      // Se `nome` ganhar `@unique`, ou se aparecer um `@@unique`, então
+      // `CompanyWhereUniqueInput` passa a aceitar outro campo e a lista branca de
+      // `exigirRelacaoDeEmpresaFechada` (só `connect: { id }`) deixa de ser
+      // fechada — passaria a existir forma legítima que ela recusa.
+      expect(bloco.filter((l) => /@unique/.test(l))).toEqual([]);
+      expect(bloco.filter((l) => /^\s*id\s+String\s+@id/.test(l))).toHaveLength(1);
+    });
+
+    it("os 11 modelos de tenant nomeiam a relação `company` — a varredura depende do nome", () => {
+      const semRelacao = [...MODELOS_DE_TENANT].filter(
+        (m) => !blocoDoModelo(m).some((l) => /^\s*company\s+Company\b/.test(l))
+      );
+
+      // A varredura acha a relação pela CHAVE `company`. Um modelo que a nomeasse
+      // de outro jeito escaparia da lista branca sem ninguém perceber.
+      expect(semRelacao).toEqual([]);
+    });
+
+    it("`BotConfig` é o ÚNICO modelo de tenant onde companyId é único", () => {
+      const comCompanyIdUnico = [...MODELOS_DE_TENANT].filter((m) =>
+        blocoDoModelo(m).some(
+          (l) => /@@unique\(\[companyId\]\)/.test(l) || /^\s*companyId\s+String.*@unique/.test(l)
+        )
+      );
+
+      // O bloco "Recusa, lançando" de escopo.ts diz que `BotConfig` é a exceção —
+      // a frase anterior dizia "nenhum dos 11" e estava errada. Um segundo modelo
+      // aqui torna a frase corrigida errada de novo.
+      expect(comCompanyIdUnico).toEqual(["BotConfig"]);
+    });
+
+    it("TODA mensagem lançada com escopo ativo carrega o companyId", async () => {
+      const a = escopadoPara(EMPRESA_A);
+      const cliente = a as any;
+
+      const caminhosDeLancamento: [string, () => unknown][] = [
+        ["where divergente", () => cliente.contact.findMany({ where: { companyId: EMPRESA_B } })],
+        ["data divergente", () => cliente.contact.create({ data: { companyId: EMPRESA_B } })],
+        ["operação por chave única", () => cliente.contact.findUnique({ where: { id: "x" } })],
+        ["relação company no topo", () => cliente.contact.create({ data: { company: {} } })],
+        [
+          "forma recusada da relação",
+          () =>
+            cliente.lead.create({
+              data: {
+                canal: "WHATSAPP",
+                stageId: "st_1",
+                notes: { create: [{ texto: "n", autorId: "u1", company: { create: {} } }] },
+              },
+            }),
+        ],
+        [
+          "operação não classificada",
+          () => escoparArgumentos("Contact", "operacaoQueNaoExiste", {}, EMPRESA_A),
+        ],
+        [
+          "teto de nós da varredura",
+          () => {
+            const fundo: Record<string, unknown> = {};
+            let atual = fundo;
+            for (let i = 0; i < 100_001; i += 1) {
+              const proximo: Record<string, unknown> = {};
+              atual["n" + i] = proximo;
+              atual = proximo;
+            }
+            return escoparArgumentos("Contact", "create", { data: fundo }, EMPRESA_A);
+          },
+        ],
+      ];
+
+      for (const [nome, disparar] of caminhosDeLancamento) {
+        const erro = await Promise.resolve()
+          .then(disparar)
+          .then(
+            () => new Error(`${nome} NAO lancou`),
+            (e: Error) => e
+          );
+
+        expect(erro, nome).toBeInstanceOf(EscopoDeEmpresaError);
+        expect(erro.message, nome).toContain(EMPRESA_A);
+      }
+    });
+
+    it("a única mensagem SEM companyId é a de companyId vazio — e é exceção nomeada", () => {
+      let erro: Error | null = null;
+      try {
+        prismaDaEmpresa("", clienteBase());
+      } catch (e) {
+        erro = e as Error;
+      }
+
+      expect(erro).toBeInstanceOf(EscopoDeEmpresaError);
+      // Não há escopo para citar: o erro É a ausência dele.
+      expect(erro!.message).toContain("UsuarioAtivo.companyId");
+    });
+
+    it("operação inventada nunca desce até $allOperations — o delegate não a expõe", async () => {
+      const a = escopadoPara(EMPRESA_A);
+
+      expect((a as any).contact.operacaoQueOPrismaAindaNaoTem).toBeUndefined();
+      // e o caminho que EXISTE continua descendo
+      await (a as any).contact.findMany();
+      expect(chamadas).toHaveLength(1);
+    });
+
+    it("escrita aninhada bem-sucedida é UMA operação só aos olhos da extensão", async () => {
+      const a = escopadoPara(EMPRESA_A);
+      await (a as any).lead.create({
+        data: {
+          canal: "WHATSAPP",
+          stageId: "st_1",
+          notes: { create: [{ texto: "n", autorId: "u1", companyId: EMPRESA_A }] },
+        },
+      });
+
+      expect(chamadas).toHaveLength(1);
+      expect(chamadas[0]).toMatchObject({ model: "Lead", operation: "create" });
+    });
+
+    it("no `where`, a injeção COMPÕE com o filtro do chamador em vez de substituí-lo", async () => {
+      const a = escopadoPara(EMPRESA_A);
+      await (a as any).contact.findMany({ where: { OR: [{ companyId: EMPRESA_B }] } });
+
+      // O que se prova aqui é a composição dos ARGUMENTOS. Que topo em AND
+      // devolva conjunto vazio é semântica do Prisma/SQL, e escopo.ts diz
+      // textualmente que essa parte não foi medida contra o Postgres.
+      expect((chamadas[0].args as any).where).toEqual({
+        OR: [{ companyId: EMPRESA_B }],
+        companyId: EMPRESA_A,
+      });
+    });
+
+    it("`Date` no payload não cega a varredura", () => {
+      expect(() =>
+        escoparArgumentos(
+          "Lead",
+          "create",
+          {
+            data: {
+              canal: "WHATSAPP",
+              criadoEm: new Date(),
+              notes: { create: [{ texto: "n", criadoEm: new Date(), companyId: EMPRESA_B }] },
+            },
+          },
+          EMPRESA_A
+        )
+      ).toThrow(EscopoDeEmpresaError);
+    });
+  });
+  /* eslint-enable @typescript-eslint/no-explicit-any */
 });
+
+/** Linhas do bloco `model X { ... }` do schema, sem a abertura nem o fecho. */
+function blocoDoModelo(modelo: string): string[] {
+  const caminho = fileURLToPath(new URL("../../prisma/schema.prisma", import.meta.url));
+  const linhas = readFileSync(caminho, "utf8").split(/\r?\n/);
+  const inicio = linhas.findIndex((l) => new RegExp(`^model\\s+${modelo}\\s*\\{`).test(l));
+  expect(inicio, `modelo ${modelo} nao encontrado no schema`).toBeGreaterThanOrEqual(0);
+  const fim = linhas.findIndex((l, i) => i > inicio && /^\}/.test(l));
+  // Sem comentário: o bloco de `Company` CITA `@@unique([companyId])` de
+  // `BotConfig` numa linha de comentário, e ler isso como declaração fazia o
+  // caso de `Company` falhar por um motivo que não existe no schema.
+  return linhas.slice(inicio + 1, fim).filter((l) => !/^\s*\/\//.test(l));
+}
 
 /**
  * A trava de deriva de `MODELOS_DE_TENANT`.

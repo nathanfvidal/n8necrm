@@ -35,7 +35,10 @@ import type { PrismaClient } from "@prisma/client";
  * de uma transação e deixa o **Postgres** filtrar via política de linha. Isso
  * é estritamente mais forte que o que está aqui, porque o filtro passa a ser
  * do banco: nenhum caminho de código — nem `$queryRaw`, nem `findUnique` —
- * escapa dele.
+ * escaparia dele. Esta última frase descreve o desenho ALTERNATIVO, não este
+ * arquivo, e não foi verificada aqui: verificá-la exige ligar `FORCE ROW LEVEL
+ * SECURITY` e medir contra o Postgres. É a promessa que a documentação do
+ * Prisma faz, repetida como promessa — não como medição.
  *
  * Este projeto não faz assim hoje porque adotá-lo exige ligar `FORCE ROW
  * LEVEL SECURITY` e escrever políticas por tabela, e as duas coisas
@@ -84,16 +87,38 @@ import type { PrismaClient } from "@prisma/client";
  * **Recusa, lançando**: `findUnique`, `findUniqueOrThrow`, `update`,
  * `delete`, `upsert`. O motivo é do Prisma, não uma escolha de gosto: o
  * `where` dessas operações é tipado como `XWhereUniqueInput` e só aceita
- * campo único (ou combinação `@@unique`). `companyId` sozinho não é único em
- * nenhum dos 11 modelos, então o Prisma recusa o campo ali — não existe onde
+ * campo único (ou combinação `@@unique`). Em 10 dos 11 modelos de tenant
+ * `companyId` não é único, então o Prisma recusa o campo ali — não existe onde
  * pendurar o filtro. Deixar passar sem filtro devolveria a linha de OUTRA
  * empresa a quem pedisse pelo id; lançar transforma isso em erro de
  * desenvolvimento, na hora, com o nome da operação escopável equivalente na
  * mensagem.
  *
+ * **`BotConfig` é a exceção, e ela foi encontrada auditando esta própria
+ * frase**, que antes dizia "nenhum dos 11". Ele tem `@@unique([companyId])`
+ * (`prisma/schema.prisma`, uma config por empresa), e por isso
+ * `BotConfigWhereUniqueInput` ACEITA `companyId`
+ * (`node_modules/.prisma/client/index.d.ts`) — ali `findUnique` seria
+ * escopável de verdade. O escopo recusa mesmo assim, por uniformidade: uma
+ * regra "lança em `findUnique`, menos num modelo" é regra que ninguém lembra
+ * na hora de ler o código, e `findFirst` resolve o caso com a mesma consulta.
+ * O que muda com esta correção é a MENSAGEM: para `BotConfig` ela seria
+ * enganosa se repetisse "o Prisma recusa o campo ali". Quem quiser mudar o
+ * comportamento tem aqui o registro de que só um modelo está em jogo. O teste
+ * de deriva de uniques (`tests/unit/escopo-empresa.test.ts`) quebra se um
+ * segundo modelo ganhar `@@unique([companyId])`, e então esta frase precisa
+ * ser reescrita de novo.
+ *
  * **Não alcança de jeito nenhum**: `$queryRaw`/`$executeRaw`. Eles não passam
  * por `$allModels`, e por isso o lint é a peça central — é ele que garante
  * que chegar no `prisma` cru para fazer SQL exige uma exceção visível.
+ *
+ * Esta é afirmação sobre o CONTRATO da extensão, não medição: `$allModels`
+ * alcança os delegates de modelo, e `$queryRaw` é método do cliente. Não há
+ * caso de teste porque exercitá-lo deixaria uma consulta descer até o motor —
+ * e o teste desta tarefa é montado justamente para que nada desça (o banco
+ * falso nunca chama `query()`). Fica como o `$transaction`: dito, com a
+ * origem da certeza à vista.
  *
  * **Escrita ANINHADA: metade alcançada, e a metade que falta é recusa, não
  * injeção.** `contact.create({ data: { notes: { create: [...] } } })` é UMA
@@ -175,8 +200,11 @@ import type { PrismaClient } from "@prisma/client";
  *   lead.findMany({ include: { responsavel: { include: { leadsAtribuidos: true } } } })
  *
  * O `findMany` de fora é escopado na empresa A. `responsavel` é um `User`, que
- * passa intacto. `leadsAtribuidos` dele devolve os leads de TODAS as empresas
- * em que aquela pessoa tem vínculo. Nada nesta extensão evita isso, e não dá
+ * passa intacto. `leadsAtribuidos` dele devolve os leads de todas as empresas
+ * em que aquela pessoa tem vínculo — isto é DEDUZIDO do schema (`User` não tem
+ * `companyId`; a relação inversa não carrega filtro) e do fato, este medido,
+ * de que o `include` chega intacto ao motor; não foi medido contra o Postgres,
+ * o que exigiria banco vivo com duas empresas. Nada nesta extensão evita isso, e não dá
  * para consertar aqui: é inerente à extensão `query`, que enxerga a operação
  * de topo e mais nada. Quem escrever `include` através de `User` filtra à mão
  * (`leadsAtribuidos: { where: { companyId } }`) ou faz a segunda consulta
@@ -287,6 +315,13 @@ const OPERACOES_POR_CHAVE_UNICA: Record<string, string> = {
  *   as duas coisas ao mesmo tempo e devolve vazio. Divergência aninhada no
  *   `where` é inofensiva por construção — não vaza, só não encontra nada.
  *
+ *   O que está PROVADO em teste é a composição dos argumentos: o `companyId`
+ *   do escopo entra no topo do `where` ao lado do que o chamador mandou (caso
+ *   "OR aninhado divergente"). Que topo em AND devolva conjunto vazio é
+ *   semântica documentada do Prisma/SQL, não medida aqui — medir exigiria
+ *   banco vivo. A distinção importa: se algum dia essa semântica mudar, o
+ *   teste continua verde e esta frase é que fica errada.
+ *
  * Então: o TOPO do `where` é validado (para que o erro apareça no caso comum,
  * que é o chamador tentando escapar do escopo de propósito), e o resto dele
  * não é varrido. Isso é escolha registrada, não lacuna esquecida.
@@ -310,22 +345,34 @@ function exigirCoerencia(
 }
 
 /**
- * A dica que acompanha toda recusa em caminho ANINHADO.
+ * A dica que acompanha as recusas em caminho ANINHADO — as de `companyId`
+ * divergente E as de FORMA da relação `company`.
  *
- * A varredura confere pelo NOME do campo, e há dois lugares onde um campo
- * chamado `companyId` não grava a empresa da linha — os dois estão listados na
- * seção "Falsos positivos conhecidos" no topo do arquivo. Quem esbarrar num
- * deles precisa entender em dez segundos que topou num limite conhecido do
- * escopo, e não num vazamento; sem esta dica, a mensagem acusa "bug ou ataque"
- * a quem só escreveu um log de auditoria.
+ * O "aninhado" é condição verificada, não figura de linguagem: quem recusa
+ * consulta o campo `aninhado` da varredura antes de anexar isto. No topo do
+ * `data` a dica não entra, porque ali `companyId` e `company` são a coluna e a
+ * relação, nunca conteúdo de Json. Uma versão anterior deste comentário
+ * afirmava que a dica acompanhava "toda recusa em caminho ANINHADO" enquanto
+ * NENHUMA recusa de forma a carregava e o topo a recebia — os dois sentidos
+ * errados de uma vez. Hoje há caso de teste para cada uma das quatro
+ * combinações (companyId/forma × aninhado/topo).
+ *
+ * A varredura confere pelo NOME do campo, e há três lugares onde um campo
+ * chamado `companyId` ou `company` não aponta a empresa da linha — os três
+ * estão na seção "Falsos positivos conhecidos" no topo do arquivo. Quem
+ * esbarrar num deles precisa entender em dez segundos que topou num limite
+ * conhecido do escopo, e não num vazamento; sem esta dica, a mensagem acusa
+ * "bug ou ataque" a quem só escreveu um log de auditoria.
  */
 const DICA_DE_FALSO_POSITIVO =
   ` Se este caminho for CONTEÚDO de coluna \`Json\` (\`Lead.utm\`, ` +
   `\`Notification.payload\`, \`AuditLog.antes\`/\`depois\`) ou um \`where\` ANINHADO, ` +
-  `isto é falso positivo conhecido: a varredura confere pelo nome do campo e não ` +
-  `distingue coluna de conteúdo. Nesses dois casos nada grava a empresa da linha. ` +
-  `Saída: renomeie a chave dentro do Json (\`empresaAlvo\`, \`companyIdAlvo\`) ou faça ` +
-  `a operação aninhada como chamada separada no cliente escopado. ` +
+  `isto é falso positivo conhecido: a varredura confere pelo NOME do campo e não ` +
+  `distingue coluna de conteúdo — vale para \`companyId\` e também para uma chave ` +
+  `\`company\` que seja só descrição de empresa dentro do Json. Nesses casos nada ` +
+  `grava a empresa da linha. Saída: renomeie a chave dentro do Json (\`empresaAlvo\`, ` +
+  `\`companyIdAlvo\`, \`empresaDoContato\`) ou faça a operação aninhada como chamada ` +
+  `separada no cliente escopado. ` +
   `Ver "Falsos positivos conhecidos" em core/tenancy/escopo.ts.`;
 
 /**
@@ -355,8 +402,14 @@ function exigirRelacaoDeEmpresaFechada(
   valor: unknown,
   companyId: string,
   onde: string,
-  caminho: string
+  caminho: string,
+  aninhado: boolean
 ) {
+  // A dica entra AQUI, e não só na recusa por divergência de valor: recusa de
+  // FORMA é o caso mais provável de cair num blob Json com chave `company`, que
+  // é justamente o falso positivo que a dica nomeia. Condicionada ao
+  // `aninhado` pelo mesmo motivo que no ramo do `companyId` — no topo do
+  // `data`, `company` é a relação, nunca conteúdo.
   const recusar = (motivo: string) => {
     throw new EscopoDeEmpresaError(
       `${onde} passou \`${caminho}\` numa forma que o escopo NÃO aceita: ${motivo}. ` +
@@ -366,7 +419,7 @@ function exigirRelacaoDeEmpresaFechada(
         `\`create\` fabricaria uma empresa NOVA e gravaria a linha nela; ` +
         `\`connectOrCreate\` gravaria na empresa do \`where\` dele. As duas passam no \`tsc\` e ` +
         `as duas saem do escopo, por isso a lista aqui é branca e fechada em vez de proibir ` +
-        `forma a forma.`
+        `forma a forma.` + (aninhado ? DICA_DE_FALSO_POSITIVO : "")
     );
   };
 
@@ -397,7 +450,13 @@ function exigirRelacaoDeEmpresaFechada(
   if (typeof id !== "string") {
     return recusar(`\`connect.id\` esperava string, veio ${JSON.stringify(id)}`);
   }
-  exigirCoerencia(`${caminho}.connect.id`, id, companyId, onde, DICA_DE_FALSO_POSITIVO);
+  exigirCoerencia(
+    `${caminho}.connect.id`,
+    id,
+    companyId,
+    onde,
+    aninhado ? DICA_DE_FALSO_POSITIVO : ""
+  );
 }
 
 /**
@@ -454,7 +513,8 @@ function exigirEmpresaCoerenteEmData(dado: unknown, companyId: string, onde: str
     if (++nos > LIMITE_DE_NOS_NA_VARREDURA) {
       throw new EscopoDeEmpresaError(
         `${onde} passou um \`data\` com mais de ${LIMITE_DE_NOS_NA_VARREDURA} nós, e o escopo ` +
-          `não consegue conferir a empresa nele por inteiro. Quebre o lote em pedaços menores. ` +
+          `${JSON.stringify(companyId)} não consegue conferir a empresa nele por inteiro. ` +
+          `Quebre o lote em pedaços menores. ` +
           `Passar sem conferir seria vazamento silencioso entre empresas.`
       );
     }
@@ -484,7 +544,7 @@ function exigirEmpresaCoerenteEmData(dado: unknown, companyId: string, onde: str
       }
 
       if (chave === "company") {
-        exigirRelacaoDeEmpresaFechada(filho, companyId, onde, caminhoFilho);
+        exigirRelacaoDeEmpresaFechada(filho, companyId, onde, caminhoFilho, aninhado);
         continue;
       }
 
@@ -503,8 +563,9 @@ function injetarEmData(dado: unknown, companyId: string, onde: string): unknown 
   // próprio é mais útil que isso.
   if ("company" in registro) {
     throw new EscopoDeEmpresaError(
-      `${onde} passou a relação \`company\` em \`data\`. Sob escopo, a empresa vem do cliente — ` +
-        `remova \`company\` e deixe o escopo injetar \`companyId\`.`
+      `${onde} passou a relação \`company\` em \`data\`. Sob escopo, a empresa vem do cliente ` +
+        `(${JSON.stringify(companyId)}) — remova \`company\` e deixe o escopo injetar ` +
+        `\`companyId\`.`
     );
   }
 
@@ -575,8 +636,11 @@ export function escoparArgumentos(
   const equivalente = OPERACOES_POR_CHAVE_UNICA[operation];
   if (equivalente) {
     throw new EscopoDeEmpresaError(
-      `${onde} não é escopável por empresa: o \`where\` dela só aceita campo único, ` +
-        `e \`companyId\` não é único em ${model} — o Prisma recusa o campo ali. ` +
+      `${onde} não é escopável por empresa no escopo ${JSON.stringify(companyId)}: o \`where\` ` +
+        `dela só aceita campo único, e \`companyId\` não é único em ${model} — o Prisma recusa ` +
+        `o campo ali. (Exceção conhecida: \`BotConfig\` tem \`@@unique([companyId])\`, então lá ` +
+        `o campo seria aceito; o escopo recusa mesmo assim, por uniformidade — ver o bloco ` +
+        `"Recusa, lançando" em core/tenancy/escopo.ts.) ` +
         `Use \`${equivalente}\` no cliente escopado. ` +
         `Devolver a linha sem filtro entregaria dado de outra empresa a quem soubesse o id.`
     );
@@ -585,8 +649,8 @@ export function escoparArgumentos(
   // Fecha fechado: operação de modelo que este arquivo não classificou
   // (o Prisma pode acrescentar uma) para em vez de passar sem filtro.
   throw new EscopoDeEmpresaError(
-    `${onde} é uma operação que o escopo de empresa ainda não classifica. ` +
-      `Classifique-a em core/tenancy/escopo.ts antes de usá-la — passar sem filtro ` +
+    `${onde} é uma operação que o escopo de empresa ${JSON.stringify(companyId)} ainda não ` +
+      `classifica. Classifique-a em core/tenancy/escopo.ts antes de usá-la — passar sem filtro ` +
       `seria vazamento silencioso entre empresas.`
   );
 }
@@ -638,7 +702,13 @@ export function prismaDaEmpresa(companyId: string, cliente: PrismaClient = prism
     // empresa e por requisição, e o Prisma não documenta o que faz com nomes
     // de extensão além de exibi-los — inventar cardinalidade infinita numa
     // string que não controlamos não vale o ganho de leitura. Quem precisa do
-    // valor tem a mensagem do `EscopoDeEmpresaError`, que sempre o carrega.
+    // valor tem a mensagem do `EscopoDeEmpresaError`: TODA mensagem lançada
+    // com escopo ativo carrega o `companyId`, e há caso de teste varrendo os
+    // seis caminhos de lançamento para provar isso. A única exceção é o erro
+    // de `companyId` vazio, lançado antes de existir escopo — e ele é exceção
+    // nomeada no mesmo teste. Auditando esta frase foi que se descobriu que
+    // quatro das mensagens NÃO o carregavam; elas foram corrigidas, e não a
+    // frase.
     name: "escopo-empresa",
     query: {
       $allModels: {
