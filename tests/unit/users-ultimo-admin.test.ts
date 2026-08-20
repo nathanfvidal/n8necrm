@@ -40,32 +40,72 @@ vi.mock("server-only", () => ({}));
  * devolve contra dado real é problema do banco, não da regra.
  */
 
-const db = vi.hoisted(() => ({
-  user: {
-    findUnique: vi.fn(),
-    update: vi.fn(),
-  },
-  membership: {
-    count: vi.fn(),
-    update: vi.fn(),
-    // `registrarAuditoria()` (chamada por `atualizarUsuario`/`definirAtivo`
-    // no fim de cada caminho feliz) resolve a empresa de quem agiu via
-    // `companyIdDoUsuario()` (`core/users/empresa.ts`), que consulta
-    // `membership.findFirstOrThrow` — infraestrutura de outra tarefa
-    // (companyId em AuditLog), não algo que este arquivo decide, mas que
-    // precisa de mock para o mock de `$transaction`/`auditLog.create` não
-    // travar num `TypeError` no meio dos testes que chegam até lá.
-    findFirstOrThrow: vi.fn(),
-  },
-  auditLog: {
-    create: vi.fn(),
-  },
-  // Estilo callback ($transaction(async (tx) => ...)), o mesmo que
-  // `criarUsuario`/`atualizarUsuario` usam de verdade — o mock só passa o
-  // próprio `db` como `tx`, então as chamadas dentro da transação caem nos
-  // MESMOS mocks acima.
-  $transaction: vi.fn((cb: (tx: typeof db) => unknown) => cb(db)),
-}));
+/**
+ * O cliente falso, e por que ele precisa de um `$extends` DE VERDADE.
+ *
+ * `core/users/service.ts` alcança o banco só por `prismaDaEmpresa(companyId)`
+ * desde o Ciclo 1d, e a primeira coisa que aquela função faz é
+ * `cliente.$extends(...)`. Um mock sem `$extends` quebra com `TypeError`; um
+ * `$extends` que devolvesse o próprio objeto seria PIOR que quebrar — o escopo
+ * viraria no-op silencioso, e a asserção de `companyId` logo abaixo passaria a
+ * afirmar o que o código escreve à mão em vez do que o escopo injeta. É
+ * exatamente o "teste que espelha o bug" da armadilha 1 deste ciclo.
+ *
+ * Então o `$extends` aqui é um mini-Prisma: ele recebe a extensão do escopo,
+ * chama `query.$allModels.$allOperations` com o nome do modelo em PascalCase
+ * (como o Prisma faz) e só então delega para o `vi.fn()` correspondente. O
+ * efeito é que os mocks recebem os argumentos JÁ ESCOPADOS, e a asserção de
+ * forma de consulta continua provando o que sempre provou.
+ *
+ * `$transaction` do cliente escopado passa o PRÓPRIO escopado como `tx` — que é
+ * o comportamento medido do Prisma real (`_createItxClient` reaplica as
+ * extensões; ver o docstring de `prismaDaEmpresa`). Sem isso, `tx.membership.*`
+ * dentro de `atualizarUsuario` escaparia do escopo e o teste ficaria verde por
+ * um caminho que a produção não tem.
+ */
+/* eslint-disable @typescript-eslint/no-explicit-any */
+const db = vi.hoisted(() => {
+  const cru: any = {
+    user: {
+      findUnique: vi.fn(),
+      update: vi.fn(),
+    },
+    membership: {
+      count: vi.fn(),
+      updateMany: vi.fn(),
+    },
+    auditLog: {
+      // `registrarAuditoria` grava a linha e depois avalia rajada destrutiva
+      // (`avaliarAtividadeSuspeita`), que CONTA `AuditLog`. Sem o `count`
+      // mockado a avaliação estoura um `TypeError` — engolido por
+      // `registrarAuditoria`, mas barulhento no log de toda execução.
+      create: vi.fn(),
+      count: vi.fn(),
+    },
+  };
+
+  cru.$extends = (extensao: any) => {
+    const escopado: any = {
+      $transaction: (cb: (tx: any) => unknown) => cb(escopado),
+    };
+    for (const modelo of Object.keys(cru)) {
+      if (typeof cru[modelo] !== "object") continue;
+      escopado[modelo] = {};
+      for (const operacao of Object.keys(cru[modelo])) {
+        escopado[modelo][operacao] = (args: unknown) =>
+          extensao.query.$allModels.$allOperations({
+            model: modelo.charAt(0).toUpperCase() + modelo.slice(1),
+            operation: operacao,
+            args,
+            query: (a: unknown) => cru[modelo][operacao](a),
+          });
+      }
+    }
+    return escopado;
+  };
+
+  return cru;
+});
 
 vi.mock("@/lib/prisma", () => ({ prisma: db }));
 
@@ -89,8 +129,7 @@ const AUTOR = "outro-admin";
 
 beforeEach(() => {
   vi.clearAllMocks();
-  db.$transaction.mockImplementation((cb: (tx: typeof db) => unknown) => cb(db));
-  db.membership.findFirstOrThrow.mockResolvedValue({ companyId: COMPANY_ID });
+  db.auditLog.count.mockResolvedValue(0);
   db.user.findUnique.mockResolvedValue(ADMIN_ALVO);
   db.user.update.mockResolvedValue({
     id: ADMIN_ALVO.id,
@@ -99,7 +138,7 @@ beforeEach(() => {
     ativo: false,
     criadoEm: new Date(),
   });
-  db.membership.update.mockResolvedValue({});
+  db.membership.updateMany.mockResolvedValue({ count: 1 });
   db.auditLog.create.mockResolvedValue({});
 });
 
@@ -133,7 +172,7 @@ describe("proteção do último administrador ativo", () => {
     ).rejects.toThrow(/último administrador ativo/);
 
     expect(db.user.update).not.toHaveBeenCalled();
-    expect(db.membership.update).not.toHaveBeenCalled();
+    expect(db.membership.updateMany).not.toHaveBeenCalled();
   });
 
   it("não conta o próprio alvo nem contas de sistema, e escopa por companyId", async () => {
@@ -146,7 +185,10 @@ describe("proteção do último administrador ativo", () => {
     // conviver no MESMO objeto. Se alguém voltar a espalhar um fragmento, o
     // `not` some e a contagem passa a incluir o próprio alvo — a guarda
     // deixaria de disparar exatamente quando deveria. `companyId` é o que
-    // torna a guarda "daquela empresa", não do sistema inteiro.
+    // torna a guarda "daquela empresa", não do sistema inteiro — e desde o
+    // Ciclo 1d ele chega aqui INJETADO pelo escopo, não escrito no corpo da
+    // função: o `$extends` deste arquivo é o escopo de verdade, então esta
+    // asserção continua sendo sobre a consulta que o Postgres receberia.
     expect(db.membership.count).toHaveBeenCalledWith({
       where: {
         companyId: COMPANY_ID,

@@ -1,6 +1,6 @@
 import bcrypt from "bcryptjs";
 
-import { prisma } from "@/lib/prisma";
+import { prismaDaEmpresa } from "@/core/tenancy/escopo";
 import { registrarAuditoria } from "@/core/audit/log";
 import { ehContaDeSistema, idsDeSistema } from "./sistema";
 import type { UsuarioListado } from "./queries";
@@ -26,6 +26,34 @@ import type { Role } from "@prisma/client";
  * Este serviço só grava a coluna; quem faz a revogação valer é aquele helper.
  * O teste que prova isso ponta a ponta é o que impede alguém "otimizar" a
  * consulta de lá e transformar desativação em teatro.
+ *
+ * ## O escopo aqui protege o VÍNCULO, não a pessoa — e é o suficiente
+ *
+ * Este arquivo alcança o banco só por `prismaDaEmpresa(companyId)` desde o
+ * Ciclo 1d, e vale dizer o que isso significa num módulo cujo modelo central
+ * NÃO é de tenant. `User` não tem `companyId` (`prisma/schema.prisma` diz por
+ * quê: a mesma pessoa pode ter `Membership` em várias empresas) e `email` é
+ * `@unique` GLOBAL. Toda operação sobre `User` atravessa o escopo INTACTA — o
+ * que é correto e é medido em `core/tenancy/escopo.ts`: injetar
+ * `where.companyId` em `User` produziria erro de coluna inexistente, não
+ * proteção.
+ *
+ * Quem delimita a empresa é `Membership`, que É de tenant, e as quatro funções
+ * públicas já partiam dele: cada uma carrega `memberships` filtrado por
+ * `companyId` junto do alvo e trata "sem vínculo" como "não encontrado". A
+ * conversão não mudou essa regra — ela tirou do programador a obrigação de
+ * escrevê-la nas operações de `Membership`, que são as que o escopo alcança. O
+ * caminho que essa regra fecha é a TOMADA DE CONTA: `redefinirSenha` chegou a
+ * achar o alvo por `findUnique({ where: { id } })` e nada mais, e um ADMIN da
+ * empresa A redefinia a senha do ADMIN da B (`f2f05cf`).
+ *
+ * **A leitura ANINHADA continua sendo responsabilidade de quem escreve.** O
+ * `select` de `memberships` dentro de `user.findUnique` atravessa `User`, e
+ * `core/tenancy/escopo.ts` avisa na seção "Leitura ANINHADA" que o escopo não
+ * filtra ali: a extensão vê UMA operação e o `select` desce intacto ao motor.
+ * Sem aquele `where` escrito à mão, as três funções veriam o vínculo da pessoa
+ * em QUALQUER empresa e concluiriam que ela é gerenciável. Ele está escrito nas
+ * três, e é por isso que sobrevive à conversão em vez de sumir nela.
  */
 
 /**
@@ -164,9 +192,8 @@ function recusarContaDeSistema(id: string): void {
  * caminhos para o mesmo fim.
  */
 async function garantirQueSobraAdmin(idQueVaiSair: string, companyId: string): Promise<void> {
-  const outros = await prisma.membership.count({
+  const outros = await prismaDaEmpresa(companyId).membership.count({
     where: {
-      companyId,
       papel: "ADMIN",
       // Os dois predicados de `userId` no MESMO objeto — mesmo raciocínio de
       // `sistema.ts` sobre por que espalhar um fragmento com `id`
@@ -224,7 +251,15 @@ export async function criarUsuario(
     // quem já existia quando ela rodou. `Membership.papel` é a fonte que
     // este módulo LÊ; `User.papel` é só o bridge escrito para não quebrar os
     // leitores antigos.
-    criado = await prisma.$transaction(async (tx) => {
+    //
+    // A transação é aberta sobre o cliente ESCOPADO, e o `tx` dentro dela
+    // carrega a extensão (medido no Prisma 7.9.1 desta árvore — ver o docstring
+    // de `prismaDaEmpresa`). Na prática: `tx.user.create` passa intacto (`User`
+    // não é de tenant) e `tx.membership.create` teria o `companyId` injetado
+    // sozinho. Ele continua escrito porque já estava aqui e o escopo CONFERE em
+    // vez de sobrescrever: divergência entre o valor escrito e o do cliente
+    // recusa, lançando, que é o comportamento desejado.
+    criado = await prismaDaEmpresa(companyId).$transaction(async (tx) => {
       const usuario = await tx.user.create({
         data: { nome, email, senhaHash, papel },
         select: { id: true, nome: true, email: true, ativo: true, criadoEm: true },
@@ -279,7 +314,14 @@ export async function atualizarUsuario(
   // descrito em `sistema.ts`. O papel não vem mais daqui — mora no
   // `Membership` da empresa de quem chama, buscado junto (`memberships`
   // filtrado por `companyId`, no máximo um vínculo por par usuário/empresa).
-  const antes = await prisma.user.findUnique({
+  const db = prismaDaEmpresa(companyId);
+
+  // `findUnique` sobrevive à conversão porque `User` NÃO é modelo de tenant: o
+  // escopo devolve os argumentos intactos e só recusa `findUnique` nos 11 de
+  // tenant. O filtro por `companyId` dentro de `memberships` continua sendo
+  // escrito à mão, e precisa continuar — leitura aninhada não é filtrada pelo
+  // escopo (ver o bloco no topo deste arquivo).
+  const antes = await db.user.findUnique({
     where: { id: entrada.id },
     select: {
       id: true,
@@ -314,14 +356,22 @@ export async function atualizarUsuario(
   // (ver o comentário lá): a coluna é um bridge temporário para os leitores
   // que o DROP desta tarefa revelou fora do escopo dela, e precisa continuar
   // correta quando o papel de alguém muda, não só na criação.
-  const usuarioAtualizado = await prisma.$transaction(async (tx) => {
+  //
+  // `tx.membership.updateMany` e não `update`: o escopo recusa `update` em
+  // modelo de tenant, e a recusa é o ponto — o `where` de `update` só aceita
+  // campo único, e a chave composta levaria o `companyId` escrito à mão, que é
+  // justamente o que a conversão tira das mãos de quem edita. O `where` aqui é
+  // só `userId`; a empresa entra pelo cliente. A linha existe (`vinculoAntes`
+  // acabou de prová-lo dentro desta mesma empresa), então o `count` de zero que
+  // `updateMany` toleraria em silêncio já foi descartado acima.
+  const usuarioAtualizado = await db.$transaction(async (tx) => {
     const usuario = await tx.user.update({
       where: { id: entrada.id },
       data: { nome, papel },
       select: { id: true, nome: true, email: true, ativo: true, criadoEm: true },
     });
-    await tx.membership.update({
-      where: { userId_companyId: { userId: entrada.id, companyId } },
+    await tx.membership.updateMany({
+      where: { userId: entrada.id },
       data: { papel },
     });
     return usuario;
@@ -360,7 +410,9 @@ export async function definirAtivo(
   // `ativo` continua sendo coluna de `User` — é a pessoa que está
   // ativa/desativada, e não algo por empresa. O papel (só usado aqui pela
   // guarda do último ADMIN) é que vem do `Membership` desta empresa.
-  const antes = await prisma.user.findUnique({
+  const db = prismaDaEmpresa(companyId);
+
+  const antes = await db.user.findUnique({
     where: { id: entrada.id },
     select: { id: true, ativo: true, memberships: { where: { companyId }, select: { papel: true } } },
   });
@@ -371,7 +423,7 @@ export async function definirAtivo(
     await garantirQueSobraAdmin(entrada.id, companyId);
   }
 
-  const depois = await prisma.user.update({
+  const depois = await db.user.update({
     where: { id: entrada.id },
     data: { ativo: entrada.ativo },
     select: { id: true, nome: true, email: true, ativo: true, criadoEm: true },
@@ -435,14 +487,16 @@ export async function redefinirSenha(
 
   const senha = validarSenha(entrada.senha);
 
-  const alvo = await prisma.user.findUnique({
+  const db = prismaDaEmpresa(companyId);
+
+  const alvo = await db.user.findUnique({
     where: { id: entrada.id },
     select: { id: true, memberships: { where: { companyId }, select: { id: true } } },
   });
   if (!alvo || !alvo.memberships[0]) throw new UsuarioInvalidoError("Usuário não encontrado.");
 
   const senhaHash = await bcrypt.hash(senha, CUSTO_BCRYPT);
-  await prisma.user.update({ where: { id: alvo.id }, data: { senhaHash } });
+  await db.user.update({ where: { id: alvo.id }, data: { senhaHash } });
 
   await registrarAuditoria({
     companyId,

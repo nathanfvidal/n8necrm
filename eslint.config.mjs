@@ -222,41 +222,24 @@ const VIOLADORES_TEMPORARIOS_CORE = [
   // Converter para `prismaDaEmpresa` é do próximo ciclo, e é o que faz o
   // filtro deixar de depender de alguém lembrar de escrevê-lo à mão.
   "src/core/tasks/service.ts",
-  // `users/empresa.ts` está aqui, e NÃO na exceção permanente, de propósito.
-  // Ele resolve `companyIdDoUsuario(usuarioId)` lendo `Membership`, o que o
-  // faz parecer parente de `auth/session.ts` — mas o próprio arquivo se
-  // documenta como PONTE que desaparece quando os chamadores passarem
-  // `UsuarioAtivo.companyId` explícito. Exceção permanente sobreviveria ao
-  // arquivo e viraria mentira no dia em que ele fosse apagado.
+  // `src/core/users/{queries,service}.ts` SAÍRAM desta lista no Ciclo 1d, e a
+  // resposta que faltava era a que a anotação antiga pedia: "o que o cliente
+  // escopado faz com `User`?". Faz nada, e isso é o correto — `User` está fora
+  // dos 11 modelos de tenant, então `escoparArgumentos` devolve os argumentos
+  // INTACTOS (inclusive `findUnique`, que ele recusaria num modelo de tenant).
+  // Quem o escopo alcança neste módulo é `Membership`, que É de tenant e é
+  // justamente o que define "pertence a esta empresa". As mudanças observáveis
+  // foram duas, as duas por recusa do escopo: `membership.findUnique` virou
+  // `findFirst` em `buscarUsuario`, e `membership.update` virou `updateMany`
+  // dentro da transação de `atualizarUsuario` — nas duas, o `companyId` deixou
+  // de ser escrito à mão.
   //
-  // Sem defeito próprio, mas é o MULTIPLICADOR de dois deles: o
-  // `findFirstOrThrow` sobre `Membership` pega um vínculo ARBITRÁRIO quando a
-  // pessoa tem mais de um, e é dele que `audit/log.ts` e `audit/alerta.ts`
-  // tiram a empresa. `criarUsuario` já sabe criar `Membership`, então duas
-  // empresas com a mesma pessoa é estado expressável hoje — só nenhum caminho
-  // de UI o produz ainda.
-  "src/core/users/empresa.ts",
-  // 0 defeitos. `listarUsuarios`/`buscarUsuario` já partem de `Membership` com
-  // `companyId` obrigatório na assinatura — foi este arquivo que consertou o
-  // `<select>` de responsável na Task 4. Converter é trocar o import.
-  "src/core/users/queries.ts",
-  // 0 defeitos desde 2026-08-20. O que havia aqui era o pior da fila inteira, e
-  // fica registrado porque a FORMA se repete: `redefinirSenha` achava o alvo
-  // com `user.findUnique({ where: { id: entrada.id } })` e nada mais — sem
-  // `Membership`, sem `companyId` —, enquanto as três vizinhas do MESMO
-  // arquivo (`atualizarUsuario`, `definirAtivo`, `garantirQueSobraAdmin`) já
-  // recusavam quem não tem vínculo. Um ADMIN da empresa A redefinia a senha de
-  // qualquer conta do banco e entrava com ela: tomada de conta, não leitura de
-  // dado alheio. Fechado no padrão das vizinhas, com
-  // `tests/unit/users-service.test.ts` travando as duas metades.
-  //
-  // Continua nesta fila pelo IMPORT, e aqui o motivo é mais fundo que "ainda
-  // não converteram": `User` não tem `companyId` e `email` é `@unique` GLOBAL
-  // por decisão registrada no schema, então o escopo deste módulo é o vínculo
-  // conferido em cada função, como está. Converter para `prismaDaEmpresa` exige
-  // decidir antes o que o cliente escopado faz com `User` — não é troca de
-  // import.
-  "src/core/users/service.ts",
+  // O que NÃO mudou, e é a parte que o escopo não alcança: o filtro por
+  // `companyId` dentro do `select` de `memberships`, nas três funções que
+  // carregam o vínculo junto do alvo. Leitura ANINHADA não é escopada (ver a
+  // seção no topo de `core/tenancy/escopo.ts`) — sem aquele filtro à mão, as
+  // três veriam o vínculo da pessoa em qualquer empresa e a tratariam como
+  // gerenciável. O bloco no topo de `service.ts` registra isso.
 ];
 
 const VIOLADORES_TEMPORARIOS_MODULES = [
@@ -363,9 +346,32 @@ const VIOLADORES_TEMPORARIOS_APP = [];
 //   INTACTOS para modelo fora dos 11 (`core/tenancy/escopo.ts`). O arquivo
 //   entrou na lista TEMPORÁRIA em 2026-08-20 com a anotação "converter é trocar
 //   o import, nada mais"; ela estava errada — não há por o que trocar.
+// - `core/users/empresa.ts` RESOLVE `companyIdDoUsuario(usuarioId)` lendo
+//   `Membership`. Escopá-lo exigiria o `companyId` que ele está calculando:
+//   é a mesma circularidade de `session.ts`, e é verificável em uma linha —
+//   `prismaDaEmpresa(companyId)` recebe como parâmetro exatamente o valor que
+//   esta função devolve.
+//
+//   Ele esteve na lista TEMPORÁRIA com um argumento que parecia forte: o
+//   arquivo se documenta como PONTE que some quando todos os chamadores
+//   passarem `UsuarioAtivo.companyId`, e uma exceção permanente sobreviveria ao
+//   arquivo e viraria mentira. **Não sobrevive**, e o que impede é mecânico, não
+//   disciplina: `tests/unit/catraca-prisma-cru.test.ts` reprova toda exceção
+//   declarada — permanente inclusive — para arquivo que não exista em disco ou
+//   que não importe mais o prisma cru. Apagar `empresa.ts` sem apagar esta linha
+//   deixa a suíte vermelha.
+//
+//   Ele continua sendo o MULTIPLICADOR que a anotação antiga descrevia, e o
+//   Ciclo 1d cortou os dois piores usos: `audit/log.ts` e `audit/alerta.ts`
+//   deixaram de tirar a empresa daqui. Sobram 6 chamadas, em `leads/service.ts`
+//   (2), `leads/notes.ts` (3) e `tasks/service.ts` (1) — todas com o mesmo
+//   limite conhecido, o `findFirstOrThrow` que pega um vínculo ARBITRÁRIO de
+//   quem tem dois. Isso é dívida do Ciclo 2 (a origem passa a ser
+//   `UsuarioAtivo.companyId`), não coisa que converter este arquivo resolva.
 const EXCECAO_PERMANENTE = [
   "src/core/auth/credenciais.ts",
   "src/core/auth/session.ts",
+  "src/core/users/empresa.ts",
   "src/core/rate-limit/limiter.ts",
   "src/core/tenancy/escopo.ts",
 ];

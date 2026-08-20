@@ -1,4 +1,4 @@
-import { prisma } from "@/lib/prisma";
+import { prismaDaEmpresa } from "@/core/tenancy/escopo";
 import { ehContaDeSistema, idsDeSistema } from "./sistema";
 import type { Role } from "@prisma/client";
 
@@ -48,10 +48,18 @@ export type UsuarioListado = {
  *
  * Contas de sistema ficam de fora (ver `sistema.ts`) — não são gerenciáveis,
  * e mostrá-las convidaria alguém a "reativar aquele usuário desativado".
+ *
+ * O `where: { companyId }` sumiu do corpo no Ciclo 1d e NÃO sumiu da consulta:
+ * `prismaDaEmpresa` o injeta. A diferença é quem garante — antes era quem
+ * escrevesse a linha lembrar; hoje é o cliente, e omitir não é mais expressável.
+ * `user` é relação DIRETA (uma FK para uma linha só), não inversa: o alerta de
+ * "Leitura ANINHADA" em `core/tenancy/escopo.ts` é sobre atravessar `User` para
+ * as relações inversas dele (`leadsAtribuidos`, `auditLogs`, ...), que trazem
+ * linha de toda empresa. Aqui não se desce para nenhuma.
  */
 export async function listarUsuarios(companyId: string): Promise<UsuarioListado[]> {
-  const vinculos = await prisma.membership.findMany({
-    where: { companyId, userId: { notIn: idsDeSistema() } },
+  const vinculos = await prismaDaEmpresa(companyId).membership.findMany({
+    where: { userId: { notIn: idsDeSistema() } },
     select: { papel: true, user: { select: CAMPOS_SEGUROS_USER } },
     orderBy: [{ user: { ativo: "desc" } }, { user: { nome: "asc" } }],
   });
@@ -69,12 +77,18 @@ export async function listarUsuarios(companyId: string): Promise<UsuarioListado[
  * A exclusão de conta de sistema é feita ANTES da consulta, em memória, e não
  * como predicado somado ao `id`: ver `sistema.ts` sobre por que o filtro por
  * `id` não compõe da forma óbvia.
+ *
+ * `findFirst` e não `findUnique`: o escopo RECUSA `findUnique` em modelo de
+ * tenant, lançando — o `where` dela só aceita campo único, e não há onde
+ * pendurar o `companyId` (ver "Recusa, lançando" em `core/tenancy/escopo.ts`).
+ * A consulta é a mesma: `Membership` tem `@@unique([userId, companyId])`, então
+ * `userId` mais o `companyId` que o escopo injeta seleciona no máximo uma linha.
  */
 export async function buscarUsuario(id: string, companyId: string): Promise<UsuarioListado | null> {
   if (ehContaDeSistema(id)) return null;
 
-  const vinculo = await prisma.membership.findUnique({
-    where: { userId_companyId: { userId: id, companyId } },
+  const vinculo = await prismaDaEmpresa(companyId).membership.findFirst({
+    where: { userId: id },
     select: { papel: true, user: { select: CAMPOS_SEGUROS_USER } },
   });
   if (!vinculo) return null;
