@@ -106,6 +106,267 @@ describe("EvolutionGateway.normalizarEventos", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Invólucros de mensagem (ephemeral / viewOnce / documentWithCaption / edited)
+// ---------------------------------------------------------------------------
+//
+// Fonte das expectativas abaixo, medida (não presumida):
+//
+// - baileys 7.0.0-rc.9, `lib/Utils/messages.js:598-619` (`normalizeMessageContent`):
+//   a lista de invólucros é exatamente `ephemeralMessage`, `viewOnceMessage`,
+//   `documentWithCaptionMessage`, `viewOnceMessageV2`,
+//   `viewOnceMessageV2Extension`, `editedMessage`, com teto de 5 iterações.
+// - baileys 7.0.0-rc.9, `lib/Utils/messages.js:585-591` (`getContentType`):
+//   o tipo de conteúdo é a PRIMEIRA chave que seja `conversation` ou contenha
+//   `Message`, excluída `senderKeyDistributionMessage`.
+// - evolution-api 2.3.7, `src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts:4652`
+//   (`prepareMessage`): monta o payload do webhook com `getContentType` puro e
+//   copia `message.message` inteiro, sem `normalizeMessageContent` (0 ocorrências
+//   em todo o `src/` da tag 2.3.7) — logo o invólucro chega até nós.
+//
+// Cada afirmação universal do comentário em `gateway/evolution.ts` tem caso
+// aqui: a lista completa de invólucros, o aninhamento, o teto, o invólucro
+// malformado, a exclusão de `senderKeyDistributionMessage` e a preservação
+// integral do caminho sem invólucro.
+
+/** Payload messages.upsert com um `message` arbitrário e o `messageType` que a Evolution mandaria. */
+function payloadComMensagem(message: unknown, messageType: string) {
+  const payload = payloadTexto({ messageType });
+  payload.data.message = message as never;
+  return payload;
+}
+
+/** Envolve um conteúdo de mensagem numa das chaves de invólucro do Baileys. */
+function envolver(chave: string, conteudo: unknown) {
+  return { [chave]: { message: conteudo } };
+}
+
+const CHAVES_INVOLUCRO = [
+  "ephemeralMessage",
+  "viewOnceMessage",
+  "documentWithCaptionMessage",
+  "viewOnceMessageV2",
+  "viewOnceMessageV2Extension",
+] as const;
+
+describe("EvolutionGateway.normalizarEventos — invólucros de mensagem", () => {
+  const gateway = new EvolutionGateway(CONFIG);
+
+  it.each(CHAVES_INVOLUCRO)(
+    "desembrulha texto simples dentro de %s e mapeia para TEXTO",
+    (chave) => {
+      const eventos = gateway.normalizarEventos(
+        payloadComMensagem(envolver(chave, { conversation: "Bom dia, tem em estoque?" }), chave)
+      );
+      expect(eventos[0]).toMatchObject({ tipo: "TEXTO", texto: "Bom dia, tem em estoque?" });
+    }
+  );
+
+  it.each(CHAVES_INVOLUCRO)(
+    "desembrulha extendedTextMessage dentro de %s (a Evolution só achata o extendedText do NÍVEL RAIZ)",
+    (chave) => {
+      const eventos = gateway.normalizarEventos(
+        payloadComMensagem(
+          envolver(chave, { extendedTextMessage: { text: "Segue o link que você pediu" } }),
+          chave
+        )
+      );
+      expect(eventos[0]).toMatchObject({ tipo: "TEXTO", texto: "Segue o link que você pediu" });
+    }
+  );
+
+  it("desembrulha imageMessage dentro de ephemeralMessage: tipo IMAGEM e legenda como texto", () => {
+    const eventos = gateway.normalizarEventos(
+      payloadComMensagem(
+        envolver("ephemeralMessage", { imageMessage: { caption: "Olha esse carro" } }),
+        "ephemeralMessage"
+      )
+    );
+    expect(eventos[0]).toMatchObject({ tipo: "IMAGEM", texto: "Olha esse carro" });
+  });
+
+  it("desembrulha audioMessage dentro de viewOnceMessageV2: tipo AUDIO e texto nulo", () => {
+    const eventos = gateway.normalizarEventos(
+      payloadComMensagem(envolver("viewOnceMessageV2", { audioMessage: {} }), "viewOnceMessageV2")
+    );
+    expect(eventos[0]).toMatchObject({ tipo: "AUDIO", texto: null });
+  });
+
+  it("desembrulha documentWithCaptionMessage e extrai a legenda do documentMessage interno", () => {
+    const eventos = gateway.normalizarEventos(
+      payloadComMensagem(
+        envolver("documentWithCaptionMessage", {
+          documentMessage: { caption: "Proposta em anexo" },
+        }),
+        "documentWithCaptionMessage"
+      )
+    );
+    expect(eventos[0]).toMatchObject({ tipo: "DOCUMENTO", texto: "Proposta em anexo" });
+  });
+
+  it("desembrulha invólucro aninhado (viewOnceMessageV2 dentro de ephemeralMessage)", () => {
+    const eventos = gateway.normalizarEventos(
+      payloadComMensagem(
+        envolver(
+          "ephemeralMessage",
+          envolver("viewOnceMessageV2", { conversation: "some depois de ler" })
+        ),
+        "ephemeralMessage"
+      )
+    );
+    expect(eventos[0]).toMatchObject({ tipo: "TEXTO", texto: "some depois de ler" });
+  });
+
+  it("desembrulha até 5 invólucros aninhados (o mesmo teto do normalizeMessageContent do Baileys)", () => {
+    let conteudo: unknown = { conversation: "cinco camadas" };
+    for (let i = 0; i < 5; i += 1) conteudo = envolver("ephemeralMessage", conteudo);
+
+    const eventos = gateway.normalizarEventos(payloadComMensagem(conteudo, "ephemeralMessage"));
+    expect(eventos[0]).toMatchObject({ tipo: "TEXTO", texto: "cinco camadas" });
+  });
+
+  it("para no teto: 6 invólucros aninhados viram OUTRO com texto nulo, sem lançar e sem laço infinito", () => {
+    let conteudo: unknown = { conversation: "seis camadas" };
+    for (let i = 0; i < 6; i += 1) conteudo = envolver("ephemeralMessage", conteudo);
+
+    const payload = payloadComMensagem(conteudo, "ephemeralMessage");
+    expect(() => gateway.normalizarEventos(payload)).not.toThrow();
+    expect(gateway.normalizarEventos(payload)[0]).toMatchObject({ tipo: "OUTRO", texto: null });
+  });
+
+  it("trata invólucro vazio ou malformado como conteúdo desconhecido, sem lançar", () => {
+    const casos: unknown[] = [
+      { ephemeralMessage: {} },
+      { ephemeralMessage: { message: null } },
+      { ephemeralMessage: { message: "texto solto em vez de objeto" } },
+      { ephemeralMessage: { message: [] } },
+      { ephemeralMessage: null },
+      { viewOnceMessageV2: { message: {} } },
+    ];
+
+    for (const caso of casos) {
+      const payload = payloadComMensagem(caso, "ephemeralMessage");
+      expect(() => gateway.normalizarEventos(payload)).not.toThrow();
+      expect(gateway.normalizarEventos(payload)[0]).toMatchObject({ tipo: "OUTRO", texto: null });
+    }
+  });
+
+  it("ignora senderKeyDistributionMessage ao derivar o tipo do miolo (mesma exclusão do getContentType)", () => {
+    const eventos = gateway.normalizarEventos(
+      payloadComMensagem(
+        envolver("ephemeralMessage", {
+          senderKeyDistributionMessage: { groupId: "x@g.us" },
+          conversation: "oi de novo",
+        }),
+        "ephemeralMessage"
+      )
+    );
+    expect(eventos[0]).toMatchObject({ tipo: "TEXTO", texto: "oi de novo" });
+  });
+
+  it("não confunde messageContextInfo com conteúdo ao derivar o tipo do miolo", () => {
+    const eventos = gateway.normalizarEventos(
+      payloadComMensagem(
+        envolver("ephemeralMessage", {
+          messageContextInfo: { deviceListMetadataVersion: 2 },
+          conversation: "com contexto junto",
+        }),
+        "ephemeralMessage"
+      )
+    );
+    expect(eventos[0]).toMatchObject({ tipo: "TEXTO", texto: "com contexto junto" });
+  });
+
+  it("mantém a política de OUTRO para tipo desconhecido DENTRO de invólucro (enquete efêmera)", () => {
+    const eventos = gateway.normalizarEventos(
+      payloadComMensagem(
+        envolver("ephemeralMessage", { pollCreationMessage: { name: "Qual cor?" } }),
+        "ephemeralMessage"
+      )
+    );
+    expect(eventos[0]).toMatchObject({ tipo: "OUTRO", texto: null });
+  });
+
+  it("editedMessage desembrulha para protocolMessage e continua caindo em OUTRO (edição não é mensagem nova)", () => {
+    const eventos = gateway.normalizarEventos(
+      payloadComMensagem(
+        envolver("editedMessage", {
+          protocolMessage: { editedMessage: { conversation: "texto corrigido" } },
+        }),
+        "editedMessage"
+      )
+    );
+    expect(eventos[0]).toMatchObject({ tipo: "OUTRO", texto: null });
+  });
+
+  it("aplica os filtros de fromMe e de grupo ANTES do desembrulho (invólucro não reabre nenhum dos dois)", () => {
+    const efemera = envolver("ephemeralMessage", { conversation: "eco" });
+
+    const eco = payloadComMensagem(efemera, "ephemeralMessage");
+    eco.data.key.fromMe = true;
+    expect(gateway.normalizarEventos(eco)).toEqual([]);
+
+    const grupo = payloadComMensagem(efemera, "ephemeralMessage");
+    grupo.data.key.remoteJid = "120363000000000000@g.us";
+    expect(gateway.normalizarEventos(grupo)).toEqual([]);
+  });
+});
+
+describe("EvolutionGateway.normalizarEventos — mensagens SEM invólucro seguem idênticas", () => {
+  const gateway = new EvolutionGateway(CONFIG);
+
+  it("conversation no nível raiz continua TEXTO com o texto intacto", () => {
+    const eventos = gateway.normalizarEventos(payloadTexto({ texto: "Oi, tudo bem?" }));
+    expect(eventos[0]).toMatchObject({ tipo: "TEXTO", texto: "Oi, tudo bem?" });
+  });
+
+  it("extendedTextMessage no nível raiz continua TEXTO com o texto intacto", () => {
+    const eventos = gateway.normalizarEventos(
+      payloadComMensagem(
+        { extendedTextMessage: { text: "mensagem com link" } },
+        "extendedTextMessage"
+      )
+    );
+    expect(eventos[0]).toMatchObject({ tipo: "TEXTO", texto: "mensagem com link" });
+  });
+
+  it("imageMessage, audioMessage, documentMessage e stickerMessage no nível raiz mantêm tipo e texto", () => {
+    expect(
+      gateway.normalizarEventos(
+        payloadComMensagem({ imageMessage: { caption: "legenda" } }, "imageMessage")
+      )[0]
+    ).toMatchObject({ tipo: "IMAGEM", texto: "legenda" });
+
+    expect(
+      gateway.normalizarEventos(payloadComMensagem({ audioMessage: {} }, "audioMessage"))[0]
+    ).toMatchObject({ tipo: "AUDIO", texto: null });
+
+    expect(
+      gateway.normalizarEventos(
+        payloadComMensagem({ documentMessage: { caption: "contrato" } }, "documentMessage")
+      )[0]
+    ).toMatchObject({ tipo: "DOCUMENTO", texto: "contrato" });
+
+    expect(
+      gateway.normalizarEventos(payloadComMensagem({ stickerMessage: {} }, "stickerMessage"))[0]
+    ).toMatchObject({ tipo: "STICKER", texto: null });
+  });
+
+  it("messageType desconhecido no nível raiz continua caindo em OUTRO", () => {
+    const eventos = gateway.normalizarEventos(
+      payloadComMensagem({ pollCreationMessage: { name: "Qual cor?" } }, "pollCreationMessage")
+    );
+    expect(eventos[0]).toMatchObject({ tipo: "OUTRO", texto: null });
+  });
+
+  it("payload sem `message` nenhum continua sem lançar, com texto nulo", () => {
+    const payload = payloadTexto();
+    delete (payload.data as { message?: unknown }).message;
+    expect(() => gateway.normalizarEventos(payload)).not.toThrow();
+    expect(gateway.normalizarEventos(payload)[0]).toMatchObject({ tipo: "TEXTO", texto: null });
+  });
+});
+
 describe("EvolutionGateway.enviarTexto", () => {
   const gateway = new EvolutionGateway(CONFIG);
 
