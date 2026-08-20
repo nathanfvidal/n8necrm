@@ -53,12 +53,16 @@ enum WhatsappTipo {
 // GLOBALMENTE, de propósito: é o mesmo login em qualquer empresa a que a
 // pessoa esteja vinculada.
 //
-// `papel` CONTINUA aqui ao fim desta tarefa, mesmo já existindo em
-// `Membership`. Não é descuido — é ordem: `usuarioAtual()` (Task 2 deste
-// ciclo) ainda lê esta coluna, e derrubá-la agora regeneraria o client do
-// Prisma sem `papel`, quebrando os 26 lugares que fazem `usuario.papel` antes
-// de existir a tarefa que os conserta. Ver a migração da Task 2 para o DROP e
-// a verificação que o protege.
+// `papel` foi derrubada e RESTAURADA na mesma tarefa (Ciclo 1a, Task 2 parte
+// 2, migração `20260819140000_restaura_user_papel_temporariamente`). O DROP
+// passou na verificação de integridade, mas o `typecheck` do repositório
+// inteiro revelou um terceiro grupo de leitores que nem o plano original nem
+// esta tarefa previram — `src/core/audit/alerta.ts` (produção: destinatários
+// do alerta de rajada destrutiva) e ~20 arquivos de teste/e2e. Corrigi-los é
+// decisão de escopo fora do que esta tarefa estava autorizada a tomar
+// sozinha (o brief manda PARAR e reportar ao achar um terceiro leitor não
+// previsto). `core/users/service.ts` grava nas DUAS colunas (`User.papel` e
+// `Membership.papel`) enquanto este bridge existir — ver comentário lá.
 model User {
   id                 String         @id @default(cuid())
   nome               String

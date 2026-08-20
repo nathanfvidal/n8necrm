@@ -57,7 +57,12 @@ describe("usuarioAtual — fix round 1/5 (CRITICAL): usuário desativado não po
     // papel do vínculo (VENDEDOR) abaixo — se `usuarioAtual()` algum dia
     // voltasse a ler `User.papel` em vez de `Membership.papel`, o teste
     // "retorna o usuário..." pegaria isso (papel devolvido seria ADMIN, não
-    // VENDEDOR), mesmo com a coluna ainda existindo neste ponto da suíte.
+    // VENDEDOR). `User.papel` foi derrubada e RESTAURADA nesta mesma tarefa
+    // — o DROP revelou leitores fora do escopo dela (`core/audit/alerta.ts`
+    // em produção, entre outros) e a coluna voltou como bridge temporário
+    // (`core/users/service.ts` grava nas duas agora); este teste continua
+    // valendo, e com a coluna de volta o "deliberadamente diferente" volta a
+    // ser possível de escrever.
     const ativo = await prisma.user.create({
       data: {
         nome: "Teste Fix1 Ativo",

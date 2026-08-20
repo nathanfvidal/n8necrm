@@ -143,19 +143,26 @@ export async function seed(): Promise<void> {
   const senhaHash = await bcrypt.hash(senhaPlano, 10);
   const atualizarSenhaNaReexecucao = senhaPlanoExplicita !== undefined;
 
+  // `papel` grava nas DUAS colunas (dual-write): `User.papel` foi derrubada e
+  // RESTAURADA nesta mesma tarefa — o DROP provou seguro para os dados, mas
+  // revelou leitores fora do escopo dela (`core/audit/alerta.ts` em produção,
+  // mais ~20 arquivos de teste/e2e). Até esses leitores migrarem para
+  // `Membership`, `User.papel` continua sendo escrito aqui — o literal
+  // também vai para `vincularAEmpresa`, que grava a mesma informação no
+  // `Membership` (a fonte que `core/users/service.ts` lê).
   const admin = await prisma.user.upsert({
     where: { email: "admin@exemplo.com" },
     update: atualizarSenhaNaReexecucao ? { senhaHash } : {},
     create: { nome: "Admin Exemplo", email: "admin@exemplo.com", senhaHash, papel: "ADMIN" },
   });
-  await vincularAEmpresa(admin.id, empresa.id, admin.papel);
+  await vincularAEmpresa(admin.id, empresa.id, "ADMIN");
 
   const vendedor = await prisma.user.upsert({
     where: { email: "vendedor@exemplo.com" },
     update: atualizarSenhaNaReexecucao ? { senhaHash } : {},
     create: { nome: "Vendedor Exemplo", email: "vendedor@exemplo.com", senhaHash, papel: "VENDEDOR" },
   });
-  await vincularAEmpresa(vendedor.id, empresa.id, vendedor.papel);
+  await vincularAEmpresa(vendedor.id, empresa.id, "VENDEDOR");
 
   await semearUsuarioSistemaWhatsapp(empresa.id);
   await semearBotConfig(empresa.id);
@@ -188,8 +195,11 @@ export async function seed(): Promise<void> {
 }
 
 /**
- * Cria (ou confirma) o `Membership` de um usuário com a empresa semeada,
- * carregando o mesmo `papel` que a coluna `User.papel` já declara.
+ * Cria (ou confirma) o `Membership` de um usuário com a empresa semeada, com
+ * o `papel` que o chamador passa. `User` não tem mais coluna `papel` (Ciclo
+ * 1a, Task 2 parte 2 a derrubou) — o vínculo é a ÚNICA fonte do papel a
+ * partir de agora, então quem chama esta função decide o literal, em vez de
+ * reler algo que não existe mais no registro de `User`.
  *
  * `upsert` por `userId_companyId` (a chave de `@@unique([userId, companyId])`)
  * em vez de "existe? não cria de novo": mesma forma que o resto deste arquivo
@@ -266,12 +276,14 @@ async function semearUsuarioSistemaWhatsapp(companyId: string): Promise<void> {
   if (existente) {
     // Já existia (banco semeado antes desta tarefa, por exemplo): ainda
     // assim precisa ter Membership, senão vira o único User sem vínculo —
-    // exatamente o estado que a Task 2 deste ciclo trata como sessão
-    // inválida. Este usuário nunca autentica (ver `ativo: false` abaixo), mas
-    // ficar sem Membership o deixaria fora da invariante "todo User tem pelo
-    // menos um Membership com o papel que `User.papel` declara", que a
-    // migração da Task 2 confere antes de derrubar a coluna.
-    await vincularAEmpresa(existente.id, companyId, existente.papel);
+    // exatamente o estado que `usuarioAtual()` trata como sessão inválida.
+    // Este usuário nunca autentica (ver `ativo: false` abaixo), mas ficar sem
+    // Membership o deixaria fora da invariante que a migração da Task 2
+    // conferiu antes de derrubar `User.papel`. "ADMIN" é literal, não lido de
+    // `existente.papel` — mesmo a coluna tendo sido restaurada (dual-write,
+    // ver comentário acima), este sistema sempre foi ADMIN (docstring da
+    // constante em `sistema.ts`), e não há motivo para reler o que já se sabe.
+    await vincularAEmpresa(existente.id, companyId, "ADMIN");
     return;
   }
 
@@ -288,7 +300,7 @@ async function semearUsuarioSistemaWhatsapp(companyId: string): Promise<void> {
       ativo: false,
     },
   });
-  await vincularAEmpresa(sistema.id, companyId, sistema.papel);
+  await vincularAEmpresa(sistema.id, companyId, "ADMIN");
 }
 
 /**

@@ -136,11 +136,17 @@ describe("prisma/seed.ts", () => {
     () => {
       beforeAll(seed);
 
-      it("semeia o usuário sistema com id estável, ativo: false e papel ADMIN", async () => {
+      it("semeia o usuário sistema com id estável, ativo: false e papel ADMIN no vínculo", async () => {
         const usuario = await prisma.user.findUniqueOrThrow({ where: { id: WHATSAPP_SYSTEM_USER_ID } });
         expect(usuario.ativo).toBe(false);
-        expect(usuario.papel).toBe("ADMIN");
         expect(usuario.email).toBe("whatsapp-bot@sistema.invalid");
+
+        // `papel` não é mais coluna de `User` (derrubada nesta tarefa) — é
+        // `vincularAEmpresa()` quem grava "ADMIN" no `Membership`.
+        const vinculo = await prisma.membership.findFirstOrThrow({
+          where: { userId: WHATSAPP_SYSTEM_USER_ID },
+        });
+        expect(vinculo.papel).toBe("ADMIN");
       });
 
       it("é idempotente: rodar o seed de novo não regrava o usuário sistema (mesmo senhaHash)", async () => {
