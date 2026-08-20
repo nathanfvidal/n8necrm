@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useTransition } from "react";
 import { toast } from "sonner";
 
+import { StatusExecucao } from "@/components/automation/status-execucao";
 import { StatusFluxo } from "@/components/automation/status-fluxo";
 import { ConfirmarDialogo } from "@/components/confirmar-dialogo";
 import { Button } from "@/components/ui/button";
@@ -15,30 +16,34 @@ import { ativarFluxoAction, desativarFluxoAction } from "@/modules/automation/ac
 // marcação para o bundle do cliente e quebraria o build; um import de TIPO
 // não carrega nada em runtime, só a forma.
 import type { FluxoComUltimaExecucao } from "@/modules/automation/queries";
-import type { StatusExecucao } from "@/modules/automation/n8n";
 
 /**
- * Rótulo em português de cada status de execução do n8n.
+ * DTO montado no servidor para ESTA tela (mesmo padrão de `EtapaNaTela` em
+ * `etapas-table.tsx`) — `fluxos/page.tsx` que monta.
  *
- * `unknown` cobre um status novo que a instância passe a devolver — a tela
- * não pode quebrar por causa disso, só mostrar um rótulo genérico.
+ * `ultimaExecucaoRelativa` é o texto de `formatarDuracaoDesde` já pronto,
+ * NÃO uma `Date` crua. Motivo: `FluxosTable` é Client Component (precisa dos
+ * botões Ativar/Desativar), e o React executa o corpo de um Client Component
+ * de novo no navegador na hidratação, depois de já ter rodado uma vez no
+ * servidor para gerar o HTML inicial. Se o cálculo de "há quanto tempo"
+ * dependesse de `new Date()` lido DENTRO deste componente, as duas execuções
+ * poderiam cair em minutos diferentes ("5 min" no servidor, "6 min" na
+ * hidratação) e o React acusaria descompasso de hidratação. A inbox de
+ * conversas (`(painel)/conversas/page.tsx`) não tem esse risco porque é
+ * Server Component puro — roda só uma vez, no servidor, e o texto já sai
+ * pronto no HTML. Aqui a mesma garantia vem de calcular a string ANTES da
+ * fronteira servidor→cliente (em `fluxos/page.tsx`, que é Server Component)
+ * e só passar o resultado — já texto, imutável — como prop.
  */
-const ROTULO_STATUS: Record<StatusExecucao, string> = {
-  success: "Sucesso",
-  error: "Erro",
-  waiting: "Aguardando",
-  running: "Rodando",
-  canceled: "Cancelado",
-  crashed: "Falhou",
-  new: "Novo",
-  unknown: "Desconhecido",
+export type FluxoNaTela = FluxoComUltimaExecucao & {
+  ultimaExecucaoRelativa: string | null;
 };
 
 export function FluxosTable({
   fluxos,
   podeGerenciar,
 }: {
-  fluxos: FluxoComUltimaExecucao[];
+  fluxos: FluxoNaTela[];
   podeGerenciar: boolean;
 }) {
   const [pendente, iniciar] = useTransition();
@@ -62,8 +67,16 @@ export function FluxosTable({
         <TableRow>
           <TableHead>Fluxo</TableHead>
           <TableHead>Estado</TableHead>
-          <TableHead>Nós</TableHead>
-          <TableHead>Atualizado</TableHead>
+          {/* `Nós` e `Atualizado` em `text-muted-foreground`: numa tela de
+              operação as perguntas que importam são "está no ar?" e "a
+              última execução falhou?" — as duas primeiras colunas e a
+              última. Contagem de nós e data de atualização são contexto que
+              alguém consulta depois de já ter reparado num problema, não o
+              que decide a varredura inicial. As colunas continuam aqui —
+              só não competem pela atenção que Fluxo/Estado/Última execução
+              precisam. */}
+          <TableHead className="text-muted-foreground">Nós</TableHead>
+          <TableHead className="text-muted-foreground">Atualizado</TableHead>
           <TableHead>Última execução</TableHead>
           {podeGerenciar ? <TableHead className="text-right">Ações</TableHead> : null}
         </TableRow>
@@ -79,12 +92,24 @@ export function FluxosTable({
             <TableCell>
               <StatusFluxo ativo={fluxo.ativo} />
             </TableCell>
-            <TableCell>{fluxo.nos}</TableCell>
-            <TableCell>{fluxo.atualizadoEm ? formatarDataHoraBR(new Date(fluxo.atualizadoEm)) : "—"}</TableCell>
+            <TableCell className="text-muted-foreground">{fluxo.nos}</TableCell>
+            <TableCell className="text-muted-foreground">
+              {fluxo.atualizadoEm ? formatarDataHoraBR(new Date(fluxo.atualizadoEm)) : "—"}
+            </TableCell>
             <TableCell>
-              {fluxo.ultimaExecucao
-                ? `${ROTULO_STATUS[fluxo.ultimaExecucao.status]} · ${formatarDataHoraBR(new Date(fluxo.ultimaExecucao.iniciadoEm))}`
-                : "—"}
+              {fluxo.ultimaExecucao ? (
+                <span className="flex items-center gap-1.5">
+                  <StatusExecucao status={fluxo.ultimaExecucao.status} />
+                  {/* Tempo relativo, não `formatarDataHoraBR`: quem abre esta
+                      tela quer saber "rodou agora ou parou faz tempo?", e uma
+                      data absoluta obriga a fazer a conta de cabeça. Ver o
+                      comentário de `ultimaExecucaoRelativa` acima — o texto já
+                      chega pronto do servidor, calculado uma vez só. */}
+                  <span className="text-muted-foreground">há {fluxo.ultimaExecucaoRelativa}</span>
+                </span>
+              ) : (
+                "—"
+              )}
             </TableCell>
             {podeGerenciar ? (
               <TableCell className="text-right">

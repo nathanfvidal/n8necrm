@@ -1,9 +1,10 @@
 import { notFound } from "next/navigation";
 
 import { EmptyState } from "@/components/empty-state";
-import { FluxosTable } from "@/components/automation/fluxos-table";
+import { FluxosTable, type FluxoNaTela } from "@/components/automation/fluxos-table";
 import { hasPermission } from "@/core/auth/permissions";
 import { usuarioAtualOuLogin } from "@/core/auth/session";
+import { formatarDuracaoDesde } from "@/lib/date";
 import { exigirModulo } from "@/lib/module-gate";
 import { listarFluxos } from "@/modules/automation/queries";
 
@@ -59,6 +60,17 @@ export default async function FluxosPage() {
     );
   }
 
+  // Tempo relativo calculado AQUI — Server Component, roda uma vez só — e
+  // não dentro de `FluxosTable` (Client Component): ver o comentário de
+  // `ultimaExecucaoRelativa` em `fluxos-table.tsx` para o porquê disso
+  // evitar descompasso de hidratação.
+  const paraTela: FluxoNaTela[] = resultado.fluxos.map((fluxo) => ({
+    ...fluxo,
+    ultimaExecucaoRelativa: fluxo.ultimaExecucao
+      ? formatarDuracaoDesde(new Date(fluxo.ultimaExecucao.iniciadoEm))
+      : null,
+  }));
+
   return (
     <div className="space-y-6">
       <h1 className="text-2xl font-semibold">Fluxos</h1>
@@ -66,7 +78,7 @@ export default async function FluxosPage() {
         <EmptyState title="Nenhum fluxo" description="Esta instância do n8n não tem workflow nenhum." />
       ) : (
         <FluxosTable
-          fluxos={resultado.fluxos}
+          fluxos={paraTela}
           podeGerenciar={hasPermission(usuario.papel, "gerenciar_fluxos")}
         />
       )}

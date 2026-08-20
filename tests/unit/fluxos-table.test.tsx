@@ -15,6 +15,11 @@ import { FluxosTable } from "../../src/components/automation/fluxos-table";
 // ganhou uma coluna "Última execução" e o tipo da prop mudou junto. Um fluxo
 // com `ultimaExecucao: null` (nunca rodou, ou rodou fora da janela das 100
 // execuções recentes) é o caso real mais comum numa instância com 6 workflows.
+// `ultimaExecucaoRelativa` entrou aqui pelo acabamento do Ciclo 4: a coluna
+// "Última execução" passou a mostrar tempo relativo (`formatarDuracaoDesde`)
+// em vez de data absoluta, mas calculado NO SERVIDOR (`fluxos/page.tsx`) e
+// passado como string pronta — ver o comentário sobre hidratação em
+// `fluxos-table.tsx`. O teste simula exatamente o que o servidor entregaria.
 const fluxos = [
   {
     id: "a",
@@ -31,6 +36,7 @@ const fluxos = [
       iniciadoEm: "2026-08-19T21:05:00.000Z",
       terminadoEm: "2026-08-19T21:05:03.000Z",
     },
+    ultimaExecucaoRelativa: "5 min",
   },
   {
     id: "b",
@@ -40,6 +46,7 @@ const fluxos = [
     tags: [],
     atualizadoEm: "2026-08-10T10:00:00.000Z",
     ultimaExecucao: null,
+    ultimaExecucaoRelativa: null,
   },
 ];
 
@@ -89,5 +96,19 @@ describe("FluxosTable", () => {
 
     const linha = screen.getByText("My workflow").closest("tr")!;
     expect(linha.textContent).toMatch(/—/);
+  });
+
+  // Achado do acabamento do Ciclo 4: a coluna "Última execução" usava texto
+  // puro ("Sucesso · 19/08/2026 21:00") em vez do componente de status
+  // compartilhado, e mostrava data absoluta em vez de tempo relativo.
+  it("fluxo com ultima execucao mostra o selo de status em portugues e o tempo relativo, nao a data absoluta", () => {
+    render(<FluxosTable fluxos={fluxos} podeGerenciar={true} />);
+
+    const linha = screen.getByText("Noiva Inteligente").closest("tr")!;
+    expect(linha.textContent).toContain("Sucesso");
+    expect(linha.textContent).toContain("há 5 min");
+    // Nao deveria sobrar data absoluta cru na celula de ultima execucao —
+    // "21/08" (dia da execução, formatarDataHoraBR) nao pode aparecer.
+    expect(linha.textContent).not.toContain("21:05");
   });
 });
