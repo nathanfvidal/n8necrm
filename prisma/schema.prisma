@@ -484,9 +484,11 @@ model BotConfig {
 /// Empresa sem linha usa os padrões do arquivo versionado — é o que resolve o
 /// ovo-e-galinha do layout raiz, que envolve `/login`, onde ainda não existe
 /// sessão e portanto não existe empresa. A leitura que materializa esse
-/// fallback é a Task 2 deste mesmo ciclo (`src/core/config/leitura.ts`); ela
-/// ainda NÃO existe quando este bloco é escrito, então o parágrafo descreve
-/// contrato acordado, não código medido.
+/// fallback é a Task 3 deste mesmo ciclo (`src/core/config/leitura.ts`), em
+/// cima da fusão pura da Task 2 (`src/core/config/schema.ts`, onde
+/// `mesclarConfig` decide campo a campo quem vence); ela ainda NÃO existe
+/// quando este bloco é escrito, então o parágrafo descreve contrato acordado,
+/// não código medido.
 ///
 /// **Colunas TIPADAS e não uma coluna `Json`.** A varredura de escopo recusa
 /// `companyId` divergente em qualquer profundidade de `data`, inclusive dentro
