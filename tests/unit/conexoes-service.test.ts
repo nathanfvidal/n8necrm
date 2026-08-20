@@ -81,6 +81,7 @@ import {
   credencialAtivaUnica,
   ConexaoNaoConfiguradaError,
   ConexaoAmbiguaError,
+  ConexaoDesativadaError,
 } from "../../src/core/conexoes/leitura";
 
 const EMPRESA_A = "cmp_a";
@@ -364,5 +365,50 @@ describe("leitura para o webhook e para o envio", () => {
     await expect(credencialDaConexao(EMPRESA_A, "conn_inexistente")).rejects.toThrow(
       ConexaoNaoConfiguradaError
     );
+  });
+
+  it("conexão INATIVA não serve o ENVIO — desativar cala os dois sentidos", async () => {
+    // O achado da Tarefa 6, corrigido na Tarefa 7: `resolverConexaoPorWebhook`
+    // e `credencialAtivaUnica` filtravam `ativa`, `credencialDaConexao` não.
+    // Consequência medida: uma conversa com `connectionId` preenchido continuava
+    // ENVIANDO por uma conexão que o operador tinha desligado — a entrada calada
+    // (caso acima) e a saída falando. É a família "sessão que sobrevive" que o
+    // `AGENTS.md` deste projeto manda não repetir: o operador vê desligado e o
+    // número continua respondendo cliente.
+    await criarPadrao();
+    const id = String(linhas[0]!.id);
+    await definirAtiva(EMPRESA_A, id, false, AUTOR);
+    await expect(credencialDaConexao(EMPRESA_A, id)).rejects.toThrow(ConexaoDesativadaError);
+  });
+
+  it("desativada e inexistente são erros DIFERENTES — a linha existe, não sumiu", async () => {
+    // Fundir os dois mandaria quem lê o log procurar uma linha apagada que está
+    // lá, ligada a uma conversa, só desligada. Mesmo raciocínio que separa
+    // `ConexaoNaoConfiguradaError` de `ConexaoAmbiguaError`: as duas recusas
+    // mandam quem lê para lugares diferentes (religar × recadastrar).
+    await criarPadrao();
+    const id = String(linhas[0]!.id);
+    await definirAtiva(EMPRESA_A, id, false, AUTOR);
+
+    const desativada = await credencialDaConexao(EMPRESA_A, id).catch((e: unknown) => e);
+    const inexistente = await credencialDaConexao(EMPRESA_A, "conn_inexistente").catch(
+      (e: unknown) => e
+    );
+
+    expect(desativada).toBeInstanceOf(ConexaoDesativadaError);
+    expect(desativada).not.toBeInstanceOf(ConexaoNaoConfiguradaError);
+    expect(inexistente).toBeInstanceOf(ConexaoNaoConfiguradaError);
+    expect(inexistente).not.toBeInstanceOf(ConexaoDesativadaError);
+    // A mensagem tem de dizer o que fazer, e as duas dizem coisas diferentes.
+    expect(String((desativada as Error).message)).toMatch(/desativada|Reative/i);
+  });
+
+  it("a conexão ATIVA continua servindo o envio — a metade que prova que o filtro não calou tudo", async () => {
+    // Sem este caso, um `credencialDaConexao` que recusasse SEMPRE passaria
+    // pelos dois casos acima.
+    await criarPadrao();
+    const cred = await credencialDaConexao(EMPRESA_A, String(linhas[0]!.id));
+    expect(cred.apiKey).toBe(APIKEY);
+    expect(cred.instancia).toBe("inst-1");
   });
 });

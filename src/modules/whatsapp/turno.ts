@@ -27,7 +27,9 @@ type ClienteDaEmpresa = ReturnType<typeof prismaDaEmpresa>;
  *    o `prisma` cru — ou seja, manteria este arquivo na exceção do lint, que é
  *    exatamente o que a conversão veio fechar.
  * 2. Fazer a empresa viajar no job, resolvida por quem TEM origem sã para ela:
- *    `ingerirMensagem` (`ingest.ts`), que a tira de `EVOLUTION_COMPANY_ID`.
+ *    `ingerirMensagem` (`ingest.ts`), que a recebe no contexto montado pela
+ *    rota do webhook a partir da CONEXÃO resolvida pelo token (Ciclo 2a; até
+ *    ali ela saía de `EVOLUTION_COMPANY_ID`, uma constante do deploy).
  *
  * É a 2, e a escolha não é só de conveniência: `claimLease` é a PRIMEIRA
  * operação do turno e é `$queryRaw`, que o escopo não alcança por construção.
@@ -194,7 +196,7 @@ export async function processarTurno(job: TurnoJob): Promise<void> {
       // sempre. E é um alarme falso: o job reagendado correto já está na fila
       // fazendo o trabalho, então "já existe" é exatamente o resultado
       // desejado, não uma falha. Mesmo tratamento que a rota do webhook já dá
-      // a este erro (`api/whatsapp/evolution/[token]/route.ts`).
+      // a este erro (`api/whatsapp/evolution/[companyId]/[token]/route.ts`).
       if (erro instanceof DuplicateMessageError) return;
       throw erro;
     }

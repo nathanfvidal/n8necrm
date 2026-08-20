@@ -1,7 +1,8 @@
 /**
  * IP de origem de uma requisição, para usar como CHAVE de rate limit.
  *
- * Extraído de `src/app/api/whatsapp/evolution/[token]/route.ts`, onde nasceu
+ * Extraído de `src/app/api/whatsapp/evolution/[companyId]/[token]/route.ts`,
+ * onde nasceu
  * (fix round 1/5, achado MENOR do revisor da Fatia 1). Virou módulo
  * compartilhado ao ganhar o segundo chamador (o rate limit de login) — a
  * ordem de precedência abaixo é uma decisão de segurança, e mantê-la em dois

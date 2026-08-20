@@ -26,8 +26,9 @@ export interface TurnoJob {
    * cabeçalho de `modules/whatsapp/turno.ts`.
    *
    * Não é entrada de usuário: quem publica é a rota do webhook, com o valor de
-   * `ingerirMensagem` (`EVOLUTION_COMPANY_ID`), e a rota consumidora valida um
-   * segredo compartilhado antes de chamar `processarTurno`.
+   * `ingerirMensagem` — que desde o Ciclo 2a vem da CONEXÃO resolvida pelo
+   * token do path, não mais de `EVOLUTION_COMPANY_ID` —, e a rota consumidora
+   * valida um segredo compartilhado antes de chamar `processarTurno`.
    */
   companyId: string;
   conversationId: string;

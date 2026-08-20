@@ -38,6 +38,25 @@ export class ConexaoAmbiguaError extends Error {
 }
 
 /**
+ * A linha EXISTE nesta empresa, e está desligada pelo operador (`ativa:
+ * false`).
+ *
+ * Classe separada de `ConexaoNaoConfiguradaError` de propósito, pelo mesmo
+ * raciocínio que separa aquela de `ConexaoAmbiguaError`: quem lê o log precisa
+ * saber que a linha está LÁ e desligada, não que sumiu. Fundir as duas mandaria
+ * alguém procurar uma conexão apagada — e possivelmente recadastrar por cima de
+ * uma que só precisava ser religada em Configurações → Conexões. Dois casos de
+ * teste em `tests/unit/conexoes-service.test.ts` travam a distinção, um por
+ * classe e um afirmando que uma NÃO é a outra.
+ */
+export class ConexaoDesativadaError extends Error {
+  constructor(mensagem: string) {
+    super(mensagem);
+    this.name = "ConexaoDesativadaError";
+  }
+}
+
+/**
  * Uma conexão com a credencial JÁ DECIFRADA. Este tipo nunca atravessa a
  * fronteira servidor→navegador: quem serve a tela é `ConexaoApresentada`
  * (`./service.ts`), que não tem `apiKey` nenhuma.
@@ -129,14 +148,40 @@ export async function resolverConexaoPorWebhook(
   return linha ? decifrarLinha(linha) : null;
 }
 
-/** A conexão de uma conversa que já sabe por onde entrou. */
+/**
+ * A conexão de uma conversa que já sabe por onde entrou.
+ *
+ * ## `ativa` NÃO está no `where`, e está no `select` — os dois de propósito
+ *
+ * Desativar uma conexão cala os DOIS sentidos: `resolverConexaoPorWebhook` já
+ * recusava a entrada com `ativa: true` no filtro, e daqui sai o ENVIO. Até a
+ * Tarefa 7 do Ciclo 2a esta função ignorava a coluna — achado da Tarefa 6 —, e
+ * o efeito medido era a metade pior de "desativado": o operador via a conexão
+ * desligada na tela, a mensagem do cliente parava de entrar, e a resposta
+ * continuava SAINDO por aquele número, porque a conversa tinha `connectionId`
+ * preenchido e vinha por este caminho. Desativar pela metade é pior que não
+ * desativar — é a família "sessão que sobrevive" registrada no `AGENTS.md`
+ * deste projeto, e ela chegou aqui pela mesma porta: uma guarda aplicada num
+ * caminho e esquecida no vizinho.
+ *
+ * O filtro fica FORA do `where` porque `where: { ativa: true }` devolveria
+ * `null` para a linha desligada, e `null` aqui vira "não existe" — exatamente a
+ * confusão que `ConexaoDesativadaError` existe para desfazer. Buscamos a linha,
+ * depois decidimos: ausente → `ConexaoNaoConfiguradaError`; presente e
+ * desligada → `ConexaoDesativadaError`.
+ *
+ * `ativa` sai do objeto antes de `decifrarLinha` porque `CredencialDeConexao`
+ * não a tem: quem chega ao gateway já passou por esta guarda, e carregar a
+ * coluna adiante convidaria um segundo lugar a decidir de novo, com outro
+ * critério.
+ */
 export async function credencialDaConexao(
   companyId: string,
   connectionId: string
 ): Promise<CredencialDeConexao> {
   const linha = await prismaDaEmpresa(companyId).whatsappConnection.findFirst({
     where: { id: connectionId },
-    select: CAMPOS,
+    select: { ...CAMPOS, ativa: true },
   });
 
   if (!linha) {
@@ -146,7 +191,17 @@ export async function credencialDaConexao(
     );
   }
 
-  return decifrarLinha(linha);
+  const { ativa, ...semAtiva } = linha;
+  if (!ativa) {
+    throw new ConexaoDesativadaError(
+      `A conexão ${JSON.stringify(connectionId)} da empresa ${JSON.stringify(companyId)} está ` +
+        `DESATIVADA — a linha existe, não sumiu. Enquanto estiver assim ela não recebe webhook ` +
+        `nem envia mensagem: desativar cala os dois sentidos, de propósito. Reative em ` +
+        `Configurações → Conexões, ou aponte esta conversa para outra conexão.`
+    );
+  }
+
+  return decifrarLinha(semAtiva);
 }
 
 /**

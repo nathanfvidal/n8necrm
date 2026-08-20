@@ -22,7 +22,8 @@ function obterFila(): FilaTurnos {
 
 /**
  * Mesma assinatura de sempre. Os três importadores existentes
- * (`api/whatsapp/evolution/[token]/route.ts`, `turno.ts` em duas linhas) não
+ * (`api/whatsapp/evolution/[companyId]/[token]/route.ts`, `turno.ts` em duas
+ * linhas) não
  * mudam: `"./fila"` e `"@/modules/whatsapp/fila"` resolvem para este arquivo.
  */
 export async function publicarTurno(job: TurnoJob, opcoes?: OpcoesPublicacao): Promise<void> {

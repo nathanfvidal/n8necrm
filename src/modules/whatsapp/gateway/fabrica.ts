@@ -158,6 +158,11 @@ export function gatewayDaCredencial(credencial: CredencialDeConexao): WhatsappGa
  * eliminar. O erro sobe intacto, inclusive o do cofre (chave mestra ausente),
  * que `core/conexoes/leitura.ts` também deixa passar de propósito. Três casos
  * de teste travam isso: ambígua, conexão de outra empresa e nenhuma ativa.
+ *
+ * Desde a Tarefa 7 do Ciclo 2a, `credencialDaConexao` também recusa a conexão
+ * DESATIVADA (`ConexaoDesativadaError`), e ela sobe por aqui pelo mesmo motivo
+ * das outras: cair em `credencialAtivaUnica` depois de uma recusa dessas
+ * desfaria, em silêncio, o que o operador desligou na tela.
  */
 export async function gatewayDaConversa(
   companyId: string,

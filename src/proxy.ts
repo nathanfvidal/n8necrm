@@ -193,13 +193,15 @@ export const config = {
    *   endpoint do Auth.js, mas todas ficariam públicas por engano. Mesmo
    *   raciocínio aplicado a _next/static e _next/image por consistência.
    * - api/whatsapp (Fatia 1 do atendente de WhatsApp): o webhook público da
-   *   Evolution (`/api/whatsapp/evolution/[token]/route.ts`) é chamado pela
+   *   Evolution (`/api/whatsapp/evolution/[companyId]/[token]/route.ts`) é
+   *   chamado pela
    *   própria Evolution, sem sessão de usuário nenhuma — sem esta exceção,
    *   este proxy redirecionaria toda chamada da Evolution para `/login`
    *   (confirmado empiricamente: `/api/whatsapp/evolution/tok123` batia no
    *   matcher ANTES desta exceção existir) e o bot nunca receberia mensagem
-   *   nenhuma. A rota já se autentica sozinha (token no path comparado com
-   *   `timingSafeEqual`, ver o comentário lá) — não depende deste proxy pra
+   *   nenhuma. A rota já se autentica sozinha (token no path resolvido como
+   *   `sha256` contra `WhatsappConnection.webhookTokenHash` desde o Ciclo 2a,
+   *   ver o comentário lá) — não depende deste proxy pra
    *   segurança. **Invariante que este subdiretório carrega**: tudo sob
    *   `/api/whatsapp/*` é público por definição, então toda rota nova
    *   criada ali precisa se autenticar sozinha, e NENHUMA rota que leia

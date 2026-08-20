@@ -9,7 +9,8 @@ import { normalizarTelefoneWhatsapp } from "./telefone";
 
 export interface ResultadoIngestao {
   /**
-   * A empresa dona da conversa — hoje sempre `EVOLUTION_COMPANY_ID`.
+   * A empresa dona da conversa. Desde o Ciclo 2a ela vem da CONEXÃO que
+   * resolveu o webhook, não de uma variável de ambiente do deploy.
    *
    * Devolvido porque o job de turno precisa dele: `turno.ts` alcança o banco só
    * por `prismaDaEmpresa(companyId)`, e a primeira coisa que ele faz é um
@@ -18,6 +19,8 @@ export interface ResultadoIngestao {
    * webhook, e ela só sabe o que este resultado disser.
    */
   companyId: string;
+  /** A conexão por onde a mensagem entrou — é por ela que a resposta sai. */
+  connectionId: string;
   conversationId: string;
   /** `bufferSeq` DEPOIS desta mensagem — o `seq` que o job de fila deve carregar. */
   bufferSeq: number;
@@ -26,42 +29,30 @@ export interface ResultadoIngestao {
 }
 
 /**
- * `Company` dona da conversa criada a partir de um evento de webhook.
+ * O CONTEXTO da ingestão: quem é a empresa e por qual conexão a mensagem
+ * entrou. Os dois vêm da MESMA linha de `WhatsappConnection`, resolvida pela
+ * rota do webhook a partir do token do path.
  *
- * ## Por que uma variável de ambiente, e não `Company.findFirst()`
+ * ## O que morreu aqui, e por quê
  *
- * Aqui não existe sessão, não existe registro anterior, e o payload da
- * Evolution não carrega sinal nenhum de empresa — só `instance`, que
- * identifica a INSTÂNCIA Evolution, não o tenant do CRM. `findFirst()`
- * "funcionaria" hoje (só existe uma Company) e viraria vazamento silencioso
- * no dia em que uma segunda empresa for cadastrada: toda conversa nova de
- * QUALQUER instância passaria a ser atribuída à empresa mais antiga do
- * banco, sem erro nenhum avisando.
+ * Até o Ciclo 2a a empresa saía de `EVOLUTION_COMPANY_ID` — uma constante do
+ * DEPLOY. Ela existia porque o payload da Evolution não carrega sinal nenhum
+ * de empresa, e o comentário dela dizia, textualmente, "no Ciclo 2 cada
+ * conexão da Evolution vira linha de tabela com `companyId` próprio, e o
+ * webhook passa a resolver a empresa pela CONEXÃO". É o que aconteceu.
  *
- * A suposição de tenant único já existe neste deploy, só estava implícita:
- * `EVOLUTION_INSTANCE` (.env) é uma única instância Evolution, e o gateway
- * recusa todo webhook cujo campo `instance` não bata com ela
- * (`gateway/evolution.ts`, `verificarOrigem`). `EVOLUTION_COMPANY_ID` só
- * nomeia essa mesma suposição em vez de deixá-la agachada atrás de um
- * `findFirst`.
+ * O ganho não é estético: com a variável, duas instâncias apontando para o
+ * mesmo deploy escreviam as duas na mesma empresa, sem erro nenhum. Era ⚠️ R5
+ * da auditoria do Ciclo 1a — "segunda fonte de verdade sobre a conversa".
  *
- * ## Ponte, não destino
- *
- * No Ciclo 2 cada conexão da Evolution vira linha de tabela com `companyId`
- * próprio, e o webhook passa a resolver a empresa pela CONEXÃO (ex.: pelo
- * `instance` do payload, casado contra essa tabela) em vez de uma variável
- * de ambiente única para o deploy inteiro. Esta função — e a variável que
- * ela lê — somem nessa migração; ver Ciclo 2 / tenancy de conexões
- * Evolution.
+ * Os dois campos viajam como PARÂMETRO explícito, nunca por `AsyncLocalStorage`
+ * ou estado de módulo: este arquivo é chamado do webhook, fora do ciclo de
+ * request, que é exatamente onde estado implícito não é preenchido e falha
+ * calado. Parâmetro falha no `typecheck`, que é onde a gente quer que falhe.
  */
-function obterEvolutionCompanyId(): string {
-  const valor = process.env.EVOLUTION_COMPANY_ID;
-  if (!valor) {
-    throw new Error(
-      "EVOLUTION_COMPANY_ID ausente — defina no .env (id da Company dona da única instância Evolution deste deploy; ver comentário em src/modules/whatsapp/ingest.ts)"
-    );
-  }
-  return valor;
+export interface ContextoDeIngestao {
+  companyId: string;
+  connectionId: string;
 }
 
 /**
@@ -88,13 +79,11 @@ function obterEvolutionCompanyId(): string {
  * 500 pra Evolution (que reagiria fazendo... mais retry, agravando o
  * problema).
  */
-export async function ingerirMensagem(evento: EventoWhatsapp): Promise<ResultadoIngestao> {
-  // Lida dentro da função, não em escopo de módulo — o mesmo raciocínio de
-  // `gateway/index.ts` (`obterGateway`): validar no `import` deste arquivo
-  // faria `next build` avaliar a variável ao coletar a configuração de TODA
-  // rota alcançável, derrubando o build inteiro sem `EVOLUTION_COMPANY_ID`
-  // mesmo em telas que nada têm a ver com WhatsApp.
-  const companyId = obterEvolutionCompanyId();
+export async function ingerirMensagem(
+  evento: EventoWhatsapp,
+  contexto: ContextoDeIngestao
+): Promise<ResultadoIngestao> {
+  const { companyId, connectionId } = contexto;
   const db = prismaDaEmpresa(companyId);
 
   try {
@@ -121,12 +110,17 @@ export async function ingerirMensagem(evento: EventoWhatsapp): Promise<Resultado
       //
       // O `findFirst` escopado NÃO encontra a conversa de outra empresa com o
       // mesmo `waId` — e é justamente por isso que ele tentaria criar uma
-      // segunda, batendo no `@unique` global. Com duas instâncias Evolution,
-      // o mesmo número atendido por duas empresas é um estado que este schema
-      // ainda não expressa. É a mesma família de `Contact.telefone` e
-      // `PipelineStage.ordem`, registrada à parte, e a ponte de
-      // `EVOLUTION_COMPANY_ID` (uma instância por deploy) é o que impede o caso
-      // de acontecer hoje. Não é este ciclo que a resolve.
+      // segunda, batendo no `@unique` global. É a mesma família de
+      // `Contact.telefone` e `PipelineStage.ordem`, registrada à parte (⚠️ R2
+      // da auditoria do Ciclo 1a).
+      //
+      // O QUE MUDOU NO CICLO 2a: até aqui, `EVOLUTION_COMPANY_ID` (uma
+      // instância por deploy) tornava a segunda empresa INALCANÇÁVEL, e o
+      // defeito era teórico. Agora duas empresas podem ter conexões, e o mesmo
+      // número atendido pelas duas colide em `P2002` → 500 → a Evolution
+      // reentrega para sempre. A dívida é a mesma; o ALCANCE dela cresceu. Não
+      // é este ciclo que a resolve (decisão do dono), e o sintoma está escrito
+      // aqui para ninguém gastar um dia diagnosticando.
       const existente = await tx.conversation.findFirst({ where: { waId: evento.waId } });
 
       // `nomeExibicao` é o único campo que faz sentido atualizar numa
@@ -147,6 +141,7 @@ export async function ingerirMensagem(evento: EventoWhatsapp): Promise<Resultado
         conversation = await tx.conversation.create({
           data: {
             companyId,
+            connectionId,
             waId: evento.waId,
             telefone: normalizado.ok ? normalizado.telefone : null,
             nomeExibicao: evento.nomeExibicao,
@@ -190,7 +185,7 @@ export async function ingerirMensagem(evento: EventoWhatsapp): Promise<Resultado
         throw new Error(`Falha ao incrementar bufferSeq da Conversation ${conversation.id}`);
       }
 
-      return { companyId, conversationId: conversation.id, bufferSeq, duplicada: false };
+      return { companyId, connectionId, conversationId: conversation.id, bufferSeq, duplicada: false };
     });
   } catch (erro) {
     if (erro instanceof Prisma.PrismaClientKnownRequestError && erro.code === "P2002") {
@@ -214,6 +209,7 @@ export async function ingerirMensagem(evento: EventoWhatsapp): Promise<Resultado
         });
         return {
           companyId,
+          connectionId,
           conversationId: conversation.id,
           bufferSeq: conversation.bufferSeq,
           duplicada: true,
