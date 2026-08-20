@@ -4,6 +4,9 @@ const prismaMock = vi.hoisted(() => ({
   task: { findUnique: vi.fn(), create: vi.fn(), update: vi.fn() },
   lead: { findUnique: vi.fn() },
   contact: { findUnique: vi.fn() },
+  // `criarTask` resolve `Task.companyId` (NOT NULL desde a Task 1 do Ciclo
+  // 1a) via `companyIdDoUsuario(responsavelId)`, que consulta `Membership`.
+  membership: { findFirstOrThrow: vi.fn() },
 }));
 
 vi.mock("server-only", () => ({}));
@@ -29,6 +32,7 @@ beforeEach(() => {
   prismaMock.task.update.mockImplementation(({ data }) => ({ ...TASK, ...data }));
   prismaMock.lead.findUnique.mockResolvedValue({ id: "lead-1" });
   prismaMock.contact.findUnique.mockResolvedValue({ id: "contato-1", nome: "Fernanda" });
+  prismaMock.membership.findFirstOrThrow.mockResolvedValue({ companyId: "empresa-1" });
 });
 
 describe("criarTask com contato", () => {

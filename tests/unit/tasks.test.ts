@@ -165,6 +165,20 @@ describe("tarefas", () => {
           ativo: false,
         },
       });
+      // `criarTask` resolve `Task.companyId` via `companyIdDoUsuario`, que
+      // consulta `Membership` — sem vínculo, `findFirstOrThrow` lança antes
+      // mesmo de chegar na checagem de posse que este teste cobre (mesmo
+      // fixture faltando em `alerta-atividade.test.ts`, já corrigido lá).
+      // `companyId` vem do mesmo vínculo de `usuarioId` (o admin do
+      // `beforeAll`): a empresa em si é irrelevante para este teste, só
+      // precisa existir para `companyIdDoUsuario` não lançar.
+      const { companyId } = await prisma.membership.findFirstOrThrow({
+        where: { userId: usuarioId },
+        select: { companyId: true },
+      });
+      await prisma.membership.create({
+        data: { userId: usuarioDesativado.id, companyId, papel: "VENDEDOR" },
+      });
 
       try {
         const task = await criarTask({

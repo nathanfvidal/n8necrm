@@ -10,9 +10,19 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("server-only", () => ({}));
 
+// `gravarLinhaDeAuditoria` resolve a empresa via `companyIdDoUsuario`
+// (Ciclo 1a, Task 1: `AuditLog.companyId` é NOT NULL) antes de gravar — o
+// mock do client precisa responder a `membership.findFirstOrThrow`, senão a
+// chamada quebra antes mesmo de chegar em `auditLog.create`.
 const auditLogCreateMock = vi.fn();
+const membershipFindFirstOrThrowMock = vi.fn();
 vi.mock("@/lib/prisma", () => ({
-  prisma: { auditLog: { create: (...args: unknown[]) => auditLogCreateMock(...args) } },
+  prisma: {
+    auditLog: { create: (...args: unknown[]) => auditLogCreateMock(...args) },
+    membership: {
+      findFirstOrThrow: (...args: unknown[]) => membershipFindFirstOrThrowMock(...args),
+    },
+  },
 }));
 
 const avaliarMock = vi.fn();
@@ -24,6 +34,7 @@ const { registrarAuditoria } = await import("../../src/core/audit/log");
 
 beforeEach(() => {
   auditLogCreateMock.mockReset().mockResolvedValue(undefined);
+  membershipFindFirstOrThrowMock.mockReset().mockResolvedValue({ companyId: "empresa-1" });
   avaliarMock.mockReset().mockResolvedValue(undefined);
 });
 

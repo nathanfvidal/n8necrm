@@ -41,6 +41,58 @@ const PERDOADAS: Record<string, string> = {
     "20260813210000_contato_atualizadoem_com_default, que acrescentou o DEFAULT. " +
     "Fica na lista, e não some do histórico, porque a janela de quebra existiu " +
     "de verdade — apagar o registro seria fingir que não.",
+
+  // Ciclo 1a, Task 2: restaura "User"."papel" (ADD COLUMN nullable -> UPDATE
+  // a partir de Membership -> SET NOT NULL, sem DEFAULT — o mesmo padrão do
+  // incidente que esta regra existe para pegar). Isenção deliberada, não um
+  // afrouxamento da regra:
+  //
+  // - POR QUE É SEGURO AQUI: este projeto não tem deploy nenhum publicado
+  //   (ver docs/superpowers/plans do ciclo). A janela que o incidente
+  //   descreve — código ANTIGO rodando contra schema NOVO, inserindo sem a
+  //   coluna que acabou de virar NOT NULL — não existe neste repositório,
+  //   porque migração e código sobem juntos (mesmo commit, mesmo deploy).
+  //   Sem essa janela, não há INSERT concorrente para falhar com 23502.
+  //
+  // - POR QUE NÃO RESOLVEMOS COM DEFAULT (a correção que a regra pede): um
+  //   DEFAULT em "papel" sobreviveria à migração e passaria a atribuir, em
+  //   silêncio, um papel de autorização a todo INSERT em "User" que não
+  //   informasse a coluna explicitamente — de um `Role` inventado (que valor
+  //   seria "seguro" por padrão? nenhum: VENDEDOR sub-provisiona quem devia
+  //   ser ADMIN, ADMIN super-provisiona o inverso). `User.papel` é
+  //   exatamente a coluna que `hasPermission` lê — um DEFAULT aqui é menos
+  //   óbvio que o de `companyId`, mas do mesmo gênero: atribuição silenciosa
+  //   do lado errado de um controle de acesso. Pior ainda por esta migração
+  //   ser NOMEADAMENTE temporária (ver o comentário do próprio arquivo): o
+  //   plano é que uma tarefa futura corrija os leitores restantes
+  //   (`core/audit/alerta.ts` e os testes listados) e DERRUBE "papel" de
+  //   novo — um DEFAULT que sobrevivesse ficaria pendurado até lá, mascarando
+  //   qualquer `User.create` que uma tarefa futura esquecesse de popular.
+  //
+  // - QUANDO ISTO DEIXA DE VALER: no dia em que o CRM for publicado, e
+  //   também no dia em que a tarefa dedicada derrubar "User"."papel" de novo
+  //   (o objetivo declarado desta migração ponte) — qualquer NOT NULL futuro
+  //   nesta ou em outras tabelas vivas volta a precisar da regra sem
+  //   isenção. A isenção é desta migração específica, não da regra.
+  //
+  // Alternativa considerada — DEFAULT acrescentado e DERRUBADO na mesma
+  // migração, depois do backfill (o mesmo padrão que
+  // 20260813210000_contato_atualizadoem_com_default usa, mas com um DROP
+  // DEFAULT extra ao final) — reportada mas NÃO implementada aqui: exige
+  // editar o SQL de uma migração já aplicada no banco de desenvolvimento
+  // (checksum já gravado em `_prisma_migrations`), o que está fora do que
+  // esta tarefa está autorizada a fazer sem aprovação explícita (ver
+  // relatório desta tarefa, seção do item 1).
+  "20260819140000_restaura_user_papel_temporariamente":
+    "Restaura 'User'.'papel' (bridge temporária, Ciclo 1a Task 2) via " +
+    "ADD COLUMN nullable -> UPDATE a partir de Membership -> SET NOT NULL, " +
+    "sem DEFAULT. Sem janela de deploy neste projeto (migração e código " +
+    "sobem juntos) para o 23502 que a regra evita, e um DEFAULT aqui " +
+    "atribuiria papel de autorização em silêncio a qualquer INSERT futuro " +
+    "que esquecesse a coluna — pior que a janela que estaria evitando. " +
+    "Isenção desta migração, não da regra: volta a valer no dia do deploy " +
+    "publicado, e a tarefa que derrubar 'papel' de novo (o objetivo desta " +
+    "ponte) não herda a isenção.",
 };
 
 /** Comentário de SQL fala de `NOT NULL` em prosa; a regra vale para código. */
