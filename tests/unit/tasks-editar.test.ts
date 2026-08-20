@@ -2,7 +2,11 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const prismaMock = vi.hoisted(() => ({
   task: { findUnique: vi.fn(), update: vi.fn(), delete: vi.fn() },
-  lead: { findUnique: vi.fn() },
+  // `findFirst`, e nao `findUnique`: a checagem de `leadId` passou a exigir
+  // que o lead seja da empresa da tarefa (`exigirLeadDaEmpresa`,
+  // `tasks/service.ts`), e `companyId` nao e chave unica em `Lead` — nao ha
+  // `findUnique` que o aceite no `where`.
+  lead: { findFirst: vi.fn() },
 }));
 const auditoriaMock = vi.hoisted(() => vi.fn());
 
@@ -14,8 +18,14 @@ vi.mock("@/core/audit/log", () => ({ registrarAuditoria: auditoriaMock }));
 
 import { editarTask, excluirTask } from "../../src/core/tasks/service";
 
+// `companyId` NAO e enfeite: `editarTask` o usa como escopo da checagem de
+// `leadId`. Um mock sem ele mandaria `companyId: undefined` para o `where`, o
+// Prisma omitiria o filtro, e o caso abaixo ("confere a EMPRESA") ficaria
+// verde sobre um servico que nao confere empresa nenhuma — o mesmo defeito de
+// mock que `export-leads.test.ts` tinha (relatorio da Task 4, § 12).
 const TASK = {
   id: "task-1",
+  companyId: "empresa-1",
   responsavelId: "user-1",
   titulo: "original",
   leadId: null,
@@ -27,7 +37,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   prismaMock.task.findUnique.mockResolvedValue(TASK);
   prismaMock.task.update.mockImplementation(({ data }) => ({ ...TASK, ...data }));
-  prismaMock.lead.findUnique.mockResolvedValue({ id: "lead-1" });
+  prismaMock.lead.findFirst.mockResolvedValue({ id: "lead-1" });
 });
 
 describe("editarTask", () => {
@@ -71,7 +81,7 @@ describe("editarTask", () => {
   });
 
   it("recusa lead inexistente com erro de dominio", async () => {
-    prismaMock.lead.findUnique.mockResolvedValue(null);
+    prismaMock.lead.findFirst.mockResolvedValue(null);
     await expect(
       editarTask({
         taskId: "task-1",
@@ -81,6 +91,24 @@ describe("editarTask", () => {
         autorId: "user-1",
       })
     ).rejects.toThrow(/Lead não encontrado/);
+  });
+
+  // O que um banco falso PODE provar: que o filtro de empresa chega ao
+  // `where`, e que ele vem da PRÓPRIA tarefa. Que o isolamento funciona de
+  // verdade é outra pergunta, e a resposta mora em
+  // `tests/unit/task-isolamento.test.ts` — banco real, duas empresas.
+  it("consulta o lead com o companyId da PRÓPRIA tarefa, nunca só pelo id", async () => {
+    await editarTask({
+      taskId: "task-1",
+      titulo: "x",
+      vencimento: VENCIMENTO,
+      leadId: "lead-1",
+      autorId: "user-1",
+    });
+
+    expect(prismaMock.lead.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: "lead-1", companyId: "empresa-1" } })
+    );
   });
 
   it("aceita null em leadId para desvincular", async () => {

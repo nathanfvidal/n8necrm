@@ -54,21 +54,130 @@ const PRISMA_CRU = {
 // próprio comentário que o lint "garante que ninguém alcance o `prisma` cru".
 // Enquanto as páginas do painel ficavam de fora, aquela frase era falsa — e um
 // contador que não conta tudo mente sobre quanto falta.
+//
+// ─────────────────────────────────────────────────────────────────────────
+// OS DEFEITOS CONHECIDOS, e por que eles estão anotados aqui
+// ─────────────────────────────────────────────────────────────────────────
+//
+// Até 2026-08-20 esta fila ordenava por uma coisa só: "importa o prisma cru".
+// Isso a fazia parecer uma lista de dívida uniforme — trabalho mecânico de
+// trocar um import — quando ela é, na verdade, uma lista de VAZAMENTOS VIVOS
+// de graus muito diferentes. Quem pegasse `tasks/` seguindo a ordem alfabética
+// não saberia que havia um vazamento esperando lá dentro; foi exatamente o que
+// aconteceu, e o vazamento (`criarTask`/`editarTask` aceitando `leadId` de
+// outra empresa) só apareceu porque uma revisão foi ler o arquivo por outro
+// motivo. Um contador que só conta arquivos esconde o que interessa.
+//
+// A varredura de 2026-08-20 (`.superpowers/sdd/reparo-tasks-tenancy.md`, § 5)
+// leu os 18 arquivos restantes um a um e catalogou **32 defeitos de tenancy
+// vivos** — 18 de severidade ALTA, 9 MÉDIA, 5 BAIXA —, mais 1 no arquivo que
+// aquela tarefa corrigiu (`tasks/service.ts`, o `contactId`), que fica
+// registrado abaixo por ser da mesma família e continuar aberto.
+//
+// **A família é sempre a mesma:** valida que o registro EXISTE, nunca que ele
+// é da MESMA EMPRESA. Já apareceu 4 vezes neste ciclo (3744e64, 63cecd2,
+// 6dfb325, e agora `tasks/service.ts`), e as anotações abaixo dizem onde ela
+// ainda mora. Variantes irmãs: `findMany`/`count`/`groupBy`/`updateMany` sem
+// `where: { companyId }`, e busca por campo `@unique` GLOBAL
+// (`Contact.telefone`, `Conversation.waId`, `PipelineStage.ordem`).
+//
+// **A ordem de conversão que estes números sugerem** não é a alfabética:
+//
+//   1. `src/core/users/service.ts`   — 1 defeito, e é o pior de todos:
+//      `redefinirSenha` acha o alvo por `user.findUnique({ id })` sem
+//      `Membership` nenhum. Um ADMIN da empresa A troca a senha de QUALQUER
+//      conta do banco. Não é leitura de dado alheio, é tomada de conta.
+//   2. `src/core/pipeline/` (13)     — nenhuma assinatura de `service.ts` nem
+//      de `stages.ts` recebe `companyId`. É o módulo sem noção de empresa.
+//   3. `src/modules/whatsapp/queries.ts` + `agente.ts` (6) — a inbox inteira e
+//      todas as mutações de conversa aceitam `conversationId` cru do cliente.
+//   4. `src/core/contacts/` (4)      — agenda global e `findUnique` por id de
+//      rota.
+//   5. `src/app/(painel)/page.tsx` (1) — o `auditLog` sem `where`.
+//   6. o resto (BAIXA), onde o escopo já vem por FK ou por dono.
+//
+// **Estes defeitos NÃO foram corrigidos**, de propósito: a decisão de quantos
+// e em que ordem é do dono do projeto, e a tarefa que os catalogou tinha
+// escopo de um. Corrigir 32 num commit seria a mesma pressa que os criou.
+//
+// Cada linha abaixo carrega a contagem do arquivo e o pior caso dele. Quem
+// converter um arquivo APAGA a anotação junto com a linha — anotação que
+// sobrevive ao defeito vira mentira, e mentira em comentário é pior que
+// silêncio.
 const VIOLADORES_TEMPORARIOS_CORE = [
+  // 1 defeito (BAIXA): `avaliarAtividadeSuspeita` conta `AuditLog` só por
+  // `userId`, sem `companyId`. O destinatário do alerta JÁ foi corrigido
+  // (3744e64) — o que sobra é a contagem, que só distorce se a mesma pessoa
+  // tiver vínculo em duas empresas.
   "src/core/audit/alerta.ts",
+  // 1 defeito (MÉDIA): `companyId` do registro vem do primeiro `Membership` do
+  // AUTOR, não da empresa da entidade auditada. Divergem no dia em que alguém
+  // agir sobre entidade de uma empresa tendo vínculo em duas.
   "src/core/audit/log.ts",
+  // 0 defeitos. Está na fila só pelo import: `user.findUnique({ email })` é
+  // login, `User` não tem `companyId` e `email` é `@unique` global por
+  // decisão registrada no schema. Converter este arquivo é trocar o import,
+  // nada mais.
   "src/core/auth/credenciais.ts",
+  // 2 defeitos, os DOIS ALTA: `listarContatos` faz `findMany` sem
+  // `where: { companyId }` (a agenda é global), e `buscarContatoComHistorico`
+  // faz `findUnique` pelo id que vem da rota `/contatos/[id]`, sem conferir
+  // empresa — e daí desce para `listarConversasDoContato`
+  // (`whatsapp/queries.ts`), que confia no `contactId` recebido.
   "src/core/contacts/queries.ts",
+  // 2 defeitos: `atualizarContato` (ALTA) valida `dados.id` da Server Action
+  // só por existência — a família de sempre; e `erroDeTelefoneOcupado`
+  // (MÉDIA) busca por `telefone`, que é `@unique` GLOBAL, e devolve na
+  // mensagem de erro o NOME do dono — que pode ser de outra empresa.
   "src/core/contacts/service.ts",
   // `src/core/leads/*` SAIU desta lista na Task 4 do Ciclo 1a — os quatro
   // arquivos (`dedupe`, `notes`, `queries`, `service`) passaram a alcançar o
   // banco só por `prismaDaEmpresa`. O lint passar com eles fora daqui é a
   // prova de que o serviço não alcança mais o `prisma` cru; a prova de que o
   // escopo FUNCIONA é outra, e mora em `tests/unit/lead-isolamento.test.ts`.
+  // `src/core/leads/*` SAIU desta lista na Task 4 do Ciclo 1a — os quatro
+  // arquivos (`dedupe`, `notes`, `queries`, `service`) passaram a alcançar o
+  // banco só por `prismaDaEmpresa`. O lint passar com eles fora daqui é a
+  // prova de que o serviço não alcança mais o `prisma` cru; a prova de que o
+  // escopo FUNCIONA é outra, e mora em `tests/unit/lead-isolamento.test.ts`.
+  //
+  // 1 defeito (BAIXA): `listarNotificacoesNaoLidas` filtra só por `userId`,
+  // sem `companyId` — escopo por dono, que é mais forte, mas mistura empresas
+  // para quem tiver dois vínculos. O ponto que ERA grave aqui
+  // (`notificarNovoLead` gravando `companyId` do lead com `userId` de outra
+  // empresa) fechou por consequência do 6dfb325, e a invariante está escrita
+  // no próprio `create` — inclusive QUEM a garante e ONDE.
   "src/core/notifications/dispatch.ts",
+  // **11 defeitos, o pior arquivo da fila** — 6 ALTA. Nenhuma função de
+  // `pipeline/` recebe `companyId` em assinatura nenhuma, então não é
+  // conversão, é redesenho de interface. Os que doem mais:
+  // `definirEtapaDeFechamento` faz `updateMany({ where: { ehGanho: true } })`
+  // sem empresa (desliga a etapa de ganho de TODAS as empresas de uma vez);
+  // `excluirEtapa` valida o `destinoId` contra o funil global e move leads
+  // para etapa de outra empresa; `editarEtapa`/`moverNaOrdem`/`excluirEtapa`
+  // validam `input.etapaId` só por existência (a família de sempre); e o
+  // `SELECT FOR UPDATE` de `travarEstruturaDoFunil` trava a tabela inteira,
+  // serializando empresas que não têm nada a ver uma com a outra.
   "src/core/pipeline/service.ts",
+  // 2 defeitos: `listarEtapas` (ALTA) faz `findMany` sem `companyId` — é ela
+  // que alimenta o funil de `/`, `/etapas` e o kanban, e é por ela que a
+  // última página da fila continua vazando mesmo depois do `auditLog`; e
+  // `contarLeadsQueSeguramEtapa` (MÉDIA) faz `groupBy` em `Lead` sem empresa.
   "src/core/pipeline/stages.ts",
+  // 2 defeitos, os dois BAIXA: `listarMinhasTasks` filtra por `responsavelId`
+  // e `listarTasksPendentesDoLead` por `leadId` — escopo por dono e por FK,
+  // que seguram hoje. `listarTasksPendentesDoLead` deixa de segurar no dia em
+  // que o `leadId` a montante não for validado; com o reparo de 2026-08-20 em
+  // `tasks/service.ts`, ele é.
   "src/core/tasks/queries.ts",
+  // 1 defeito ABERTO (ALTA): `exigirContatoExistente` valida `contactId` — que
+  // vem da Server Action `criarMinhaTaskAction`/`editarTaskAction` — só por
+  // EXISTÊNCIA. É a mesma família do vazamento de `leadId` fechado em
+  // 2026-08-20 (`exigirLeadDaEmpresa`), no mesmo arquivo e nas mesmas duas
+  // funções, e ficou de fora daquele commit de propósito: o dono do projeto
+  // pediu a contagem completa antes de decidir quantos corrigir. A cura é a
+  // mesma linha — `companyId` no `where` —, com a empresa vindo de onde
+  // `exigirLeadDaEmpresa` já a pega.
   "src/core/tasks/service.ts",
   // `users/empresa.ts` está aqui, e NÃO na exceção permanente, de propósito.
   // Ele resolve `companyIdDoUsuario(usuarioId)` lendo `Membership`, o que o
@@ -76,16 +185,58 @@ const VIOLADORES_TEMPORARIOS_CORE = [
   // documenta como PONTE que desaparece quando os chamadores passarem
   // `UsuarioAtivo.companyId` explícito. Exceção permanente sobreviveria ao
   // arquivo e viraria mentira no dia em que ele fosse apagado.
+  //
+  // Sem defeito próprio, mas é o MULTIPLICADOR de dois deles: o
+  // `findFirstOrThrow` sobre `Membership` pega um vínculo ARBITRÁRIO quando a
+  // pessoa tem mais de um, e é dele que `audit/log.ts` e `audit/alerta.ts`
+  // tiram a empresa. `criarUsuario` já sabe criar `Membership`, então duas
+  // empresas com a mesma pessoa é estado expressável hoje — só nenhum caminho
+  // de UI o produz ainda.
   "src/core/users/empresa.ts",
+  // 0 defeitos. `listarUsuarios`/`buscarUsuario` já partem de `Membership` com
+  // `companyId` obrigatório na assinatura — foi este arquivo que consertou o
+  // `<select>` de responsável na Task 4. Converter é trocar o import.
   "src/core/users/queries.ts",
+  // **1 defeito, e é o mais grave da fila inteira (ALTA):** `redefinirSenha`
+  // acha o alvo com `user.findUnique({ where: { id: entrada.id } })` e nada
+  // mais — sem `Membership`, sem `companyId`. Um ADMIN da empresa A redefine a
+  // senha de QUALQUER conta do banco, inclusive o ADMIN da empresa B, e
+  // depois entra com ela. Não é leitura de dado alheio, é tomada de conta, e
+  // por isso encabeça a ordem sugerida acima apesar de ser um item só.
+  // As outras funções do arquivo (`atualizarUsuario`, `definirAtivo`,
+  // `garantirQueSobraAdmin`) JÁ recebem `companyId` do autor e recusam quem
+  // não tem vínculo naquela empresa — o que torna a omissão em
+  // `redefinirSenha` mais fácil de fechar, e mais difícil de justificar.
   "src/core/users/service.ts",
 ];
 
 const VIOLADORES_TEMPORARIOS_MODULES = [
+  // 3 defeitos, todos ALTA: `pausarIa` (`updateMany where: { id }`),
+  // `religarIa` (`update where: { id }`) e `responderComoHumano`
+  // (`findUniqueOrThrow` por id) recebem `conversationId` cru da Server Action
+  // e nunca conferem empresa. `responderComoHumano` é o pior: ele ENVIA uma
+  // mensagem de WhatsApp pela instância Evolution a partir de uma conversa que
+  // pode ser de outro cliente.
   "src/modules/whatsapp/agente.ts",
+  // 1 defeito (MÉDIA): o `upsert` casa por `waId`, que é `@unique` GLOBAL em
+  // `Conversation` — variante-irmã do `Contact.telefone`. Só se alcança com
+  // duas instâncias Evolution, o que a ponte de `obterEvolutionCompanyId()`
+  // (env, deliberada até o Ciclo 2) ainda não permite.
   "src/modules/whatsapp/ingest.ts",
+  // 1 defeito (MÉDIA): `limparAguardandoHumano` faz `updateMany` por id sem
+  // empresa. O fan-out do aviso, que era o ponto grave, fechou no 63cecd2.
   "src/modules/whatsapp/notificacoes.ts",
+  // 3 defeitos, 2 ALTA: `listarConversas` faz `findMany` sem `companyId` — a
+  // inbox é global —, e `buscarConversaComMensagens` faz `findUnique` pelo id
+  // da rota e devolve a thread INTEIRA de qualquer empresa. O terceiro
+  // (`listarConversasDoContato`, BAIXA) só vaza pela cadeia que vem de
+  // `contacts/queries.ts:150`, que não valida o contato.
   "src/modules/whatsapp/queries.ts",
+  // 0 defeitos. Toda consulta parte de um `conversationId` nascido dentro do
+  // servidor (`ingest.ts` → fila), nunca de entrada de usuário, e o
+  // `companyId` de escrita sai sempre da `Conversation` já carregada.
+  // Converter é trocar o import — e é o candidato mais seguro da fila para
+  // quem quiser abrir a conversão sem risco.
   "src/modules/whatsapp/turno.ts",
 ];
 
@@ -103,11 +254,24 @@ const VIOLADORES_TEMPORARIOS_MODULES = [
 //   outro cliente. Hoje chama `listarUsuarios(companyId)`, que parte de
 //   `Membership`.
 //
-// A que sobra é a mais exposta das três, e continua sendo a primeira da fila:
+// A que sobra é a mais exposta das três, e continua sendo o item 1 da fila:
 //
 // 1. `(painel)/page.tsx` — `prisma.auditLog.findMany({ take, orderBy })`, SEM
 //    `where` NENHUM. `AuditLog` é modelo de tenant, e a home do painel mostra
 //    hoje os últimos registros de QUALQUER empresa.
+//
+// Confirmado em 2026-08-20 com
+// `grep -rln "lib/prisma" src/app --include=*.ts --include=*.tsx`: **é o único
+// arquivo de `src/app/**` que ainda alcança o banco direto**, e portanto a
+// última leitura cross-tenant escrita DENTRO de uma página.
+//
+// O que essa frase NÃO quer dizer, e vale escrever antes que alguém a leia
+// como quer: esta página continua vazando por OUTRO caminho depois que o
+// `auditLog` for corrigido. Ela chama `listarEtapas()`
+// (`core/pipeline/stages.ts:14`), que faz `findMany` em `PipelineStage` sem
+// `companyId` nenhum. "Última leitura cross-tenant da PÁGINA" e "última
+// leitura cross-tenant que a página produz" são coisas diferentes, e é a
+// segunda que interessa a quem usa o sistema.
 //
 // O `\\[id\\]` que estava na linha do detalhe de lead NÃO era enfeite, e o
 // registro fica aqui porque a próxima rota dinâmica a entrar nesta lista vai

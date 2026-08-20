@@ -27,6 +27,74 @@ async function exigirContatoExistente(contactId: string): Promise<void> {
 }
 
 /**
+ * Confere que o lead existe **E é da empresa da tarefa** antes de gravar o
+ * vínculo.
+ *
+ * ## O vazamento que criou esta função
+ *
+ * `criarTask` e `editarTask` faziam
+ * `prisma.lead.findUnique({ where: { id: input.leadId } })` com um
+ * `if (!lead) throw` — só EXISTÊNCIA, nunca empresa. `leadId` chega de
+ * `criarMinhaTaskAction`/`editarTaskAction` (`actions.ts`), que são Server
+ * Actions, e Server Action é endpoint HTTP público: o id é forjável e o
+ * `<select>` da tela não é a fronteira. Uma Task da empresa A nascia (ou era
+ * reapontada) para um Lead da B, e daí em diante `/leads/[id]` da B passava a
+ * listar tarefa de fora (`listarTasksPendentesDoLead`, `queries.ts`) e o
+ * título dela — escrito por alguém de outra empresa — aparecia na tela.
+ *
+ * É a QUARTA vez que esta família aparece no Ciclo 1a, sempre com a mesma
+ * forma — "valida que EXISTE, nunca que é da mesma empresa":
+ *
+ * 1. `core/audit/alerta.ts`, destinatários do alerta de rajada (3744e64)
+ * 2. `src/modules/whatsapp/notificacoes.ts`, fan-out do aviso (63cecd2)
+ * 3. `core/leads/service.ts`, responsável do lead, três pontos (6dfb325)
+ * 4. este arquivo
+ *
+ * ## Por que `where` com `companyId` à mão, e não o cliente escopado
+ *
+ * Porque `tasks/` ainda está na exceção do lint (`eslint.config.mjs`) e a
+ * conversão para `prismaDaEmpresa` é do próximo ciclo — converter só esta
+ * função deixaria o arquivo com dois caminhos de acesso ao banco, que é pior
+ * que um caminho consistente e anotado. É exatamente a forma que
+ * `core/audit/alerta.ts` e `src/modules/whatsapp/notificacoes.ts` já usam:
+ * `prisma` cru com `companyId` explícito no `where`, vindo de uma origem sã.
+ * Quando `tasks/` for convertido, isto vira `db.lead.findFirst({ where: { id } })`
+ * e o filtro passa a ser injetado.
+ *
+ * ## De onde vem `companyId` (medido, não presumido)
+ *
+ * - `criarTask`: `companyIdDoUsuario(input.responsavelId)` — o MESMO valor que
+ *   já era gravado em `Task.companyId` logo abaixo. Não há origem nova aqui: a
+ *   chamada só subiu de lugar. `responsavelId` nunca vem do cliente, é sempre
+ *   `usuarioAtual().id` (ver `criarMinhaTaskAction`).
+ * - `editarTask`: `task.companyId` — a linha já está em mãos e já passou pela
+ *   regra de dono (`task.responsavelId === input.autorId`), então é a origem
+ *   mais precisa E a mais barata (nenhuma consulta extra). Não é "a empresa do
+ *   primeiro vínculo de quem age": é a empresa da PRÓPRIA tarefa que está
+ *   sendo editada, que é a invariante que interessa — `Task.leadId` só pode
+ *   apontar para Lead da mesma empresa da Task.
+ *
+ * ## A mensagem é a MESMA de "não existe"
+ *
+ * De propósito, e preservada palavra por palavra. Distinguir "não existe" de
+ * "existe, mas é de outra empresa" confirmaria, a quem sonda ids, que aquele
+ * cuid pertence a alguém. Mesmo raciocínio de `concluirTask` (abaixo) e de
+ * `responsavelDaEmpresa` (`core/leads/service.ts`). O texto importa também
+ * porque `actions.ts` o reconhece por prefixo (`MENSAGENS_MELHORADAS`,
+ * `/^Lead não encontrado/`) para trocá-lo por "Esse lead não existe mais.
+ * Atualize a página."
+ */
+async function exigirLeadDaEmpresa(leadId: string, companyId: string): Promise<void> {
+  const lead = await prisma.lead.findFirst({
+    where: { id: leadId, companyId },
+    select: { id: true },
+  });
+  if (!lead) {
+    throw new Error(`Lead não encontrado: "${leadId}" não corresponde a nenhum lead.`);
+  }
+}
+
+/**
  * Cria uma tarefa.
  *
  * `responsavelId` é explícito aqui de propósito — mesmo padrão de
@@ -48,11 +116,13 @@ async function exigirContatoExistente(contactId: string): Promise<void> {
  * linha de defesa contra um `Date` inválido chegando por qualquer outro
  * caminho (um teste, uma chamada direta fora do formulário).
  *
- * `leadId`, quando informado, é conferido contra `Lead` antes de gravar:
- * sem isso, um id que não corresponde a nenhum lead faria o
+ * `leadId`, quando informado, é conferido contra `Lead` **da mesma empresa**
+ * antes de gravar (ver `exigirLeadDaEmpresa` acima): sem a checagem de
+ * existência, um id que não corresponde a nenhum lead faria o
  * `prisma.task.create` abaixo estourar uma violação de FK crua (P2003), sem
  * mensagem acionável — mesmo raciocínio de `moverEtapa`
- * (`leads/service.ts`) ao validar `novaStageId` antes de escrever.
+ * (`leads/service.ts`) ao validar `novaStageId` antes de escrever; sem a
+ * checagem de EMPRESA, a tarefa nascia pendurada no lead de outro cliente.
  */
 export async function criarTask(input: {
   titulo: string;
@@ -71,11 +141,24 @@ export async function criarTask(input: {
     throw new Error("Vencimento inválido: informe uma data válida.");
   }
 
+  // `Task.companyId` é `NOT NULL` desde a Task 1 do Ciclo 1a. `criarTask`,
+  // ao contrário de `criarLead`/`criarEtapa`, não recebe `autorId` (tarefa é
+  // lembrete pessoal, não audita a criação — ver o comentário de
+  // `concluirTask` abaixo sobre essa distinção). O parâmetro disponível é
+  // `responsavelId` — dono da tarefa — e é ele quem define a empresa.
+  //
+  // Resolvido AQUI, e não logo antes do `create` como antes: a empresa da
+  // tarefa é o que dá sentido à checagem de `leadId` logo abaixo. Enquanto a
+  // resolução ficava depois, não havia com o que comparar o lead, e a
+  // checagem só sabia perguntar se ele existia. A única diferença observável
+  // da mudança de lugar é a ORDEM das recusas — um `responsavelId` sem
+  // `Membership` agora falha antes de "Descrição longa demais", e nenhum
+  // caminho de produção alcança isso: `responsavelId` é sempre
+  // `usuarioAtual().id`, que só existe com vínculo.
+  const companyId = await companyIdDoUsuario(input.responsavelId);
+
   if (input.leadId) {
-    const lead = await prisma.lead.findUnique({ where: { id: input.leadId } });
-    if (!lead) {
-      throw new Error(`Lead não encontrado: "${input.leadId}" não corresponde a nenhum lead.`);
-    }
+    await exigirLeadDaEmpresa(input.leadId, companyId);
   }
 
   // Apara ANTES de validar: senão um texto no limite exato reprovaria por
@@ -88,13 +171,6 @@ export async function criarTask(input: {
   if (contactId) {
     await exigirContatoExistente(contactId);
   }
-
-  // `Task.companyId` é `NOT NULL` desde a Task 1 do Ciclo 1a. `criarTask`,
-  // ao contrário de `criarLead`/`criarEtapa`, não recebe `autorId` (tarefa é
-  // lembrete pessoal, não audita a criação — ver o comentário de
-  // `concluirTask` abaixo sobre essa distinção). O parâmetro disponível é
-  // `responsavelId` — dono da tarefa — e é ele quem define a empresa.
-  const companyId = await companyIdDoUsuario(input.responsavelId);
 
   return prisma.task.create({
     data: {
@@ -186,10 +262,12 @@ export async function editarTask(input: {
     throw new Error("Vencimento inválido: informe uma data válida.");
   }
   if (input.leadId) {
-    const lead = await prisma.lead.findUnique({ where: { id: input.leadId } });
-    if (!lead) {
-      throw new Error(`Lead não encontrado: "${input.leadId}" não corresponde a nenhum lead.`);
-    }
+    // `task.companyId` e não a empresa de quem age: a invariante é
+    // `Task.leadId` apontar para Lead da MESMA empresa da Task. A linha já
+    // está em mãos e já passou pela regra de dono acima — nenhuma consulta
+    // extra, e nenhuma chance de a empresa da tarefa divergir da empresa
+    // usada na checagem. Ver `exigirLeadDaEmpresa` no topo do arquivo.
+    await exigirLeadDaEmpresa(input.leadId, task.companyId);
   }
 
   const { descricao, contactId } = validarCamposNovosDaTarefa({

@@ -113,6 +113,26 @@ describe("editarNota", () => {
 
     expect(escopoMock).toHaveBeenCalledWith(EMPRESA);
   });
+
+  // O caso que faltava a uma afirmação UNIVERSAL sobre a ordem das consultas.
+  //
+  // `editarNota` (`core/leads/notes.ts`) documenta que "a lista não pode vir
+  // vazia: o `findFirst` acima já encontrou a nota sob o MESMO escopo, três
+  // linhas atrás". Verdadeiro hoje — mas é o `throw` que sustenta a frase, e
+  // ele não tinha caso nenhum que o exercitasse. Sem este teste, trocar o
+  // `if (!depois)` por um `!` de TypeScript passaria verde, e a nota
+  // "editada" que sumiu no intervalo viraria `undefined` disfarçado de
+  // `LeadNote` para a auditoria logo abaixo.
+  it("lança quando a gravação escopada não devolve linha nenhuma", async () => {
+    prismaMock.leadNote.updateManyAndReturn.mockResolvedValue([]);
+
+    await expect(
+      editarNota({ notaId: "nota-1", texto: "corrigido", autorId: "user-1" })
+    ).rejects.toThrow("Nota não encontrada");
+
+    // E não audita uma edição que não aconteceu.
+    expect(auditoriaMock).not.toHaveBeenCalled();
+  });
 });
 
 describe("excluirNota", () => {

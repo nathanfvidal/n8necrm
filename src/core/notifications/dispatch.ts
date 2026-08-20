@@ -101,6 +101,35 @@ export async function notificarNovoLead(leadId: string): Promise<void> {
   // `Notification.companyId` é `NOT NULL` desde a Task 1 do Ciclo 1a. `lead`
   // já está em mãos (`select` acima) — é a origem preferida das três (registro
   // já carregado), sem consulta extra nenhuma.
+  //
+  // ## A invariante que estas duas linhas assumem, e QUEM a garante
+  //
+  // `companyId` e `userId` saem de origens DIFERENTES — a empresa do lead e o
+  // responsável do lead — e nada aqui confere que batem. Uma `Notification`
+  // com `companyId` da empresa A e `userId` de alguém da B é expressável neste
+  // `create`, e seria exatamente o vazamento: a pessoa de fora recebe aviso
+  // in-app (e e-mail, logo abaixo) sobre o cliente de um terceiro.
+  //
+  // Elas batem porque `src/core/leads/service.ts` **exige `Membership` na
+  // empresa do lead** antes de gravar `Lead.responsavelId` — a função é
+  // `responsavelDaEmpresa`, e os três pontos que atribuem responsável
+  // (`criarLead`, `atualizarLead`, `criarLeadDeWhatsapp`) passam por ela
+  // desde o commit 6dfb325 (Ciclo 1a, Task 4, achado B). Antes disso a
+  // validação conferia só que o usuário EXISTIA, e este `create` gravava a
+  // divergência sem reclamar.
+  //
+  // Medido em 2026-08-20: `Lead.responsavelId` só é escrito em
+  // `src/core/leads/service.ts` (3 pontos) e nos dois seeds
+  // (`prisma/seed.ts:187`, `prisma/seed-demo.ts:359`), que criam responsável e
+  // lead na mesma empresa. `src/core/pipeline/service.ts:394` toca `Lead` mas
+  // só o `stageId`.
+  //
+  // **Se um import em massa, um script ou um módulo novo passar a escrever
+  // `Lead.responsavelId`, ele herda essa obrigação** — ou este ponto volta a
+  // vazar em silêncio, sem erro de tipo e sem teste vermelho aqui. O caso que
+  // trava a regressão é "a notificação do lead criado fica na empresa do lead"
+  // (`tests/unit/lead-isolamento.test.ts`), e ele exerce o caminho de
+  // `criarLead` — não os caminhos que ainda não existem.
   await prisma.notification.create({
     data: {
       companyId: lead.companyId,

@@ -222,4 +222,35 @@ describe("atualizarLead", () => {
 
     expect(auditoriaMock).not.toHaveBeenCalled();
   });
+
+  // O caso que faltava a uma afirmação UNIVERSAL sobre chamadores.
+  //
+  // `atualizarLeadEscopado` (`core/leads/service.ts`) documenta que "a lista
+  // não pode vir vazia: as chamadoras já leram o lead antes, com o mesmo
+  // escopo". A afirmação é verdadeira hoje — os 4 chamadores fazem
+  // `findFirstOrThrow` sob o mesmo `db` antes —, mas é sobre TODA chamadora
+  // presente e futura, e o ramo que ela justifica não tinha caso nenhum. Se
+  // amanhã alguém chamar sem ler antes, ou se a leitura e a escrita saírem de
+  // escopos diferentes, é este `throw` que segura — e sem este teste ninguém
+  // saberia se ele ainda funciona, nem qual mensagem ele dá.
+  //
+  // A mensagem importa: é ela que diz "sumiu do ESCOPO desta empresa", em vez
+  // de deixar o `[0]` virar `undefined` e o erro aparecer três linhas adiante,
+  // sem relação visível com a causa.
+  it("lança quando a gravação escopada não devolve linha nenhuma", async () => {
+    prismaMock.lead.updateManyAndReturn.mockResolvedValue([]);
+
+    await expect(
+      atualizarLead({
+        leadId: "lead-1",
+        valorEstimado: null,
+        responsavelId: "user-2",
+        stageId: "etapa-1",
+        autorId: "user-9",
+      })
+    ).rejects.toThrow(/^Lead não encontrado ao gravar: "lead-1"/);
+
+    // E não audita uma atualização que não aconteceu.
+    expect(auditoriaMock).not.toHaveBeenCalled();
+  });
 });
