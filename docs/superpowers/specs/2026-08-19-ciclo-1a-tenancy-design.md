@@ -96,14 +96,23 @@ Neste ciclo, a resposta é resolvida no servidor e não é escolhida pelo usuár
 - **Nenhum vínculo** — `usuarioAtual()` lança, mesmo tratamento de usuário
   desativado. Conta sem empresa não é uma conta usável, e deixá-la entrar num
   estado sem escopo é exatamente como vazamento entre tenants começa.
-- **Mais de um vínculo** — o mais antigo (`criadoEm` ascendente, `id` como
-  desempate para ser determinístico). É provisório e **está registrado como
-  dívida**: o seletor de empresa é trabalho de outro ciclo, e até ele existir
-  ninguém consegue chegar à segunda empresa pela interface.
+- **Mais de um vínculo** — **lança**, com mensagem que nomeia a situação
+  ("sua conta está vinculada a mais de uma empresa e o seletor ainda não
+  existe").
 
-A escolha determinística importa: se dois requests da mesma pessoa resolverem
-empresas diferentes, o bug aparece como dado "sumindo" e some quando alguém vai
-investigar.
+A última é a decisão que mais importa deste ciclo, e ela mudou durante o
+desenho. A primeira versão escolhia "o vínculo mais antigo". Isso é um chute com
+cara de regra: nada no domínio diz que o vínculo mais antigo é o que a pessoa
+quer, e o modo de falha é ler dado da **empresa errada** — vazamento entre
+clientes de verdade, que aparece como dado "sumindo" e desaparece quando alguém
+vai investigar.
+
+Falhar alto custa **zero hoje**: a migração cria exatamente um vínculo por
+pessoa, então a situação é inalcançável. E o dia em que alguém criar o segundo
+vínculo por SQL, o erro aparece imediatamente, apontando para a causa — em vez
+de a aplicação seguir servindo dado de uma empresa que ninguém escolheu.
+
+Escolher em silêncio troca um erro impossível hoje por um bug invisível depois.
 
 ### Quem recebe `companyId`, e quem não
 
@@ -182,10 +191,23 @@ Acrescentar `NOT NULL` de uma vez numa tabela com linhas falha. E a ordem 3
 antes de 5 importa: o papel tem que ser copiado **antes** de a coluna
 `User.papel` sair, senão a informação se perde.
 
-**`User.papel` sai na mesma migração ou depois?** Depois, num passo separado, e
-isso é deliberado: enquanto as duas fontes existirem, uma divergência entre
-elas é detectável. Removê-la no mesmo passo transforma qualquer erro de cópia em
-dado perdido sem rastro.
+**`User.papel` sai neste mesmo ciclo**, e essa decisão também mudou durante o
+desenho.
+
+A primeira versão mantinha a coluna por um ciclo, com o argumento de que
+"enquanto as duas fontes existirem, divergência é detectável". Detectável por
+quem? Nada iria conferir. E duas fontes de verdade para **autorização** não são
+uma rede de segurança — são a própria falha esperando alguém ler a errada.
+
+O que substitui o argumento é verificação no momento certo: **a migração
+confere**, antes de derrubar a coluna, que todo usuário tem vínculo com
+exatamente o papel que a coluna dizia, e **falha** se algum não tiver. Isso
+transforma "detectável depois por ninguém" em "verificado agora ou nada é
+apagado".
+
+Concretamente, o passo de remoção só executa depois de um `DO $$ ... $$` que
+levanta exceção se existir `User` sem `Membership` correspondente, ou com papel
+diferente do que está na coluna.
 
 ### Índices
 
@@ -262,11 +284,9 @@ recusa invocação direta de função desse tipo.)
 
 ## 8. Dívidas que este ciclo declara
 
-- **Seletor de empresa.** Com mais de um vínculo, o servidor escolhe o mais
-  antigo. Ninguém alcança a segunda empresa pela interface até o seletor
-  existir.
-- **`User.papel` continua existindo** por um ciclo, como rede de segurança para
-  divergência ser detectável. Remover é passo próprio.
+- **Seletor de empresa.** Com mais de um vínculo, `usuarioAtual()` lança. É
+  inalcançável hoje (um vínculo por pessoa), e o dia em que deixar de ser, o
+  erro aponta para a causa. O seletor é trabalho de outro ciclo.
 - **Nada de convite/gestão de vínculo.** Criar vínculo é seed ou SQL até uma
   tela existir.
 
