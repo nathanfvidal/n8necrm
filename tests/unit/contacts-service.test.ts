@@ -42,6 +42,17 @@ describe("core/contacts", () => {
       },
     });
     autorId = autor.id;
+
+    // `criarContato` resolve `Contact.companyId` por
+    // `companyIdDoUsuario(autorId)` — sem `Membership`, a chamada lança antes
+    // de qualquer asserção deste arquivo rodar (achado rodando a suíte, não
+    // pego pelo `tsc`: `Membership` é tabela à parte, não campo obrigatório
+    // de `User`). Empresa única do Ciclo 1a (mesma suposição de
+    // `prisma/seed.ts`).
+    const empresa = await prisma.company.findFirstOrThrow();
+    await prisma.membership.create({
+      data: { userId: autorId, companyId: empresa.id, papel: "ADMIN" },
+    });
   });
 
   afterAll(async () => {
@@ -201,8 +212,17 @@ describe("core/contacts", () => {
         autorId
       );
       const etapa = await prisma.pipelineStage.findFirstOrThrow({ orderBy: { ordem: "asc" } });
+      // Mesma empresa do contato (já resolvida por `criarContato` via
+      // `companyIdDoUsuario`, ver core/contacts/service.ts) — um Lead de outra
+      // empresa apontando para este Contact seria um estado impossível.
       const lead = await prisma.lead.create({
-        data: { contactId: contato.id, stageId: etapa.id, responsavelId: autorId, canal: "MANUAL" },
+        data: {
+          companyId: contato.companyId,
+          contactId: contato.id,
+          stageId: etapa.id,
+          responsavelId: autorId,
+          canal: "MANUAL",
+        },
       });
 
       try {

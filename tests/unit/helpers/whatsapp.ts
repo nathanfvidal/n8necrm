@@ -38,6 +38,17 @@ export async function idsDeUsuariosSemeados() {
   return { ID_DO_ADMIN: admin.id, ID_DO_VENDEDOR: vendedor.id };
 }
 
+/**
+ * Empresa única do Ciclo 1a (mesma suposição de `prisma/seed.ts`, que só
+ * cria/encontra UMA `Company`) — `Conversation`/`WhatsappMessage` agora
+ * exigem `companyId`, e nenhum teste que usa este helper precisa de mais de
+ * uma empresa.
+ */
+export async function companyIdSemeada(): Promise<string> {
+  const empresa = await prisma.company.findFirstOrThrow();
+  return empresa.id;
+}
+
 export async function criarConversation(
   overrides: Partial<{
     waId: string;
@@ -50,8 +61,10 @@ export async function criarConversation(
     nomeExibicao: string | null;
   }> = {}
 ) {
+  const companyId = await companyIdSemeada();
   return prisma.conversation.create({
     data: {
+      companyId,
       waId: overrides.waId ?? `${PREFIXO}${crypto.randomUUID()}`,
       bufferSeq: overrides.bufferSeq ?? 1,
       iaAtiva: overrides.iaAtiva ?? true,
@@ -65,8 +78,10 @@ export async function criarMensagemEntrada(
   conversationId: string,
   overrides: Partial<{ tipo: "TEXTO" | "AUDIO"; texto: string | null; idExterno: string }> = {}
 ) {
+  const companyId = await companyIdSemeada();
   return prisma.whatsappMessage.create({
     data: {
+      companyId,
       conversationId,
       idExterno: overrides.idExterno ?? `${PREFIXO}${crypto.randomUUID()}`,
       direcao: "ENTRADA",

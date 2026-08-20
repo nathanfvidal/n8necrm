@@ -44,6 +44,7 @@ function usuarioFake(overrides: Partial<User> = {}): User {
 function taskFake(overrides: Partial<Task> = {}): Task {
   return {
     id: "task-fake-id",
+    companyId: "empresa-fake-id",
     titulo: "Tarefa fake",
     descricao: null,
     vencimento: new Date("2026-08-05T00:00:00.000Z"),

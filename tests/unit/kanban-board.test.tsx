@@ -74,8 +74,24 @@ const ETAPA_SUMIU = "Essa etapa não existe mais. Atualize a página.";
 const SESSAO_EXPIROU = "Sua sessão expirou. Recarregue a página e entre de novo.";
 
 const etapasFake = [
-  { id: "etapa-1", nome: "Novo", ordem: 0, cor: "#94A3B8", ehGanho: false, ehPerdido: false },
-  { id: "etapa-2", nome: "Contato feito", ordem: 1, cor: "#60A5FA", ehGanho: false, ehPerdido: false },
+  {
+    id: "etapa-1",
+    companyId: "empresa-fake-id",
+    nome: "Novo",
+    ordem: 0,
+    cor: "#94A3B8",
+    ehGanho: false,
+    ehPerdido: false,
+  },
+  {
+    id: "etapa-2",
+    companyId: "empresa-fake-id",
+    nome: "Contato feito",
+    ordem: 1,
+    cor: "#60A5FA",
+    ehGanho: false,
+    ehPerdido: false,
+  },
 ];
 
 beforeEach(() => {

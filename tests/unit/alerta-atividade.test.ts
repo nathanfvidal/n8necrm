@@ -42,6 +42,10 @@ const MARCA = "ZZAlertaAtividade";
 let idSuspeito = "";
 let idAdminA = "";
 let idAdminB = "";
+// Empresa única do Ciclo 1a (mesma suposição de `prisma/seed.ts`) —
+// `AuditLog.companyId` agora é obrigatório, e não há mais de uma empresa
+// neste banco de teste.
+let companyId = "";
 
 /**
  * Limpeza por marca. As notificações são filtradas EM MEMÓRIA pelo
@@ -83,6 +87,9 @@ const HASH_INERTE = "$2b$10$invalidoinvalidoinvalidoinvalidoinvalidoinvalidoinva
 beforeAll(async () => {
   await limpar();
 
+  const empresa = await prisma.company.findFirstOrThrow();
+  companyId = empresa.id;
+
   const suspeito = await prisma.user.create({
     data: {
       nome: `Suspeito ${MARCA}`,
@@ -91,6 +98,15 @@ beforeAll(async () => {
       papel: "VENDEDOR",
       ativo: true,
     },
+  });
+  // `avaliarAtividadeSuspeita` resolve a empresa do alerta por
+  // `companyIdDoUsuario(input.userId)` (o suspeito) — sem `Membership`, a
+  // função lança `PrismaClientKnownRequestError` (findFirstOrThrow) antes de
+  // qualquer asserção deste arquivo rodar. Descoberto rodando a suíte: erro
+  // real de runtime, não pego pelo `tsc` porque `Membership` é uma tabela à
+  // parte, não um campo obrigatório de `User`.
+  await prisma.membership.create({
+    data: { userId: suspeito.id, companyId, papel: "VENDEDOR" },
   });
   const adminA = await prisma.user.create({
     data: {
@@ -133,7 +149,7 @@ beforeEach(async () => {
 async function registrarRajada(quantas: number, acao: string = ACOES_SENSIVEIS[0]) {
   for (let i = 0; i < quantas; i++) {
     await prisma.auditLog.create({
-      data: { userId: idSuspeito, acao, entidade: "Task", entidadeId: `alvo-${i}` },
+      data: { companyId, userId: idSuspeito, acao, entidade: "Task", entidadeId: `alvo-${i}` },
     });
   }
 }
@@ -259,6 +275,7 @@ describe("alerta de atividade destrutiva em rajada", () => {
     for (let i = 0; i < LIMITE_ALERTA; i++) {
       await prisma.auditLog.create({
         data: {
+          companyId,
           userId: idSuspeito,
           acao: ACOES_SENSIVEIS[i % ACOES_SENSIVEIS.length],
           entidade: "Lead",
@@ -279,6 +296,7 @@ describe("alerta de atividade destrutiva em rajada", () => {
     for (let i = 0; i < LIMITE_ALERTA * 2; i++) {
       await prisma.auditLog.create({
         data: {
+          companyId,
           userId: idSuspeito,
           acao: ACOES_SENSIVEIS[0],
           entidade: "Task",

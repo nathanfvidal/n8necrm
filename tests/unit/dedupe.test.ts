@@ -7,7 +7,7 @@
 // top-level.
 import "dotenv/config";
 
-import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from "vitest";
 
 // "server-only" só resolve para um no-op sob a condição de resolução
 // "react-server" que o Next.js aplica no build — fora desse pipeline (aqui,
@@ -132,33 +132,61 @@ describe("normalizarTelefone", () => {
 });
 
 describe("encontrarOuCriarContact", () => {
+  // Empresa única do Ciclo 1a (mesma suposição de `prisma/seed.ts`) —
+  // `Contact.companyId` agora é obrigatório, e `encontrarOuCriarContact`
+  // passou a exigi-lo como parâmetro (ver o comentário na assinatura em
+  // core/leads/dedupe.ts): os chamadores reais já resolvem a empresa do
+  // autor antes de chamar, e este teste não tem "autor" nenhum — só a
+  // empresa semeada.
+  let companyId: string;
+
+  beforeAll(async () => {
+    companyId = (await prisma.company.findFirstOrThrow()).id;
+  });
   beforeEach(limparContatosDeTeste);
   afterAll(limparContatosDeTeste);
 
   it("cria um novo contato quando o telefone não existe", async () => {
-    const contact = await encontrarOuCriarContact({ nome: "Ana Souza", telefone: "11997770001" });
+    const contact = await encontrarOuCriarContact({
+      nome: "Ana Souza",
+      telefone: "11997770001",
+      companyId,
+    });
     expect(contact.nome).toBe("Ana Souza");
     expect(contact.telefone).toBe("11997770001");
   });
 
   it("retorna o contato existente quando o telefone já está cadastrado", async () => {
-    const primeiro = await encontrarOuCriarContact({ nome: "Ana Souza", telefone: "11997770002" });
-    const segundo = await encontrarOuCriarContact({ nome: "Ana S.", telefone: "11997770002" });
+    const primeiro = await encontrarOuCriarContact({
+      nome: "Ana Souza",
+      telefone: "11997770002",
+      companyId,
+    });
+    const segundo = await encontrarOuCriarContact({ nome: "Ana S.", telefone: "11997770002", companyId });
     expect(segundo.id).toBe(primeiro.id);
   });
 
   it("não sobrescreve o nome do contato existente", async () => {
-    const primeiro = await encontrarOuCriarContact({ nome: "Ana Souza", telefone: "11997770003" });
-    await encontrarOuCriarContact({ nome: "Nome Diferente", telefone: "11997770003" });
+    const primeiro = await encontrarOuCriarContact({
+      nome: "Ana Souza",
+      telefone: "11997770003",
+      companyId,
+    });
+    await encontrarOuCriarContact({ nome: "Nome Diferente", telefone: "11997770003", companyId });
     const atual = await prisma.contact.findUniqueOrThrow({ where: { id: primeiro.id } });
     expect(atual.nome).toBe("Ana Souza");
   });
 
   it("reconhece o mesmo telefone em formatos diferentes como o mesmo contato", async () => {
-    const primeiro = await encontrarOuCriarContact({ nome: "Bruno Reis", telefone: "11997770004" });
+    const primeiro = await encontrarOuCriarContact({
+      nome: "Bruno Reis",
+      telefone: "11997770004",
+      companyId,
+    });
     const segundo = await encontrarOuCriarContact({
       nome: "Bruno R.",
       telefone: "+55 (11) 99777-0004",
+      companyId,
     });
     expect(segundo.id).toBe(primeiro.id);
 
@@ -172,7 +200,7 @@ describe("encontrarOuCriarContact", () => {
     async () => {
       const telefone = "11997770005";
       const chamadas = Array.from({ length: 10 }, (_, i) =>
-        encontrarOuCriarContact({ nome: `Concorrente ${i}`, telefone })
+        encontrarOuCriarContact({ nome: `Concorrente ${i}`, telefone, companyId })
       );
 
       const resultados = await Promise.all(chamadas);
@@ -193,12 +221,14 @@ describe("encontrarOuCriarContact", () => {
       const semNonoDigito = await encontrarOuCriarContact({
         nome: "Carla Dias",
         telefone: "1188887777", // formato antigo: DDD + 8 dígitos, assinante começa em 8
+        companyId,
       });
       expect(semNonoDigito.telefone).toBe("11988887777");
 
       const comNonoDigito = await encontrarOuCriarContact({
         nome: "Carla D.",
         telefone: "(11) 98888-7777", // formato atual, já com o 9º dígito
+        companyId,
       });
 
       expect(comNonoDigito.id).toBe(semNonoDigito.id);
@@ -215,12 +245,14 @@ describe("encontrarOuCriarContact", () => {
       const fixo = await encontrarOuCriarContact({
         nome: "Loja Centro (fixo)",
         telefone: "1133334444", // assinante começa em 3: faixa de fixo, nunca ganha o 9º dígito
+        companyId,
       });
       expect(fixo.telefone).toBe("1133334444");
 
       const celular = await encontrarOuCriarContact({
         nome: "Dono da Loja (celular)",
         telefone: "11933334444", // mesmos 8 últimos dígitos do fixo acima, mas é outra pessoa
+        companyId,
       });
       expect(celular.telefone).toBe("11933334444");
 
@@ -236,7 +268,7 @@ describe("encontrarOuCriarContact", () => {
   // --- Fix round 1/5: rejeição de telefone sem dígito utilizável -----------
   it("rejeita telefone sem dígito utilizável e não cria contato nenhum", async () => {
     await expect(
-      encontrarOuCriarContact({ nome: "Sem Telefone Real", telefone: "a definir" })
+      encontrarOuCriarContact({ nome: "Sem Telefone Real", telefone: "a definir", companyId })
     ).rejects.toThrow(/Telefone inválido/);
 
     const total = await prisma.contact.count({ where: { nome: "Sem Telefone Real" } });

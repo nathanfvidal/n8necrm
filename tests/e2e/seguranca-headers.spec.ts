@@ -50,11 +50,16 @@ test.beforeAll(async () => {
 
   const etapa = await prisma.pipelineStage.findFirstOrThrow({ orderBy: { ordem: "asc" } });
   const responsavel = await prisma.user.findFirstOrThrow({ where: { email: EMAIL_ADMIN_E2E } });
+  // Empresa única do Ciclo 1a (mesma suposição de `prisma/seed.ts`, que
+  // criou tanto ela quanto o admin/vendedor de e2e usados aqui) — não há
+  // seletor de empresa na sessão e2e, então é a única Company do banco.
+  const empresa = await prisma.company.findFirstOrThrow();
   const contato = await prisma.contact.create({
-    data: { nome: NOME_TESTE, telefone: TELEFONE_TESTE },
+    data: { companyId: empresa.id, nome: NOME_TESTE, telefone: TELEFONE_TESTE },
   });
   await prisma.lead.create({
     data: {
+      companyId: empresa.id,
       contactId: contato.id,
       stageId: etapa.id,
       responsavelId: responsavel.id,

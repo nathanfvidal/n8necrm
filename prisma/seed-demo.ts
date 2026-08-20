@@ -206,13 +206,18 @@ const TAREFAS_DEMO: Array<{ leadIndex: number; titulo: string; diasVencimento: n
 // (ver comentário no topo do arquivo sobre por que não importamos
 // src/core/**/*.ts diretamente aqui)
 
-async function encontrarOuCriarContactDemo(nome: string, telefone: string): Promise<Contact> {
+async function encontrarOuCriarContactDemo(
+  companyId: string,
+  nome: string,
+  telefone: string
+): Promise<Contact> {
   const existente = await prisma.contact.findUnique({ where: { telefone } });
   if (existente) return existente;
-  return prisma.contact.create({ data: { nome, telefone } });
+  return prisma.contact.create({ data: { companyId, nome, telefone } });
 }
 
 async function registrarAuditoriaDemo(params: {
+  companyId: string;
   userId: string;
   acao: string;
   entidadeId: string;
@@ -222,6 +227,7 @@ async function registrarAuditoriaDemo(params: {
 }): Promise<void> {
   await prisma.auditLog.create({
     data: {
+      companyId: params.companyId,
       userId: params.userId,
       acao: params.acao,
       entidade: "Lead",
@@ -234,6 +240,7 @@ async function registrarAuditoriaDemo(params: {
 }
 
 async function notificarNovoLeadDemo(
+  companyId: string,
   leadId: string,
   responsavelId: string,
   contatoNome: string,
@@ -241,7 +248,7 @@ async function notificarNovoLeadDemo(
 ): Promise<void> {
   const payload: NovoLeadPayload = { leadId, contatoNome };
   await prisma.notification.create({
-    data: { userId: responsavelId, tipo: "NOVO_LEAD", payload, criadoEm },
+    data: { companyId, userId: responsavelId, tipo: "NOVO_LEAD", payload, criadoEm },
   });
 }
 
@@ -264,6 +271,17 @@ function arredondarPara(valor: number, multiplo: number): number {
  * "retorno". Rodar duas vezes seguidas não duplica nada.
  */
 export async function seedDemo(): Promise<void> {
+  // Mesma empresa única que `prisma/seed.ts` cria/encontra ("empresaExistente
+  // ?? create" — ver o comentário lá). Este script sempre roda DEPOIS do seed
+  // base (linha 279-280 abaixo já assume `admin@exemplo.com`/
+  // `vendedor@exemplo.com` existentes, que só o seed base cria), então a
+  // Company já existe a esta altura — `findFirstOrThrow` em vez de
+  // `findFirst() ?? create()` porque criar uma segunda empresa aqui seria
+  // exatamente o vazamento que `seed.ts` evita: "duas empresas por rodar o
+  // seed duas vezes" viraria "duas empresas por rodar o seed DE DEMO depois
+  // do base".
+  const empresa = await prisma.company.findFirstOrThrow();
+
   const etapas = await prisma.pipelineStage.findMany({ orderBy: { ordem: "asc" } });
   if (etapas.length !== 5) {
     throw new Error(
@@ -300,7 +318,7 @@ export async function seedDemo(): Promise<void> {
     const nome = nomeParaLead(leadIndex, indiceContato);
     const responsavel = usuarios[leadIndex % 2];
 
-    const contact = await encontrarOuCriarContactDemo(nome, telefone);
+    const contact = await encontrarOuCriarContactDemo(empresa.id, nome, telefone);
     const leadsExistentesDoContato = await prisma.lead.count({ where: { contactId: contact.id } });
 
     if (leadsExistentesDoContato >= totalEsperadoDeLeadsDoContato(indiceContato)) {
@@ -335,6 +353,7 @@ export async function seedDemo(): Promise<void> {
 
     const lead = await prisma.lead.create({
       data: {
+        companyId: empresa.id,
         contactId: contact.id,
         stageId: etapas[0].id,
         responsavelId: responsavel.id,
@@ -346,13 +365,14 @@ export async function seedDemo(): Promise<void> {
     });
 
     await registrarAuditoriaDemo({
+      companyId: empresa.id,
       userId: responsavel.id,
       acao: "criar_lead",
       entidadeId: lead.id,
       depois: lead,
       criadoEm,
     });
-    await notificarNovoLeadDemo(lead.id, responsavel.id, contact.nome, criadoEm);
+    await notificarNovoLeadDemo(empresa.id, lead.id, responsavel.id, contact.nome, criadoEm);
 
     // Move o lead pelas etapas intermediárias até a etapa final sorteada,
     // espaçando os timestamps de forma monotônica entre criadoEm e agora —
@@ -371,6 +391,7 @@ export async function seedDemo(): Promise<void> {
         data: { stageId: etapaAtualId, ultimaInteracaoEm: dataMovimento },
       });
       await registrarAuditoriaDemo({
+        companyId: empresa.id,
         userId: responsavel.id,
         acao: "mover_etapa",
         entidadeId: lead.id,
@@ -393,7 +414,7 @@ export async function seedDemo(): Promise<void> {
       const texto = NOTAS_POSSIVEIS[randInt(rng, 0, NOTAS_POSSIVEIS.length - 1)];
       const dataNota = new Date(criadoEm.getTime() + rng() * (ultimaData.getTime() - criadoEm.getTime()));
       await prisma.leadNote.create({
-        data: { leadId: lead.id, autorId: responsavel.id, texto, criadoEm: dataNota },
+        data: { companyId: empresa.id, leadId: lead.id, autorId: responsavel.id, texto, criadoEm: dataNota },
       });
       totalNotasCriadas++;
     }
@@ -422,6 +443,7 @@ export async function seedDemo(): Promise<void> {
 
     await prisma.task.create({
       data: {
+        companyId: empresa.id,
         titulo: tarefa.titulo,
         vencimento,
         responsavelId,

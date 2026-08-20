@@ -32,6 +32,9 @@ const prisma = new PrismaClient({
 const MARCA = "ZZPodaNotificacao";
 const DIA_MS = 24 * 60 * 60_000;
 let idDono = "";
+// Empresa única do Ciclo 1a (mesma suposição de `prisma/seed.ts`) —
+// `Notification.companyId` agora é obrigatório.
+let companyId = "";
 
 async function limpar() {
   const usuarios = await prisma.user.findMany({
@@ -47,6 +50,8 @@ async function limpar() {
 
 beforeAll(async () => {
   await limpar();
+  const empresa = await prisma.company.findFirstOrThrow();
+  companyId = empresa.id;
   const dono = await prisma.user.create({
     data: {
       nome: `Dono ${MARCA}`,
@@ -73,6 +78,7 @@ async function criar(opcoes: { diasAtras: number; lida: boolean }) {
   const quando = new Date(Date.now() - opcoes.diasAtras * DIA_MS);
   return prisma.notification.create({
     data: {
+      companyId,
       userId: idDono,
       tipo: "NOVO_LEAD",
       payload: { leadId: "x", contatoNome: MARCA },

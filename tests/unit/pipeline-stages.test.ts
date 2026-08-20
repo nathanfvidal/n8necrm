@@ -62,14 +62,18 @@ describe("listarEtapas", () => {
 
 describe("contarLeadsQueSeguramEtapa", () => {
   it("conta arquivados junto — é o número que a chave estrangeira enxerga", async () => {
+    // Empresa única do Ciclo 1a (mesma suposição de `prisma/seed.ts`, já
+    // rodado no `beforeAll` de `describe("listarEtapas")` acima).
+    const empresa = await prisma.company.findFirstOrThrow();
     const etapa = await prisma.pipelineStage.create({
-      data: { nome: `Etapa Teste Contagem ${Date.now()}`, ordem: 9001, cor: "#123456" },
+      data: { companyId: empresa.id, nome: `Etapa Teste Contagem ${Date.now()}`, ordem: 9001, cor: "#123456" },
     });
     const contato = await prisma.contact.create({
-      data: { nome: "Contato Teste Contagem", telefone: `5511${Date.now()}`.slice(0, 13) },
+      data: { companyId: empresa.id, nome: "Contato Teste Contagem", telefone: `5511${Date.now()}`.slice(0, 13) },
     });
     const lead = await prisma.lead.create({
       data: {
+        companyId: empresa.id,
         contactId: contato.id,
         stageId: etapa.id,
         canal: "MANUAL",

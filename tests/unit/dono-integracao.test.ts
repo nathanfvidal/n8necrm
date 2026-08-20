@@ -83,22 +83,47 @@ beforeAll(async () => {
   idDono = dono.id;
   idIntruso = intruso.id;
 
+  // Empresa única do Ciclo 1a (mesma suposição de `prisma/seed.ts`) — dono e
+  // intruso pertencem à mesma empresa aqui de propósito: este arquivo prova
+  // a regra de DONO (autor x autor), não a de tenancy (empresa x empresa) —
+  // duas empresas diferentes tornariam o cenário ambíguo sobre qual regra
+  // barrou o intruso.
+  const empresa = await prisma.company.findFirstOrThrow();
+  const companyId = empresa.id;
+
+  // `registrarAuditoria` (chamada por `editarNota`/`excluirTask` quando o
+  // DONO age) resolve a empresa por `companyIdDoUsuario(autorId)` — sem
+  // `Membership`, essas chamadas lançam antes de qualquer asserção deste
+  // arquivo rodar (achado rodando a suíte, não pego pelo `tsc`: `Membership`
+  // é tabela à parte, não campo obrigatório de `User`). Só o DONO precisa —
+  // o intruso é sempre recusado ANTES de chegar em `companyIdDoUsuario`.
+  await prisma.membership.create({
+    data: { userId: idDono, companyId, papel: "VENDEDOR" },
+  });
+
   const contato = await prisma.contact.create({
-    data: { nome: `Cliente ${MARCA}`, telefone: TELEFONE },
+    data: { companyId, nome: `Cliente ${MARCA}`, telefone: TELEFONE },
   });
   const etapa = await prisma.pipelineStage.findFirstOrThrow({ orderBy: { ordem: "asc" } });
   const lead = await prisma.lead.create({
-    data: { contactId: contato.id, stageId: etapa.id, responsavelId: idDono, canal: "MANUAL" },
+    data: {
+      companyId,
+      contactId: contato.id,
+      stageId: etapa.id,
+      responsavelId: idDono,
+      canal: "MANUAL",
+    },
   });
   idLead = lead.id;
 
   const nota = await prisma.leadNote.create({
-    data: { leadId: idLead, autorId: idDono, texto: "texto original do dono" },
+    data: { companyId, leadId: idLead, autorId: idDono, texto: "texto original do dono" },
   });
   idNota = nota.id;
 
   const task = await prisma.task.create({
     data: {
+      companyId,
       titulo: `Tarefa ${MARCA}`,
       vencimento: new Date(Date.UTC(2026, 11, 31)),
       responsavelId: idDono,

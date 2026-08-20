@@ -28,6 +28,7 @@ const { AgenteForm } = await import("../../src/components/agente-form");
 
 const CONFIG_BASE: BotConfig = {
   id: "bot-config",
+  companyId: "empresa-teste",
   ativo: true,
   personaNome: "Ana",
   personaPapel: "atendente virtual da AutoCenter Exemplo",

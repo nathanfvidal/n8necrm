@@ -34,12 +34,12 @@ import {
   confirmarTitularidadeLease,
 } from "../../src/modules/whatsapp/turno";
 import { TIPO_CONVERSA_AGUARDANDO } from "../../src/modules/whatsapp/notificacao-tipos";
-import { BOT_CONFIG_ID, botConfig } from "../../config/bot";
+import { botConfig } from "../../config/bot";
 // criarConversation/criarMensagemEntrada extraídos para tests/unit/helpers/whatsapp.ts
 // (Task 4 da Fatia 2) — mesmo nome, mesma assinatura, mesmo PREFIXO interno
 // ("teste-turno-") que este arquivo já usava, então `limparDadosDeTeste`
 // abaixo continua encontrando exatamente as linhas que estas funções criam.
-import { criarConversation, criarMensagemEntrada } from "./helpers/whatsapp";
+import { criarConversation, criarMensagemEntrada, companyIdSemeada } from "./helpers/whatsapp";
 
 const PREFIXO = "teste-turno-";
 
@@ -458,6 +458,7 @@ describe("processarTurno", () => {
       // de verdade.
       await prisma.whatsappMessage.createMany({
         data: Array.from({ length: 20 }, (_, i) => ({
+          companyId: conversation.companyId,
           conversationId: conversation.id,
           idExterno: `${PREFIXO}saida-teto-${i}-${crypto.randomUUID()}`,
           direcao: "SAIDA" as const,
@@ -487,6 +488,7 @@ describe("processarTurno", () => {
       const conversation = await criarConversation({ bufferSeq: 1 });
       await prisma.whatsappMessage.createMany({
         data: Array.from({ length: 19 }, (_, i) => ({
+          companyId: conversation.companyId,
           conversationId: conversation.id,
           idExterno: `${PREFIXO}saida-abaixo-${i}-${crypto.randomUUID()}`,
           direcao: "SAIDA" as const,
@@ -508,6 +510,7 @@ describe("processarTurno", () => {
       const conversation = await criarConversation({ bufferSeq: 1 });
       await prisma.whatsappMessage.createMany({
         data: Array.from({ length: 25 }, (_, i) => ({
+          companyId: conversation.companyId,
           conversationId: conversation.id,
           idExterno: `${PREFIXO}saida-antiga-${i}-${crypto.randomUUID()}`,
           direcao: "SAIDA" as const,
@@ -600,12 +603,19 @@ describe("processarTurno", () => {
     });
 
     it("não responde quando o interruptor global está desligado", async () => {
+      // `BotConfig` deixou de ter id constante (Task 1 do Ciclo 1a — uma
+      // linha por empresa, `@@unique([companyId])`); `BOT_CONFIG_ID`
+      // ("bot-config") não é mais um id válido para buscar em runtime (mesmo
+      // raciocínio documentado em `src/modules/whatsapp/turno.ts`) — busca
+      // agora por `companyId`, empresa única do Ciclo 1a.
+      //
       // Captura o valor original em vez de assumir `true`: o interruptor é
       // uma feature editável pelo CRM nesta fatia -- restaurar um `true`
       // fixo religaria em silêncio um bot que alguém tivesse desligado de
       // propósito antes de rodar a suíte contra o banco de dev.
-      const original = await prisma.botConfig.findUniqueOrThrow({ where: { id: BOT_CONFIG_ID } });
-      await prisma.botConfig.update({ where: { id: BOT_CONFIG_ID }, data: { ativo: false } });
+      const companyId = await companyIdSemeada();
+      const original = await prisma.botConfig.findUniqueOrThrow({ where: { companyId } });
+      await prisma.botConfig.update({ where: { companyId }, data: { ativo: false } });
       try {
         const conversation = await criarConversation();
         await criarMensagemEntrada(conversation.id, { texto: "bom dia" });
@@ -614,7 +624,7 @@ describe("processarTurno", () => {
 
         expect(enviarTextoMock).not.toHaveBeenCalled();
       } finally {
-        await prisma.botConfig.update({ where: { id: BOT_CONFIG_ID }, data: { ativo: original.ativo } });
+        await prisma.botConfig.update({ where: { companyId }, data: { ativo: original.ativo } });
       }
     });
 
@@ -673,9 +683,10 @@ describe("processarTurno", () => {
     });
 
     it("monta o prompt a partir do banco, não de config/bot.ts", async () => {
-      const original = await prisma.botConfig.findUniqueOrThrow({ where: { id: BOT_CONFIG_ID } });
+      const companyId = await companyIdSemeada();
+      const original = await prisma.botConfig.findUniqueOrThrow({ where: { companyId } });
       await prisma.botConfig.update({
-        where: { id: BOT_CONFIG_ID },
+        where: { companyId },
         data: { personaNome: "Beatriz-do-teste" },
       });
 
@@ -697,7 +708,7 @@ describe("processarTurno", () => {
         expect(chamada.systemPrompt).not.toContain(`Você é ${botConfig.persona.nome},`);
       } finally {
         await prisma.botConfig.update({
-          where: { id: BOT_CONFIG_ID },
+          where: { companyId },
           data: { personaNome: original.personaNome },
         });
       }
@@ -720,8 +731,9 @@ describe("processarTurno", () => {
     });
 
     it("marca quando o interruptor global está desligado", async () => {
-      const original = await prisma.botConfig.findUniqueOrThrow({ where: { id: BOT_CONFIG_ID } });
-      await prisma.botConfig.update({ where: { id: BOT_CONFIG_ID }, data: { ativo: false } });
+      const companyId = await companyIdSemeada();
+      const original = await prisma.botConfig.findUniqueOrThrow({ where: { companyId } });
+      await prisma.botConfig.update({ where: { companyId }, data: { ativo: false } });
       try {
         const conversa = await criarConversation();
         await criarMensagemEntrada(conversa.id, { texto: "bom dia" });
@@ -731,7 +743,7 @@ describe("processarTurno", () => {
         expect(await aguardandoDe(conversa.id)).toBeInstanceOf(Date);
       } finally {
         await prisma.botConfig.update({
-          where: { id: BOT_CONFIG_ID },
+          where: { companyId },
           data: { ativo: original.ativo },
         });
       }
@@ -765,6 +777,7 @@ describe("processarTurno", () => {
       const conversa = await criarConversation({ bufferSeq: 1 });
       await prisma.whatsappMessage.createMany({
         data: Array.from({ length: 20 }, (_, i) => ({
+          companyId: conversa.companyId,
           conversationId: conversa.id,
           idExterno: `${PREFIXO}saida-teto-aguardando-${i}-${crypto.randomUUID()}`,
           direcao: "SAIDA" as const,

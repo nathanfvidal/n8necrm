@@ -94,8 +94,15 @@ async function limparDadosDeTeste(): Promise<void> {
 // NÃO prova que o problema não existe — só que não se manifestou desta vez.
 test.describe.configure({ mode: "serial" });
 
+// Empresa única do Ciclo 1a (mesma suposição de `prisma/seed.ts`) — lida uma
+// vez no `beforeAll` porque `Conversation`/`WhatsappMessage` agora exigem
+// `companyId`, e não há seletor de empresa nas sessões e2e deste arquivo.
+let empresaId = "";
+
 test.beforeAll(async () => {
   await limparDadosDeTeste();
+  const empresa = await prisma.company.findFirstOrThrow();
+  empresaId = empresa.id;
 });
 
 test.afterAll(async () => {
@@ -177,10 +184,16 @@ test.describe(() => {
     // compartilhado, aquela é uma cópia transitória dentro de `hidden`.)
     const nomeExibicao = `E2E Ciclo IA ${randomUUID().slice(0, 8)}`;
     const conversa = await prisma.conversation.create({
-      data: { waId: `${PREFIXO_WAID}${randomUUID()}`, telefone: "5511999990000", nomeExibicao },
+      data: {
+        companyId: empresaId,
+        waId: `${PREFIXO_WAID}${randomUUID()}`,
+        telefone: "5511999990000",
+        nomeExibicao,
+      },
     });
     await prisma.whatsappMessage.create({
       data: {
+        companyId: empresaId,
         conversationId: conversa.id,
         idExterno: `${PREFIXO_WAID}msg-${randomUUID()}`,
         direcao: "ENTRADA",
@@ -278,7 +291,7 @@ test("erro de sessão inválida chega à tela ao tentar pausar a IA", async ({ p
     },
   });
   const conversa = await prisma.conversation.create({
-    data: { waId: `${PREFIXO_WAID}${randomUUID()}`, telefone: "5511999990002" },
+    data: { companyId: empresaId, waId: `${PREFIXO_WAID}${randomUUID()}`, telefone: "5511999990002" },
   });
 
   await login(page, EMAIL_USUARIO_TESTE, SENHA_USUARIO_TESTE);
@@ -324,6 +337,7 @@ test("conversa aguardando humano aparece com o selo na lista", async ({ page }) 
   const nomeExibicao = `E2E Aguardando ${randomUUID().slice(0, 8)}`;
   await prisma.conversation.create({
     data: {
+      companyId: empresaId,
       waId: `${PREFIXO_WAID}${randomUUID()}`,
       telefone: "5511999990001",
       nomeExibicao,
@@ -383,6 +397,7 @@ test("conversa aguardando aparece antes de uma conversa comum na lista", async (
 
   await prisma.conversation.create({
     data: {
+      companyId: empresaId,
       waId: `${PREFIXO_WAID}${randomUUID()}`,
       telefone: "5511999990003",
       nomeExibicao: nomeAguardando,
@@ -391,6 +406,7 @@ test("conversa aguardando aparece antes de uma conversa comum na lista", async (
   });
   await prisma.conversation.create({
     data: {
+      companyId: empresaId,
       waId: `${PREFIXO_WAID}${randomUUID()}`,
       telefone: "5511999990004",
       nomeExibicao: nomeComum,

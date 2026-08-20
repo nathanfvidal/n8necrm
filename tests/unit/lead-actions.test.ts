@@ -89,6 +89,7 @@ function usuarioFake(overrides: Partial<User>): User {
 function leadFake(overrides: Partial<Lead> = {}): Lead {
   return {
     id: "lead-fake-id",
+    companyId: "empresa-fake-id",
     contactId: "contact-fake-id",
     itemId: null,
     stageId: "stage-fake-id",

@@ -170,10 +170,20 @@ describe("excluirEtapa", () => {
     const etapa = await novaEtapa("so arquivado");
     const admin = await prisma.user.findFirstOrThrow({ where: { papel: "ADMIN" } });
     const contato = await prisma.contact.create({
-      data: { nome: "Contato Teste Arquivado", telefone: `5511${Date.now()}`.slice(0, 13) },
+      data: {
+        companyId: etapa.companyId,
+        nome: "Contato Teste Arquivado",
+        telefone: `5511${Date.now()}`.slice(0, 13),
+      },
     });
     const lead = await prisma.lead.create({
-      data: { contactId: contato.id, stageId: etapa.id, canal: "MANUAL", arquivadoEm: new Date() },
+      data: {
+        companyId: etapa.companyId,
+        contactId: contato.id,
+        stageId: etapa.id,
+        canal: "MANUAL",
+        arquivadoEm: new Date(),
+      },
     });
 
     try {
@@ -193,10 +203,20 @@ describe("excluirEtapa", () => {
     const destino = await novaEtapa("destino");
     const admin = await prisma.user.findFirstOrThrow({ where: { papel: "ADMIN" } });
     const contato = await prisma.contact.create({
-      data: { nome: "Contato Teste Movido", telefone: `5511${Date.now()}`.slice(0, 13) },
+      data: {
+        companyId: origem.companyId,
+        nome: "Contato Teste Movido",
+        telefone: `5511${Date.now()}`.slice(0, 13),
+      },
     });
     const lead = await prisma.lead.create({
-      data: { contactId: contato.id, stageId: origem.id, canal: "MANUAL", arquivadoEm: new Date() },
+      data: {
+        companyId: origem.companyId,
+        contactId: contato.id,
+        stageId: origem.id,
+        canal: "MANUAL",
+        arquivadoEm: new Date(),
+      },
     });
 
     try {
@@ -223,10 +243,20 @@ describe("excluirEtapa", () => {
     const destino = await novaEtapa("auditoria destino");
     const admin = await prisma.user.findFirstOrThrow({ where: { papel: "ADMIN" } });
     const contato = await prisma.contact.create({
-      data: { nome: "Contato Teste Auditoria", telefone: `5511${Date.now()}`.slice(0, 13) },
+      data: {
+        companyId: origem.companyId,
+        nome: "Contato Teste Auditoria",
+        telefone: `5511${Date.now()}`.slice(0, 13),
+      },
     });
     const lead = await prisma.lead.create({
-      data: { contactId: contato.id, stageId: origem.id, canal: "MANUAL", arquivadoEm: new Date() },
+      data: {
+        companyId: origem.companyId,
+        contactId: contato.id,
+        stageId: origem.id,
+        canal: "MANUAL",
+        arquivadoEm: new Date(),
+      },
     });
 
     try {

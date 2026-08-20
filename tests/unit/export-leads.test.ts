@@ -78,6 +78,7 @@ function usuarioFake(overrides: Partial<User>): User {
 
 const etapaFake: PipelineStage = {
   id: "stage-1",
+  companyId: "empresa-fake-id",
   nome: "Novo",
   ordem: 0,
   cor: "#000000",
@@ -88,6 +89,7 @@ const etapaFake: PipelineStage = {
 function contactFake(overrides: Partial<Contact> = {}): Contact {
   return {
     id: "contact-1",
+    companyId: "empresa-fake-id",
     nome: "Nome Qualquer",
     telefone: "11999990000",
     email: null,
@@ -118,6 +120,7 @@ type LeadFake = Lead & {
 function leadFake(overrides: Partial<LeadFake> = {}): LeadFake {
   return {
     id: "lead-1",
+    companyId: "empresa-fake-id",
     contactId: "contact-1",
     itemId: null,
     stageId: "stage-1",
