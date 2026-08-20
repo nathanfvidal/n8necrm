@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   LayoutDashboard, Target, Columns3, Users, ListChecks, MessageSquare, UserCog,
-  SlidersHorizontal, Workflow,
+  SlidersHorizontal, Workflow, Settings,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -12,7 +12,7 @@ import { IndicadorDeLink } from "@/components/indicador-de-link";
 
 export type IconeDoPainel =
   | "dashboard" | "leads" | "funil" | "contatos" | "tarefas" | "conversas" | "equipe" | "etapas"
-  | "fluxos";
+  | "fluxos" | "configuracoes";
 
 export type LinkDoPainel = { href: string; label: string; icone: IconeDoPainel };
 
@@ -33,6 +33,7 @@ const ICONES: Record<IconeDoPainel, LucideIcon> = {
   equipe: UserCog,
   etapas: SlidersHorizontal,
   fluxos: Workflow,
+  configuracoes: Settings,
 };
 
 /**

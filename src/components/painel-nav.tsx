@@ -75,6 +75,22 @@ export function PainelNav({
     ...(modulosAtivos.includes("automation") && papelUsuario && hasPermission(papelUsuario, "ver_fluxos")
       ? [{ href: "/fluxos", label: "Fluxos", icone: "fluxos" as const }]
       : []),
+    // Aponta para `/configuracoes` (que redireciona para a primeira seção), e
+    // não direto para `/configuracoes/conexoes`: assim o item de menu não
+    // precisa mudar quando houver uma segunda seção.
+    //
+    // A condição é `gerenciar_conexoes` porque hoje ela é a permissão da ÚNICA
+    // seção. Quando a segunda existir com outra permissão, isto vira um OU —
+    // está escrito para não parecer esquecimento. Esconder o link nunca é o
+    // gate de verdade (a página e as actions são), só evita ruído no menu.
+    //
+    // Sem portão de MÓDULO, ao contrário de "Fluxos" e "Conversas": conexão de
+    // canal é administração do núcleo, e uma empresa precisa poder cadastrar a
+    // credencial ANTES de o módulo `whatsapp` estar ligado — exigir o módulo
+    // aqui esconderia a tela justamente de quem vai ligá-lo.
+    ...(papelUsuario && hasPermission(papelUsuario, "gerenciar_conexoes")
+      ? [{ href: "/configuracoes", label: "Configurações", icone: "configuracoes" as const }]
+      : []),
   ];
 
   const grupos = [GRUPO_TRABALHO, grupoExtra];

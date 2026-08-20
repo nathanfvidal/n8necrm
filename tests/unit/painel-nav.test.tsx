@@ -89,6 +89,35 @@ describe("PainelNav", () => {
     expect(screen.queryByRole("link", { name: "Equipe" })).toBeNull();
   });
 
+  // "Configurações" (/configuracoes) é filtrado por PAPEL, como "Equipe":
+  // administração é núcleo, existe em todo fork. Esconder o link não é a
+  // defesa — a página redireciona e cada Server Action checa a permissão —
+  // mas mostrar a um VENDEDOR um link que só leva a um redirecionamento é
+  // ruído.
+  it("mostra Configurações para ADMIN", () => {
+    montar({ papelUsuario: "ADMIN" });
+    expect(screen.getByRole("link", { name: "Configurações" })).toBeTruthy();
+  });
+
+  it("não mostra Configurações para GESTOR nem VENDEDOR", () => {
+    montar({ papelUsuario: "GESTOR" });
+    expect(screen.queryByRole("link", { name: "Configurações" })).toBeNull();
+    cleanup();
+
+    montar({ papelUsuario: "VENDEDOR" });
+    expect(screen.queryByRole("link", { name: "Configurações" })).toBeNull();
+  });
+
+  it("aponta para `/configuracoes`, não para a seção — a URL do menu é estável", () => {
+    // Direto em `/configuracoes/conexoes`, o item de menu teria de mudar no
+    // dia da segunda seção. `/configuracoes` redireciona para a primeira que a
+    // pessoa pode ver.
+    montar({ papelUsuario: "ADMIN" });
+    expect(screen.getByRole("link", { name: "Configurações" }).getAttribute("href")).toBe(
+      "/configuracoes"
+    );
+  });
+
   it("omite Equipe quando o papel não é informado — padrão seguro", () => {
     montar();
     expect(screen.queryByRole("link", { name: "Equipe" })).toBeNull();
