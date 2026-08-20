@@ -1,8 +1,9 @@
 import "server-only";
 
 import { prisma } from "@/lib/prisma";
+import { companyIdDoUsuario } from "@/core/users/empresa";
 
-import { BOT_CONFIG_ID, botConfig } from "../../../config/bot";
+import { botConfig } from "../../../config/bot";
 import { whatsappGateway } from "./gateway";
 import { limparAguardandoHumano } from "./notificacoes";
 
@@ -30,16 +31,31 @@ export async function religarIa(conversationId: string): Promise<void> {
   });
 }
 
-export async function lerConfigBot() {
-  return prisma.botConfig.findUniqueOrThrow({ where: { id: BOT_CONFIG_ID } });
+/**
+ * `BotConfig` deixou de ter id constante (Task 1 do Ciclo 1a — uma linha por
+ * empresa, `@@unique([companyId])`); `where: { id: "bot-config" }` continuava
+ * COMPILANDO e passava a devolver `null` sempre — o bug que o compilador não
+ * pega (ver `config/bot.ts`). Estas três funções não recebem `Conversation`
+ * nem qualquer outro registro já escopado por empresa: `lerConfigBot` é
+ * chamada de Server Components (`(painel)/conversas/[id]/page.tsx`,
+ * `(painel)/conversas/agente/page.tsx`) que já têm `usuarioAtualOuLogin()` em
+ * mãos, então ganha um parâmetro novo (`usuarioId`) — os dois chamadores já
+ * tinham exatamente esse valor. `companyIdDoUsuario` é a ponte até a Task 2
+ * (`usuarioAtual()`) devolver `companyId` direto; ver o comentário do helper.
+ */
+export async function lerConfigBot(usuarioId: string) {
+  const companyId = await companyIdDoUsuario(usuarioId);
+  return prisma.botConfig.findUniqueOrThrow({ where: { companyId } });
 }
 
 export async function salvarConfigBot(
   dados: { ativo: boolean; personaNome: string; personaPapel: string; regras: string[]; faq: string },
   usuarioId: string
 ) {
+  // Já recebia `usuarioId` — nenhuma mudança de assinatura aqui.
+  const companyId = await companyIdDoUsuario(usuarioId);
   return prisma.botConfig.update({
-    where: { id: BOT_CONFIG_ID },
+    where: { companyId },
     data: { ...dados, atualizadoPorId: usuarioId },
   });
 }
@@ -59,8 +75,9 @@ export async function salvarConfigBot(
  * `tests/unit/agente-actions.test.ts`.
  */
 export async function restaurarConfigPadrao(usuarioId: string) {
+  const companyId = await companyIdDoUsuario(usuarioId);
   return prisma.botConfig.update({
-    where: { id: BOT_CONFIG_ID },
+    where: { companyId },
     data: {
       personaNome: botConfig.persona.nome,
       personaPapel: botConfig.persona.papel,
@@ -129,7 +146,7 @@ export async function responderComoHumano(
 
   const conversa = await prisma.conversation.findUniqueOrThrow({
     where: { id: conversationId },
-    select: { waId: true },
+    select: { waId: true, companyId: true },
   });
 
   // 1. Pausa primeiro — mesmo que tudo depois falhe, a IA fica calada.
@@ -154,8 +171,11 @@ export async function responderComoHumano(
   // pausa→envia→grava não elimina, só limita. `idExterno` (id do gateway,
   // não dado pessoal) fica no log para permitir reconciliação manual.
   try {
+    // `WhatsappMessage.companyId` é `NOT NULL` desde a Task 1. `conversa` já
+    // está em mãos (`select` acima) — origem preferida, sem consulta extra.
     await prisma.whatsappMessage.create({
       data: {
+        companyId: conversa.companyId,
         conversationId,
         idExterno: envio.idExterno,
         direcao: "SAIDA",

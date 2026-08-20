@@ -78,6 +78,7 @@ export async function notificarNovoLead(leadId: string): Promise<void> {
     // vira vazamento no dia em que alguém passa o objeto um nível adiante.
     select: {
       id: true,
+      companyId: true,
       contact: { select: { nome: true } },
       stage: { select: { nome: true } },
       responsavel: { select: { id: true, email: true } },
@@ -97,8 +98,12 @@ export async function notificarNovoLead(leadId: string): Promise<void> {
     contatoNome: lead.contact?.nome ?? "Sem contato identificado",
   };
 
+  // `Notification.companyId` é `NOT NULL` desde a Task 1 do Ciclo 1a. `lead`
+  // já está em mãos (`select` acima) — é a origem preferida das três (registro
+  // já carregado), sem consulta extra nenhuma.
   await prisma.notification.create({
     data: {
+      companyId: lead.companyId,
       userId: lead.responsavel.id,
       tipo: "NOVO_LEAD",
       payload,

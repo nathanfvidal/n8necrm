@@ -9,6 +9,7 @@ import "server-only";
 
 import { prisma } from "@/lib/prisma";
 import { registrarAuditoria } from "@/core/audit/log";
+import { companyIdDoUsuario } from "@/core/users/empresa";
 import { validarCamposNovosDaTarefa } from "./schema";
 import type { Task } from "@prisma/client";
 
@@ -88,8 +89,16 @@ export async function criarTask(input: {
     await exigirContatoExistente(contactId);
   }
 
+  // `Task.companyId` é `NOT NULL` desde a Task 1 do Ciclo 1a. `criarTask`,
+  // ao contrário de `criarLead`/`criarEtapa`, não recebe `autorId` (tarefa é
+  // lembrete pessoal, não audita a criação — ver o comentário de
+  // `concluirTask` abaixo sobre essa distinção). O parâmetro disponível é
+  // `responsavelId` — dono da tarefa — e é ele quem define a empresa.
+  const companyId = await companyIdDoUsuario(input.responsavelId);
+
   return prisma.task.create({
     data: {
+      companyId,
       titulo,
       descricao: descricao || undefined,
       vencimento: input.vencimento,

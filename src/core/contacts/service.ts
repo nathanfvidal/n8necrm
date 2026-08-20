@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { registrarAuditoria } from "@/core/audit/log";
 import { normalizarTelefone } from "@/core/leads/dedupe";
+import { companyIdDoUsuario } from "@/core/users/empresa";
 import { camposCadastraisSchema, type CamposCadastrais } from "./schema";
 import type { Contact } from "@prisma/client";
 
@@ -183,9 +184,16 @@ export async function criarContato(
   const email = validarEmail(dados.email);
   const cadastrais = validarCadastrais(dados);
 
+  // `Contact.companyId` é `NOT NULL` desde a Task 1 do Ciclo 1a. Este contato
+  // está NASCENDO agora (não há registro prévio de onde ler a empresa), e a
+  // função já recebe `autorId` explícito — a origem é o vínculo de quem está
+  // cadastrando. Ver `core/users/empresa.ts` para por que isto não é "buscar
+  // a única empresa do banco".
+  const companyId = await companyIdDoUsuario(autorId);
+
   let criado: Contact;
   try {
-    criado = await prisma.contact.create({ data: { nome, telefone, email, ...cadastrais } });
+    criado = await prisma.contact.create({ data: { companyId, nome, telefone, email, ...cadastrais } });
   } catch (erro) {
     // Deixamos o banco decidir em vez de consultar antes: entre a consulta e a
     // escrita cabe outra criação com o mesmo telefone. Mesmo raciocínio de

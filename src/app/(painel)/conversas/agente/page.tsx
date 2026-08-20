@@ -33,7 +33,7 @@ export default async function AgentePage() {
     redirect("/conversas");
   }
 
-  const config = await lerConfigBot();
+  const config = await lerConfigBot(usuario.id);
 
   return (
     <div className="space-y-6 p-6">

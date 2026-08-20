@@ -3,6 +3,7 @@ import "server-only";
 import { prisma } from "@/lib/prisma";
 import { gravarLinhaDeAuditoria, registrarAuditoria } from "@/core/audit/log";
 import { avaliarAtividadeSuspeita } from "@/core/audit/alerta";
+import { companyIdDoUsuario } from "@/core/users/empresa";
 import { etapaSchema } from "./schema";
 import type { PipelineStage, Prisma } from "@prisma/client";
 
@@ -61,8 +62,14 @@ export async function criarEtapa(input: {
   // deixa 0,1,3,4) e isso é correto — por isso `max + 1`, e não `count()`.
   const maior = await prisma.pipelineStage.aggregate({ _max: { ordem: true } });
 
+  // `PipelineStage.companyId` é `NOT NULL` desde a Task 1 do Ciclo 1a. A
+  // etapa está nascendo agora, sem registro prévio — a origem é o vínculo de
+  // quem está criando (ver `core/users/empresa.ts`).
+  const companyId = await companyIdDoUsuario(input.autorId);
+
   const etapa = await prisma.pipelineStage.create({
     data: {
+      companyId,
       nome: campos.nome,
       cor: campos.cor,
       ordem: (maior._max.ordem ?? -1) + 1,

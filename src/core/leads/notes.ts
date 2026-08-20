@@ -77,8 +77,20 @@ export async function adicionarNota(input: {
     );
   }
 
+  // `LeadNote.companyId` é `NOT NULL` desde a Task 1 do Ciclo 1a. A origem
+  // certa é a empresa do PRÓPRIO LEAD (registro em mãos, buscado aqui pela
+  // FK que a nota já ia gravar) — não a do autor: uma nota vive num lead, e é
+  // o lead que decide a empresa, igual a qualquer outro campo da nota.
+  // `findUniqueOrThrow` também melhora um efeito colateral que não existia
+  // antes: um `leadId` inválido virava violação de FK crua do Postgres
+  // (`P2003`) direto do `create` abaixo; agora falha aqui, cedo.
+  const lead = await prisma.lead.findUniqueOrThrow({
+    where: { id: input.leadId },
+    select: { companyId: true },
+  });
+
   return prisma.leadNote.create({
-    data: { leadId: input.leadId, autorId: input.autorId, texto },
+    data: { companyId: lead.companyId, leadId: input.leadId, autorId: input.autorId, texto },
   });
 }
 

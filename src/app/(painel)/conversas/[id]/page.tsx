@@ -44,7 +44,7 @@ export default async function ConversaDetalhePage({
 
   // Revisão final, achado I1: `ConversaEstadoIa` precisa do interruptor
   // GLOBAL, não só do estado desta conversa — ver o comentário no componente.
-  const configBot = await lerConfigBot();
+  const configBot = await lerConfigBot(usuario.id);
 
   return (
     <div className="space-y-6 p-6">

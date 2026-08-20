@@ -3,6 +3,7 @@ import "server-only";
 import { prisma } from "@/lib/prisma";
 import { checarRateLimit } from "@/core/rate-limit/limiter";
 import { idsDeSistema } from "@/core/users/sistema";
+import { companyIdDoUsuario } from "@/core/users/empresa";
 import {
   TIPO_ALERTA_ATIVIDADE,
   type AlertaAtividadePayload,
@@ -182,8 +183,18 @@ export async function avaliarAtividadeSuspeita(input: {
     janelaMinutos: Math.round(JANELA_ALERTA_MS / 60_000),
   };
 
+  // `Notification.companyId` é `NOT NULL` desde a Task 1 do Ciclo 1a. O
+  // alerta é sobre uma rajada de AÇÕES DE `input.userId` — a empresa dele é a
+  // origem certa (mesma lógica de `gravarLinhaDeAuditoria`, `core/audit/log.ts`,
+  // que resolve `AuditLog.companyId` da mesma forma para o mesmo autor). Os
+  // destinatários (ADMINs) ainda não são filtrados por empresa aqui — isso é
+  // isolamento de LEITURA (o `findMany` de ADMINs acima continua global), que
+  // é trabalho da Task 3/4 deste ciclo, não desta tarefa de reparo.
+  const companyId = await companyIdDoUsuario(input.userId);
+
   await prisma.notification.createMany({
     data: destinatarios.map((destinatario) => ({
+      companyId,
       userId: destinatario.id,
       tipo: TIPO_ALERTA_ATIVIDADE,
       payload,

@@ -1,6 +1,7 @@
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { avaliarAtividadeSuspeita } from "./alerta";
+import { companyIdDoUsuario } from "@/core/users/empresa";
 
 /**
  * Registra uma entrada no audit log: quem fez o quê, em qual entidade, com
@@ -55,8 +56,21 @@ export async function gravarLinhaDeAuditoria(
   params: ParamsDeAuditoria,
   cliente: Prisma.TransactionClient = prisma
 ): Promise<void> {
+  // `AuditLog.companyId` é `NOT NULL` desde a Task 1 do Ciclo 1a, e
+  // `ParamsDeAuditoria` NÃO ganhou um campo `companyId` — isso cascataria
+  // para os 25 pontos que chamam `registrarAuditoria`/`gravarLinhaDeAuditoria`
+  // hoje (8 arquivos, só 5 dentro do escopo desta tarefa de reparo), incluindo
+  // `core/users/service.ts` (audita `User`, que não tem `companyId` — só
+  // `Membership`) e `modules/automation/actions.ts` (audita workflow do n8n,
+  // que não é uma entidade deste schema). Resolver a empresa a partir de quem
+  // AGIU (`params.userId`, já obrigatório em todo `ParamsDeAuditoria`) via
+  // `companyIdDoUsuario` evita essa cascata inteira — ver o comentário do
+  // helper para por que isto não é "buscar a única empresa do banco".
+  const companyId = await companyIdDoUsuario(params.userId, cliente);
+
   await cliente.auditLog.create({
     data: {
+      companyId,
       userId: params.userId,
       acao: params.acao,
       entidade: params.entidade,

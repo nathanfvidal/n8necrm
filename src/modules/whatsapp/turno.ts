@@ -2,7 +2,6 @@ import "server-only";
 
 import { DuplicateMessageError } from "@vercel/queue";
 
-import { BOT_CONFIG_ID } from "../../../config/bot";
 import { prisma } from "@/lib/prisma";
 
 import { publicarTurno, type TurnoJob } from "./fila";
@@ -194,10 +193,21 @@ async function processarMensagensPendentes(conversationId: string, meuToken: Dat
   // Mesmo tratamento que o teto de respostas por hora logo abaixo: as
   // pendentes são marcadas como processadas SEM resposta ("persiste mas para
   // de responder", nunca "descarta calado").
-  const configBot = await prisma.botConfig.findUniqueOrThrow({ where: { id: BOT_CONFIG_ID } });
+  //
+  // `conversaAtual` vem ANTES de `configBot`, e não por acaso: `BotConfig`
+  // deixou de ter id constante (Task 1 do Ciclo 1a — uma linha por empresa,
+  // `@@unique([companyId])`) e `BOT_CONFIG_ID` ("bot-config") não é mais um id
+  // válido para buscar em runtime — `findUnique({ where: { id: BOT_CONFIG_ID
+  // } })` continuava COMPILANDO e passava a devolver `null` sempre, o tipo de
+  // bug que o compilador não pega (ver `config/bot.ts`). A `Conversation` já
+  // está em mãos aqui — é a origem da empresa, e a busca de `BotConfig` passa
+  // a ser por `companyId`.
   const conversaAtual = await prisma.conversation.findUniqueOrThrow({
     where: { id: conversationId },
-    select: { iaAtiva: true },
+    select: { iaAtiva: true, companyId: true },
+  });
+  const configBot = await prisma.botConfig.findUniqueOrThrow({
+    where: { companyId: conversaAtual.companyId },
   });
 
   if (!configBot.ativo || !conversaAtual.iaAtiva) {
@@ -312,8 +322,12 @@ async function processarMensagensPendentes(conversationId: string, meuToken: Dat
   let pendentesMarcadas = false;
   for (const texto of respostas) {
     const envio = await whatsappGateway.enviarTexto(conversation.waId, texto);
+    // `WhatsappMessage.companyId` é `NOT NULL` desde a Task 1. `conversation`
+    // já está em mãos, linha inteira (sem `select` no fetch acima) — usa o
+    // `companyId` dela, sem sessão nenhuma envolvida.
     await prisma.whatsappMessage.create({
       data: {
+        companyId: conversation.companyId,
         conversationId,
         idExterno: envio.idExterno,
         direcao: "SAIDA",

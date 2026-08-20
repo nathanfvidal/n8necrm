@@ -78,8 +78,12 @@ export async function marcarAguardandoHumano(conversationId: string): Promise<bo
   const ativos = await prisma.user.findMany({ where: { ativo: true }, select: { id: true } });
   if (ativos.length === 0) return true;
 
+  // `Notification.companyId` é `NOT NULL` desde a Task 1 do Ciclo 1a. `conversa`
+  // já está em mãos (buscada acima, sem `select`, então `companyId` já veio
+  // junto) — origem preferida das três, sem consulta extra.
   await prisma.notification.createMany({
     data: ativos.map((usuario) => ({
+      companyId: conversa.companyId,
       userId: usuario.id,
       tipo: TIPO_CONVERSA_AGUARDANDO,
       payload,

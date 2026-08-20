@@ -161,6 +161,16 @@ export async function encontrarOuCriarContact(dados: {
   nome: string;
   telefone: string;
   email?: string;
+  /**
+   * `Contact.companyId` é `NOT NULL` desde a Task 1 do Ciclo 1a. Parâmetro
+   * novo, e não uma resolução própria aqui dentro: os dois chamadores
+   * (`criarLead`/`criarLeadDeWhatsapp`, `core/leads/service.ts`) já resolvem
+   * a empresa do autor para o PRÓPRIO `Lead` que estão criando — pedir de
+   * novo aqui seria uma segunda consulta para chegar no mesmo valor, e um
+   * contato deduplicado dentro da criação de um lead pertence à empresa
+   * DAQUELE lead, não a uma nova derivação independente.
+   */
+  companyId: string;
 }): Promise<Contact> {
   const telefone = normalizarTelefone(dados.telefone);
 
@@ -169,7 +179,7 @@ export async function encontrarOuCriarContact(dados: {
 
   try {
     return await prisma.contact.create({
-      data: { nome: dados.nome, telefone, email: dados.email },
+      data: { companyId: dados.companyId, nome: dados.nome, telefone, email: dados.email },
     });
   } catch (erro) {
     if (erro instanceof Prisma.PrismaClientKnownRequestError && erro.code === "P2002") {

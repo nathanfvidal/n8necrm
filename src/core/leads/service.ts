@@ -2,6 +2,7 @@ import { prisma } from "@/lib/prisma";
 import { encontrarOuCriarContact } from "./dedupe";
 import { registrarAuditoria } from "@/core/audit/log";
 import { notificarNovoLead } from "@/core/notifications/dispatch";
+import { companyIdDoUsuario } from "@/core/users/empresa";
 import { parseValorBR } from "@/lib/dinheiro";
 import type { Lead } from "@prisma/client";
 
@@ -77,16 +78,25 @@ export async function criarLead(input: {
     );
   }
 
+  // `Lead.companyId` é `NOT NULL` desde a Task 1 do Ciclo 1a. O lead está
+  // NASCENDO agora, e a função já recebe `autorId` explícito — a origem é o
+  // vínculo de quem está cadastrando (ver `core/users/empresa.ts`). O mesmo
+  // valor é reaproveitado para o contato deduplicado abaixo: o contato criado
+  // (ou reaproveitado) nesta operação pertence à empresa DESTE lead.
+  const companyId = await companyIdDoUsuario(input.autorId);
+
   const contact = await encontrarOuCriarContact({
     nome: input.nome,
     telefone: input.telefone,
     email: input.email,
+    companyId,
   });
 
   const primeiraEtapa = await prisma.pipelineStage.findFirstOrThrow({ orderBy: { ordem: "asc" } });
 
   const lead = await prisma.lead.create({
     data: {
+      companyId,
       contactId: contact.id,
       stageId: primeiraEtapa.id,
       responsavelId: input.responsavelId,
@@ -375,12 +385,21 @@ export async function criarLeadDeWhatsapp(input: {
     );
   }
 
-  const contact = await encontrarOuCriarContact({ nome: input.nome, telefone: input.telefone });
+  // Mesmo raciocínio de `criarLead` acima: lead nascendo agora, sem registro
+  // prévio de onde ler a empresa — a origem é o vínculo do autor.
+  const companyId = await companyIdDoUsuario(input.autorId);
+
+  const contact = await encontrarOuCriarContact({
+    nome: input.nome,
+    telefone: input.telefone,
+    companyId,
+  });
 
   const primeiraEtapa = await prisma.pipelineStage.findFirstOrThrow({ orderBy: { ordem: "asc" } });
 
   const lead = await prisma.lead.create({
     data: {
+      companyId,
       contactId: contact.id,
       stageId: primeiraEtapa.id,
       responsavelId: input.responsavelId,
