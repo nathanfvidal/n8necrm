@@ -1,7 +1,7 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
 
-import { exigirModulo } from "@/lib/module-gate";
+import { exigirModulo } from "@/core/config/modulos";
 import { usuarioAtualOuLogin } from "@/core/auth/session";
 import { hasPermission } from "@/core/auth/permissions";
 import { buscarConversaComMensagens } from "@/modules/whatsapp/queries";
@@ -25,8 +25,6 @@ export default async function ConversaDetalhePage({
 }: {
   params: Promise<{ id: string }>;
 }) {
-  exigirModulo("whatsapp");
-
   const { id } = await params;
   // `usuarioAtual()` aqui não repete a checagem de sessão de `(painel)/layout.tsx`
   // (que já garante sessão válida antes de qualquer página deste route group
@@ -36,6 +34,13 @@ export default async function ConversaDetalhePage({
   // pra cá em `/conversas/agente/page.tsx` — beco sem saída, não falha de
   // segurança, mas sem motivo para expor o link a quem não pode usá-lo).
   const usuario = await usuarioAtualOuLogin();
+  // Depois da sessao, nao antes: o portao passou a perguntar de QUAL empresa e
+  // a pergunta (Ciclo 1c). Efeito colateral desejado -- visitante sem sessao
+  // agora e mandado para /login em vez de receber 404, e deixa de conseguir
+  // observar quais modulos a empresa tem pela diferenca entre as duas
+  // respostas.
+  await exigirModulo(usuario.companyId, "whatsapp");
+
   const conversa = await buscarConversaComMensagens(usuario.companyId, id);
 
   if (!conversa) {

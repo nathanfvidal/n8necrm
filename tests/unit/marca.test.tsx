@@ -1,47 +1,28 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
 import { render, screen, cleanup } from "@testing-library/react";
 
-const mocks = vi.hoisted(() => ({
-  marca: { nome: "AutoCenter", corPrimaria: "#0F62FE", fonte: "Geist" } as {
-    nome: string;
-    corPrimaria: string;
-    fonte: string;
-    logo?: { claro: string; escuro: string };
-  },
-}));
-
-vi.mock("../../config/client", () => ({
-  client: {
-    get nome() {
-      return mocks.marca.nome;
-    },
-    get marca() {
-      return mocks.marca;
-    },
-  },
-}));
-
+// `config/client` NÃO é mais mockado: desde o Ciclo 1c `Marca` recebe `nome` e
+// `logo` por PROP, vindos do banco por empresa (`core/config/schema.ts`). Cada
+// caso declara na própria linha o que está sendo renderizado, em vez de mexer
+// num objeto mutável compartilhado pelo arquivo.
 import { Marca } from "@/components/marca";
 
 afterEach(() => {
   cleanup();
-  mocks.marca = { nome: "AutoCenter", corPrimaria: "#0F62FE", fonte: "Geist" };
 });
 
 describe("Marca", () => {
   it("sem logo, mostra o nome do cliente em texto", () => {
-    render(<Marca />);
+    render(<Marca nome="AutoCenter" />);
     expect(screen.getByText("AutoCenter")).toBeTruthy();
     expect(screen.queryByRole("img")).toBeNull();
   });
 
   it("com logo, monta as duas artes e deixa o CSS escolher", () => {
-    mocks.marca = {
-      ...mocks.marca,
-      logo: { claro: "/logo-preto.svg", escuro: "/logo-branco.svg" },
-    };
-    const { container } = render(<Marca />);
+    const { container } = render(
+      <Marca nome="AutoCenter" logo={{ claro: "/logo-preto.svg", escuro: "/logo-branco.svg" }} />
+    );
 
     // As DUAS ficam no DOM: quem esconde uma é a variante `dark:` do
     // Tailwind, que roda junto com o resto do tema. Trocar `src` por
@@ -61,11 +42,9 @@ describe("Marca", () => {
   });
 
   it("com logo, a arte fica sozinha e carrega o nome no alt", () => {
-    mocks.marca = {
-      ...mocks.marca,
-      logo: { claro: "/logo-preto.svg", escuro: "/logo-branco.svg" },
-    };
-    const { container } = render(<Marca />);
+    const { container } = render(
+      <Marca nome="AutoCenter" logo={{ claro: "/logo-preto.svg", escuro: "/logo-branco.svg" }} />
+    );
 
     // A barra mostra a marca DO CLIENTE, sem o nome repetido em texto ao
     // lado. Como a arte fica sozinha, ela é a única identificação: `alt`

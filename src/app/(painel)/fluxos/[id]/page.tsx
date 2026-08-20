@@ -9,7 +9,7 @@ import { EmptyState } from "@/components/empty-state";
 import { Button } from "@/components/ui/button";
 import { hasPermission } from "@/core/auth/permissions";
 import { usuarioAtualOuLogin } from "@/core/auth/session";
-import { exigirModulo } from "@/lib/module-gate";
+import { exigirModulo } from "@/core/config/modulos";
 import { clienteN8n, ErroN8n, urlBaseN8n } from "@/modules/automation/n8n";
 
 export default async function FluxoDetalhePage({
@@ -19,11 +19,11 @@ export default async function FluxoDetalhePage({
   params: Promise<{ id: string }>;
   searchParams: Promise<{ aba?: string }>;
 }) {
-  exigirModulo("automation");
-
   const { id } = await params;
   const { aba } = await searchParams;
   const usuario = await usuarioAtualOuLogin();
+  // Mesma ordem da lista (`fluxos/page.tsx`): sessao, modulo, permissao.
+  await exigirModulo(usuario.companyId, "automation");
 
   // Mesmo gate de `ver_fluxos` da lista (`src/app/(painel)/fluxos/page.tsx`):
   // ADMIN e GESTOR, não `gerenciar_fluxos`. `notFound()` e não `redirect()`

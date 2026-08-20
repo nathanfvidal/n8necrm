@@ -39,6 +39,24 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: pushMock }),
 }));
 
+// `exigirModulo` passou a ler o banco no Ciclo 1c (`CompanyConfig.modulos`).
+// Este arquivo testa o gate de PERMISSAO, nao o de modulo -- o de modulo tem
+// arquivo proprio (`config-modulos.test.ts`). Mockar aqui mantem os dois
+// separados: sem isto, um modulo desligado faria estes casos falharem com
+// `notFound` pelo motivo errado.
+//
+// O mock e `vi.fn()` NOMEADO, e nao um `async () => {}` anonimo, de proposito:
+// os casos abaixo afirmam COM QUE `companyId` ele foi chamado. Um mock que so
+// engole a chamada deixaria passar exatamente o defeito que este ciclo caca --
+// a fixture de sessao sem `companyId`, repassando `undefined` para o portao e
+// ficando verde. `User` do Prisma nao tem `companyId`; quem tem e
+// `UsuarioAtivo` (`core/auth/usuario-ativo.ts`), e e ele que
+// `usuarioAtualOuLogin()` devolve.
+const exigirModuloMock = vi.fn<(companyId: string, nome: string) => Promise<void>>(async () => {});
+vi.mock("@/core/config/modulos", () => ({
+  exigirModulo: (companyId: string, nome: string) => exigirModuloMock(companyId, nome),
+}));
+
 const usuarioAtualOuLoginMock = vi.fn();
 vi.mock("@/core/auth/session", () => ({ usuarioAtualOuLogin: () => usuarioAtualOuLoginMock() }));
 
@@ -71,9 +89,15 @@ vi.mock("@/modules/automation/n8n", () => ({
 const { default: FluxosPage } = await import("../../src/app/(painel)/fluxos/page");
 const { default: FluxoDetalhePage } = await import("../../src/app/(painel)/fluxos/[id]/page");
 
-const ADMIN = { papel: "ADMIN" } as const;
-const GESTOR = { papel: "GESTOR" } as const;
-const VENDEDOR = { papel: "VENDEDOR" } as const;
+// `companyId` entrou nas tres fixturas no Ciclo 1c, e nao e enfeite: as duas
+// paginas passaram a fazer `exigirModulo(usuario.companyId, "automation")`.
+// Sem o campo, o portao receberia `undefined` e os casos continuariam verdes
+// -- o modo de falha que este arquivo agora afirma contra, no caso
+// "o portao de modulo recebe o companyId DA SESSAO".
+const EMPRESA = "cmp_fluxos";
+const ADMIN = { papel: "ADMIN", companyId: EMPRESA } as const;
+const GESTOR = { papel: "GESTOR", companyId: EMPRESA } as const;
+const VENDEDOR = { papel: "VENDEDOR", companyId: EMPRESA } as const;
 
 const FLUXO_MOCK = {
   id: "wf-1",
@@ -101,6 +125,14 @@ describe("FluxosPage (lista) — gate de ver_fluxos e de gerenciar_fluxos", () =
 
     expect(notFoundMock).toHaveBeenCalledTimes(1);
     expect(listarFluxosMock).not.toHaveBeenCalled();
+  });
+
+  it("o portao de modulo recebe o companyId DA SESSAO, nao undefined", async () => {
+    usuarioAtualOuLoginMock.mockResolvedValue(ADMIN);
+
+    await FluxosPage();
+
+    expect(exigirModuloMock).toHaveBeenCalledWith(EMPRESA, "automation");
   });
 
   it("GESTOR: renderiza a lista, mas podeGerenciar e falso — sem a coluna \"Ações\"", async () => {
@@ -142,6 +174,14 @@ describe("FluxoDetalhePage (detalhe) — mesmo gate de ver_fluxos e de gerenciar
 
     expect(notFoundMock).toHaveBeenCalledTimes(1);
     expect(clienteMock.buscarWorkflow).not.toHaveBeenCalled();
+  });
+
+  it("o portao de modulo recebe o companyId DA SESSAO, nao undefined", async () => {
+    usuarioAtualOuLoginMock.mockResolvedValue(ADMIN);
+
+    await FluxoDetalhePage({ params, searchParams });
+
+    expect(exigirModuloMock).toHaveBeenCalledWith(EMPRESA, "automation");
   });
 
   it("GESTOR: renderiza o detalhe, mas sem o botão \"Apagar fluxo\" (podeGerenciar falso)", async () => {

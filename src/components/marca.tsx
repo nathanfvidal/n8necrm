@@ -1,20 +1,23 @@
-import { client } from "../../config/client";
-
 /**
  * A marca do cliente no topo da barra lateral.
  *
  * Dois caminhos, e o de texto é o NORMAL enquanto não houver arquivo de logo
  * — não é remendo. `marca.logo` é opcional no schema justamente por isso.
  *
+ * Recebe `nome` e `logo` por PROP desde o Ciclo 1c: os dois passaram a vir do
+ * banco, por empresa (`Company.nome` e `CompanyConfig.logoClaro/logoEscuro`,
+ * com `config/client.ts` como padrão — ver `core/config/schema.ts`). Importar o
+ * config aqui dentro voltaria a amarrar a barra lateral a um arquivo de build e
+ * faria este componente impossível de renderizar com a marca de uma empresa que
+ * não seja a do arquivo.
+ *
  * Sem `next/image`: SVG não se beneficia do otimizador. Sem `onError`: exigiria
  * componente de cliente, e o comportamento nativo do navegador com `alt` de
  * imagem quebrada já entrega a mesma degradação de graça.
  */
-export function Marca() {
-  const { logo } = client.marca;
-
+export function Marca({ nome, logo }: { nome: string; logo?: { claro: string; escuro: string } }) {
   if (!logo) {
-    return <span className="text-sm font-semibold">{client.nome}</span>;
+    return <span className="text-sm font-semibold">{nome}</span>;
   }
 
   return (
@@ -34,9 +37,9 @@ export function Marca() {
         não é anunciada — só a visível chega na árvore de acessibilidade.
       */}
       {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img src={logo.claro} alt={client.nome} className="h-8 w-auto dark:hidden" />
+      <img src={logo.claro} alt={nome} className="h-8 w-auto dark:hidden" />
       {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img src={logo.escuro} alt={client.nome} className="hidden h-8 w-auto dark:block" />
+      <img src={logo.escuro} alt={nome} className="hidden h-8 w-auto dark:block" />
     </span>
   );
 }

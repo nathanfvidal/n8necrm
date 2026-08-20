@@ -120,8 +120,9 @@ export type ConversaComMensagens = NonNullable<Awaited<ReturnType<typeof buscarC
  * agenda quem consome: `Conversation` é conceito do módulo `whatsapp`, e
  * `src/core` não pode conhecê-lo (regra de ESLint, § 3.3 da spec base). A
  * página de detalhe vive em `src/app/`, que pode importar dos dois lados — e
- * só chama esta função quando `moduloAtivo("whatsapp")`, então num fork com o
- * módulo desligado a tabela nem é consultada.
+ * só chama esta função quando `moduloAtivo(usuario.companyId, "whatsapp")`
+ * (`core/config/modulos.ts`), então numa empresa com o módulo desligado a
+ * tabela nem é consultada.
  *
  * ## O elo do meio de uma cadeia que fechou nas duas pontas
  *

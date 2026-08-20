@@ -4,6 +4,7 @@ import { ThemeProvider } from "next-themes";
 
 import { PainelNav } from "@/components/painel-nav";
 import { usuarioAtual } from "@/core/auth/session";
+import { configDaEmpresa } from "@/core/config/leitura";
 import { listarNotificacoesNaoLidas } from "@/core/notifications/dispatch";
 import { apresentarNotificacoes } from "./apresentar-notificacoes";
 
@@ -88,6 +89,21 @@ export default async function PainelLayout({ children }: { children: React.React
     await listarNotificacoesNaoLidas(usuario.companyId, usuario.id)
   );
 
+  // Uma consulta, memoizada por requisição (`cache()` em
+  // `core/config/leitura.ts`, com o `companyId` como chave): as páginas abaixo
+  // deste layout chamam `exigirModulo(usuario.companyId, ...)` e caem na MESMA
+  // entrada, então o portão de módulo delas não custa ida nova ao banco. A
+  // memoização é medida em `tests/unit/config-memoizacao.test.ts` — sob Vitest
+  // o `cache()` que resolve é a passa-fio, e por isso ela precisa de um
+  // dispatcher instalado à mão para ser afirmada; a CORRETUDE não depende
+  // dela.
+  //
+  // Config inválida derruba ESTE layout, de propósito: `configDaEmpresa`
+  // recusa em vez de cair no padrão, e o erro sobe. É a decisão registrada em
+  // `core/config/leitura.ts`, e o custo dela (navegação daquela empresa fora
+  // do ar até a linha ser corrigida) está escrito lá.
+  const config = await configDaEmpresa(usuario.companyId);
+
   // `headers()` é assíncrona no Next 16. Ler o nonce aqui não custa nada:
   // este layout já é `force-dynamic`. Na raiz, tornaria TODA rota dinâmica
   // para servir um recurso que só o painel usa. `src/proxy.ts` grava o
@@ -107,11 +123,17 @@ export default async function PainelLayout({ children }: { children: React.React
       <div className="flex min-h-screen flex-col lg:flex-row">
         {/* `papelUsuario` alimenta o link de "Equipe", que só ADMIN vê.
             `PainelNav` é síncrona e não tem acesso à sessão — o papel vem daqui,
-            do `usuario` que `usuarioAtual()` já resolveu, sem consulta nova. */}
+            do `usuario` que `usuarioAtual()` já resolveu, sem consulta nova.
+            `modulosAtivos`, `nomeMarca` e `logo` seguem o mesmo caminho desde o
+            Ciclo 1c: vêm do banco, por empresa, e são resolvidos AQUI para a
+            barra continuar síncrona e renderizável sem Postgres. */}
         <PainelNav
           notificacoesNaoLidas={notificacoesNaoLidas}
           nomeUsuario={usuario.nome}
           papelUsuario={usuario.papel}
+          modulosAtivos={config.modulos}
+          nomeMarca={config.nome}
+          logo={config.marca.logo}
         />
         <main className="flex-1">{children}</main>
       </div>

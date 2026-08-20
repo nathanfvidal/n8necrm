@@ -32,14 +32,21 @@ importavam do módulo. O lint pegou. Rode `npm run lint` cedo, não só no fim.
 modulos: z.array(z.enum(["catalog", "analytics", "automation", "campaigns", "finance", "whatsapp"])),
 ```
 
-`ModuloNome` (em `src/lib/module-gate.ts`) é **derivado** desse enum, não uma segunda
-lista — acrescentar aqui já propaga o tipo para todo o resto.
+`ModuloNome` (em `src/core/config/schema.ts`, reexportado por
+`src/core/config/modulos.ts`) é **derivado** desse enum, não uma segunda lista —
+acrescentar aqui já propaga o tipo para todo o resto.
 
-Ligar para o fork atual é uma linha em `config/client.ts`:
+Ligar o módulo é **por empresa**, desde o Ciclo 1c: a coluna `modulos` de
+`CompanyConfig`. `config/client.ts` continua existindo como PADRÃO para a
+empresa que ainda não tem linha (ver `mesclarConfig` em
+`src/core/config/schema.ts`):
 
 ```ts
 modulos: ["whatsapp"],
 ```
+
+Empresa com linha de `CompanyConfig` manda, inclusive com a lista vazia —
+"não decidi" é empresa **sem linha**, não linha com `[]`.
 
 ### 2. Criar a pasta
 
@@ -84,36 +91,52 @@ os papéis atendem todos os leads. Não crie permissão por simetria.
 
 ### 5. Rotas, com o portão no topo
 
-`src/app/(painel)/<nome>/page.tsx`, e **`exigirModulo("<nome>")` como primeira linha de
-cada page** — não só na de entrada:
+`src/app/(painel)/<nome>/page.tsx`, e **`await exigirModulo(usuario.companyId,
+"<nome>")` logo depois de resolver a sessão, em cada page** — não só na de
+entrada:
 
 ```ts
+import { exigirModulo } from "@/core/config/modulos";
+
 export default async function MinhaPagina() {
-  exigirModulo("whatsapp");
+  const usuario = await usuarioAtualOuLogin();
+  await exigirModulo(usuario.companyId, "whatsapp");
   // ...
 }
 ```
 
-`exigirModulo` chama `notFound()`. Num fork com o módulo desligado, digitar a URL dá
-404 de verdade. Esquecer numa página aninhada é o furo clássico: o menu não mostra, mas
-a rota responde.
+Depois da sessão, e não antes: o portão pergunta de qual EMPRESA é a pergunta, e
+o `companyId` vem de `UsuarioAtivo` (`src/core/auth/usuario-ativo.ts`) — nunca de
+`prisma.company.findFirst()`. Efeito colateral desejado: visitante sem sessão é
+mandado para `/login` em vez de receber 404, e deixa de conseguir observar quais
+módulos a empresa tem pela diferença entre as duas respostas.
+
+`exigirModulo` chama `notFound()`. Numa empresa com o módulo desligado, digitar a
+URL dá 404 de verdade. Esquecer numa página aninhada é o furo clássico: o menu
+não mostra, mas a rota responde.
 
 Cuidado do Next 16: segmento estático resolve antes de dinâmico, então
 `/conversas/agente` e `/conversas/[id]` convivem — mas as duas precisam do portão.
 
 ### 6. Link no menu
 
-`src/components/painel-nav.tsx`, em `linksDeModulo`:
+`src/components/painel-nav.tsx`, em `grupoExtra`:
 
-```ts
-const linksDeModulo = [
-  { href: "/conversas", label: "Conversas", modulo: "whatsapp" as const },
-];
+```tsx
+...(modulosAtivos.includes("whatsapp")
+  ? [{ href: "/conversas", label: "Conversas", icone: "conversas" as const }]
+  : []),
 ```
 
-`moduloAtivo()` filtra. **Só acrescente o link quando a rota existir** — links para
-rota inexistente davam 404 e prometiam funcionalidade que ninguém tinha construído
-(foi o caso de `/catalogo` e `/analytics`, removidos em 2026-08-07).
+`PainelNav` é **síncrona e sem banco** de propósito: `modulosAtivos` chega por
+prop obrigatória, resolvida em `src/app/(painel)/layout.tsx` com
+`configDaEmpresa(usuario.companyId)`. Não transforme a barra em `async` para ler
+o módulo aqui dentro — isso a tornaria impossível de renderizar em teste sem
+mock de Postgres.
+
+**Só acrescente o link quando a rota existir** — links para rota inexistente
+davam 404 e prometiam funcionalidade que ninguém tinha construído (foi o caso de
+`/catalogo` e `/analytics`, removidos em 2026-08-07).
 
 ### 7. Server Actions devolvem resultado, não lançam
 

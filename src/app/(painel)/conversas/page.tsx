@@ -1,6 +1,6 @@
 import Link from "next/link";
 
-import { exigirModulo } from "@/lib/module-gate";
+import { exigirModulo } from "@/core/config/modulos";
 import { usuarioAtualOuLogin } from "@/core/auth/session";
 import { listarConversas } from "@/modules/whatsapp/queries";
 import { EmptyState } from "@/components/empty-state";
@@ -30,10 +30,13 @@ import { formatarDataHoraBR, formatarDuracaoDesde } from "@/lib/date";
  * prática o tom é discreto (fundo em baixa opacidade, ver `badge.tsx`), não
  * um vermelho sólido — não compete visualmente com "IA pausada" ao lado.
  *
- * `exigirModulo("whatsapp")` faz esta rota devolver 404 se algum fork
- * desligar o módulo em `config/client.ts` — mesma defesa em profundidade de
- * `moduloAtivo` em `painel-nav.tsx` (o link some do menu, mas digitar a URL
- * direto não pode contornar o gate).
+ * `exigirModulo(usuario.companyId, "whatsapp")` faz esta rota devolver 404 se
+ * a EMPRESA desta sessão não tiver o módulo ligado (`CompanyConfig.modulos`,
+ * com `config/client.ts` como padrão quando não há linha) — mesma defesa em
+ * profundidade de `modulosAtivos` em `painel-nav.tsx` (o link some do menu, mas
+ * digitar a URL direto não pode contornar o portão). Roda DEPOIS de
+ * `usuarioAtualOuLogin()` porque agora precisa saber de qual empresa é a
+ * pergunta.
  *
  * `(painel)/layout.tsx` já garante sessão válida antes de qualquer página
  * deste route group renderizar, e esta página não usava `usuarioAtual()` por
@@ -44,9 +47,9 @@ import { formatarDataHoraBR, formatarDuracaoDesde } from "@/lib/date";
  * conversa de todo cliente do banco.
  */
 export default async function ConversasPage() {
-  exigirModulo("whatsapp");
-
   const usuario = await usuarioAtualOuLogin();
+  await exigirModulo(usuario.companyId, "whatsapp");
+
   const conversas = await listarConversas(usuario.companyId);
 
   return (

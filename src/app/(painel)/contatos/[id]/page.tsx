@@ -4,7 +4,7 @@ import { notFound } from "next/navigation";
 import { usuarioAtualOuLogin } from "@/core/auth/session";
 import { hasPermission } from "@/core/auth/permissions";
 import { buscarContatoComHistorico } from "@/core/contacts/queries";
-import { moduloAtivo } from "@/lib/module-gate";
+import { moduloAtivo } from "@/core/config/modulos";
 import { listarConversasDoContato } from "@/modules/whatsapp/queries";
 import { ContactForm } from "@/components/contacts/contact-form";
 import { EmptyState } from "@/components/empty-state";
@@ -22,9 +22,11 @@ import { formatarDataHoraBR } from "@/lib/date";
  * lados, e é o lugar certo para costurar os dois.
  *
  * O import de `@/modules/whatsapp/queries` é ESTÁTICO e a chamada é
- * condicional. Num fork com o módulo desligado, o código continua no bundle
- * do servidor mas a tabela nunca é consultada e a seção não aparece — que é o
- * comportamento que importa. Import dinâmico só para evitar código morto no
+ * condicional. Numa empresa com o módulo desligado (`CompanyConfig.modulos`,
+ * Ciclo 1c), o código continua no bundle do servidor mas a tabela nunca é
+ * consultada e a seção não aparece — que é o comportamento que importa. Import
+ * dinâmico não é alternativa aqui nem em teoria: o módulo ligado ou desligado
+ * passou a ser dado de requisição, não de build. Import dinâmico só para evitar código morto no
  * servidor não pagaria a complexidade.
  */
 export default async function ContatoPage({ params }: { params: Promise<{ id: string }> }) {
@@ -46,7 +48,7 @@ export default async function ContatoPage({ params }: { params: Promise<{ id: st
   });
   if (!contato) notFound();
 
-  const mostrarConversas = moduloAtivo("whatsapp");
+  const mostrarConversas = await moduloAtivo(usuario.companyId, "whatsapp");
   const conversas = mostrarConversas ? await listarConversasDoContato(usuario.companyId, contato.id) : [];
 
   return (

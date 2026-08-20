@@ -5,7 +5,7 @@ import { FluxosTable, type FluxoNaTela } from "@/components/automation/fluxos-ta
 import { hasPermission } from "@/core/auth/permissions";
 import { usuarioAtualOuLogin } from "@/core/auth/session";
 import { formatarDuracaoDesde } from "@/lib/date";
-import { exigirModulo } from "@/lib/module-gate";
+import { exigirModulo } from "@/core/config/modulos";
 import { listarFluxos } from "@/modules/automation/queries";
 
 /**
@@ -34,9 +34,10 @@ const MOTIVOS: Record<string, { titulo: string; descricao: string }> = {
 };
 
 export default async function FluxosPage() {
-  exigirModulo("automation");
-
   const usuario = await usuarioAtualOuLogin();
+  // Depois da sessao: o portao le `CompanyConfig.modulos` da empresa DESTA
+  // sessao (Ciclo 1c), entao precisa do `companyId` para perguntar.
+  await exigirModulo(usuario.companyId, "automation");
 
   // `ver_fluxos` (ADMIN e GESTOR), não `gerenciar_fluxos`.
   //
