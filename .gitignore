@@ -71,3 +71,9 @@ next-env.d.ts
 /tests/e2e/.auth/
 /blob-report/
 /playwright/.cache/
+
+# Artefatos do Playwright MCP (snapshots e logs de console de sessoes de
+# navegador dirigidas por agente). Nao sao teste, nao sao build, nao sao do
+# projeto -- aparecem na raiz quando alguem usa o navegador e sujam o
+# `git status` da branch inteira.
+.playwright-mcp/
