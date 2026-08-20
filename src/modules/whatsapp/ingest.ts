@@ -16,6 +16,45 @@ export interface ResultadoIngestao {
 }
 
 /**
+ * `Company` dona da conversa criada a partir de um evento de webhook.
+ *
+ * ## Por que uma variável de ambiente, e não `Company.findFirst()`
+ *
+ * Aqui não existe sessão, não existe registro anterior, e o payload da
+ * Evolution não carrega sinal nenhum de empresa — só `instance`, que
+ * identifica a INSTÂNCIA Evolution, não o tenant do CRM. `findFirst()`
+ * "funcionaria" hoje (só existe uma Company) e viraria vazamento silencioso
+ * no dia em que uma segunda empresa for cadastrada: toda conversa nova de
+ * QUALQUER instância passaria a ser atribuída à empresa mais antiga do
+ * banco, sem erro nenhum avisando.
+ *
+ * A suposição de tenant único já existe neste deploy, só estava implícita:
+ * `EVOLUTION_INSTANCE` (.env) é uma única instância Evolution, e o gateway
+ * recusa todo webhook cujo campo `instance` não bata com ela
+ * (`gateway/evolution.ts`, `verificarOrigem`). `EVOLUTION_COMPANY_ID` só
+ * nomeia essa mesma suposição em vez de deixá-la agachada atrás de um
+ * `findFirst`.
+ *
+ * ## Ponte, não destino
+ *
+ * No Ciclo 2 cada conexão da Evolution vira linha de tabela com `companyId`
+ * próprio, e o webhook passa a resolver a empresa pela CONEXÃO (ex.: pelo
+ * `instance` do payload, casado contra essa tabela) em vez de uma variável
+ * de ambiente única para o deploy inteiro. Esta função — e a variável que
+ * ela lê — somem nessa migração; ver Ciclo 2 / tenancy de conexões
+ * Evolution.
+ */
+function obterEvolutionCompanyId(): string {
+  const valor = process.env.EVOLUTION_COMPANY_ID;
+  if (!valor) {
+    throw new Error(
+      "EVOLUTION_COMPANY_ID ausente — defina no .env (id da Company dona da única instância Evolution deste deploy; ver comentário em src/modules/whatsapp/ingest.ts)"
+    );
+  }
+  return valor;
+}
+
+/**
  * Ingere uma mensagem ENTRADA normalizada: upsert de `Conversation` por
  * `waId`, insere `WhatsappMessage` (idempotente por `idExterno`) e
  * incrementa `Conversation.bufferSeq` atomicamente — os três passos dentro
@@ -40,6 +79,13 @@ export interface ResultadoIngestao {
  * problema).
  */
 export async function ingerirMensagem(evento: EventoWhatsapp): Promise<ResultadoIngestao> {
+  // Lida dentro da função, não em escopo de módulo — o mesmo raciocínio de
+  // `gateway/index.ts` (`obterGateway`): validar no `import` deste arquivo
+  // faria `next build` avaliar a variável ao coletar a configuração de TODA
+  // rota alcançável, derrubando o build inteiro sem `EVOLUTION_COMPANY_ID`
+  // mesmo em telas que nada têm a ver com WhatsApp.
+  const companyId = obterEvolutionCompanyId();
+
   try {
     return await prisma.$transaction(async (tx) => {
       const normalizado = normalizarTelefoneWhatsapp(evento.waId);
@@ -47,6 +93,7 @@ export async function ingerirMensagem(evento: EventoWhatsapp): Promise<Resultado
       const conversation = await tx.conversation.upsert({
         where: { waId: evento.waId },
         create: {
+          companyId,
           waId: evento.waId,
           telefone: normalizado.ok ? normalizado.telefone : null,
           nomeExibicao: evento.nomeExibicao,
@@ -62,6 +109,7 @@ export async function ingerirMensagem(evento: EventoWhatsapp): Promise<Resultado
 
       await tx.whatsappMessage.create({
         data: {
+          companyId,
           conversationId: conversation.id,
           idExterno: evento.idExterno,
           direcao: "ENTRADA",
