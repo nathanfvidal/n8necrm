@@ -47,6 +47,24 @@ enum WhatsappTipo {
   OUTRO
 }
 
+/// Qual tecnologia atende o WhatsApp desta conexão.
+///
+/// `META_CLOUD` nasce declarado SEM nenhum código que o aceite: nesta Task 1
+/// não existe fábrica de gateway por conexão ainda — ela é a Task 3 do mesmo
+/// ciclo, e é lá que a recusa nomeada e o caso de teste dela nascem. Este
+/// parágrafo descreve contrato acordado, não código medido; enquanto a Task 3
+/// não chega, o valor simplesmente não tem escritor.
+///
+/// O precedente é literal nesta mesma base: `WhatsappAutor.HUMANO`, cujo
+/// comentário diz "o valor já existe no enum agora para não exigir uma
+/// migração de enum quando essa fatia chegar". Aqui é a mesma coisa: o Ciclo
+/// 2b (Meta Cloud API) troca uma recusa por uma implementação em vez de
+/// acrescentar um valor e uma migração.
+enum CanalConexao {
+  EVOLUTION
+  META_CLOUD
+}
+
 // NÃO recebe `companyId`. A mesma pessoa pode ter `Membership` em VÁRIAS
 // empresas (ADMIN na própria, VENDEDOR na de um cliente que ela atende) —
 // empresa é atributo do VÍNCULO, não da pessoa. `email` continua único
@@ -64,9 +82,9 @@ enum WhatsappTipo {
 // previsto). `core/users/service.ts` grava nas DUAS colunas (`User.papel` e
 // `Membership.papel`) enquanto este bridge existir — ver comentário lá.
 model User {
-  id                 String         @id @default(cuid())
+  id                 String               @id @default(cuid())
   nome               String
-  email              String         @unique
+  email              String               @unique
   senhaHash          String
   /// Espelho depreciado. A fonte de verdade do papel é `Membership.papel`
   /// (ver comentário do modelo `Membership` acima) — esta coluna sobrevive
@@ -84,17 +102,18 @@ model User {
   ///
   /// Código novo lê o papel de `Membership`, nunca daqui.
   papel              Role
-  ativo              Boolean        @default(true)
-  criadoEm           DateTime       @default(now())
-  leadsAtribuidos    Lead[]         @relation("LeadResponsavel")
+  ativo              Boolean              @default(true)
+  criadoEm           DateTime             @default(now())
+  leadsAtribuidos    Lead[]               @relation("LeadResponsavel")
   tasks              Task[]
   notes              LeadNote[]
   notifications      Notification[]
   auditLogs          AuditLog[]
-  conversasPausadas  Conversation[] @relation("ConversasPausadas")
-  botConfigsEditadas BotConfig[]    @relation("BotConfigsEditadas")
+  conversasPausadas  Conversation[]       @relation("ConversasPausadas")
+  botConfigsEditadas BotConfig[]          @relation("BotConfigsEditadas")
   memberships        Membership[]
-  configsEditadas    CompanyConfig[] @relation("ConfigsEditadas")
+  configsEditadas    CompanyConfig[]      @relation("ConfigsEditadas")
+  segredosDeConexao  WhatsappConnection[] @relation("SegredosDeConexao")
 }
 
 /// A empresa — fronteira de tenancy. Cada linha de dado de tenant (`Contact`,
@@ -110,22 +129,23 @@ model Company {
   criadoEm     DateTime @default(now())
   atualizadoEm DateTime @updatedAt
 
-  memberships      Membership[]
-  contacts         Contact[]
-  pipelineStages   PipelineStage[]
-  leads            Lead[]
-  leadNotes        LeadNote[]
-  tasks            Task[]
-  notifications    Notification[]
-  conversations    Conversation[]
-  whatsappMessages WhatsappMessage[]
-  auditLogs        AuditLog[]
+  memberships         Membership[]
+  contacts            Contact[]
+  pipelineStages      PipelineStage[]
+  leads               Lead[]
+  leadNotes           LeadNote[]
+  tasks               Task[]
+  notifications       Notification[]
+  conversations       Conversation[]
+  whatsappMessages    WhatsappMessage[]
+  auditLogs           AuditLog[]
   // `BotConfig?`, não `BotConfig[]`: `@@unique([companyId])` em BotConfig
   // torna a relação 1-para-1 aos olhos do Prisma.
-  botConfig        BotConfig?
+  botConfig           BotConfig?
   // `CompanyConfig?` pelo mesmo motivo, e pela mesma constraint — ver o bloco
   // do modelo, logo depois de `BotConfig`.
-  config           CompanyConfig?
+  config              CompanyConfig?
+  whatsappConnections WhatsappConnection[]
 }
 
 /// Vínculo entre pessoa e empresa, e é ONDE O PAPEL VIVE.
@@ -435,6 +455,15 @@ model Conversation {
   iaPausadaPor          User?             @relation("ConversasPausadas", fields: [iaPausadaPorId], references: [id])
   aguardandoHumanoDesde DateTime?
 
+  /// Por qual conexão esta conversa entrou — e, portanto, por qual ela é
+  /// respondida. NULA para conversa criada antes do Ciclo 2a; o envio trata a
+  /// nula caindo na única conexão ativa da empresa e RECUSA se houver mais de
+  /// uma (`ConexaoAmbiguaError`). Sem esta coluna, "multi-instância" seria
+  /// mentira: com duas conexões na mesma empresa, "por qual respondo?" não tem
+  /// resposta, e o erro seria responder o cliente pelo número errado.
+  connectionId String?
+  connection   WhatsappConnection? @relation(fields: [connectionId], references: [id])
+
   // turno.ts faz UPDATE ... WHERE "processandoAte" IS NULL OR "processandoAte" < now()
   // a cada job de fila — sem índice, essa checagem varreria a tabela inteira
   // conforme o número de conversas ativas cresce.
@@ -443,6 +472,7 @@ model Conversation {
   // /conversas — mesmo raciocínio do índice em `processandoAte`.
   @@index([aguardandoHumanoDesde])
   @@index([companyId])
+  @@index([connectionId])
 }
 
 /// Configuração do agente de IA — uma linha POR EMPRESA.
@@ -528,6 +558,84 @@ model CompanyConfig {
   atualizadoPor   User?    @relation("ConfigsEditadas", fields: [atualizadoPorId], references: [id])
 
   @@unique([companyId])
+}
+
+/// Uma conexão de canal de WhatsApp, POR EMPRESA, com a credencial CIFRADA.
+///
+/// ## Por que a credencial é cifrada aqui e nenhuma outra coluna deste banco é
+///
+/// O Prisma conecta como DONO da tabela e ignora RLS — `CLAUDE.md` registra a
+/// armadilha, e a migração `20260730212500_enable_rls_and_revoke_anon_grants`
+/// diz por escrito que `FORCE ROW LEVEL SECURITY` não está ligada, de
+/// propósito. Três caminhos entregam esta coluna a quem não deveria vê-la:
+/// `pg_dump`/backup, vazamento da `service_role`, e qualquer consulta pelo
+/// caminho do Prisma. A cifra é a ÚNICA defesa que sobrevive aos três, e a
+/// chave mestra é a única peça que continua fora do banco.
+///
+/// ## Colunas TIPADAS, nunca `Json`
+///
+/// `dominio`/`instancia` são da Evolution e ficam nulas em outros canais. A
+/// varredura de escopo do Ciclo 1d recusa `companyId` dentro de coluna `Json`
+/// (ver "Falsos positivos conhecidos" em `core/tenancy/escopo.ts`), e um
+/// `Json` de configuração é exatamente onde `companyId` acaba parando. O Ciclo
+/// 2b acrescenta as colunas nulas da Meta (`phoneNumberId`, `wabaId`) e uma
+/// SEGUNDA coluna cifrada (a Meta tem dois segredos: access token e app
+/// secret) — nenhuma delas nasce aqui, porque coluna sem escritor é dado morto
+/// com aparência de recurso.
+///
+/// ## `segredoUltimos4` é texto puro, e é escolha
+///
+/// A tela mostra `••••••••1a2b` para a pessoa reconhecer qual chave está lá. A
+/// alternativa — decifrar a cada renderização da lista — poria texto claro na
+/// memória do processo a cada carregamento de tela sem ganhar nada. É o mesmo
+/// trade de `sk_live_…abcd`. O que se revela são 4 caracteres; ver D3 do spec.
+///
+/// ## `webhookTokenHash`, não o token
+///
+/// Cofre para o que precisa ser LIDO de volta; hash para o que só precisa ser
+/// CONFERIDO. O token do webhook nunca é usado, só comparado — então um dump
+/// do banco não entrega uma URL de webhook funcional. O `@unique` é GLOBAL de
+/// propósito, e isso NÃO é a mesma coisa que `Conversation.waId` (⚠️ R2): ali
+/// o valor é compartilhável entre empresas e a unicidade global é o defeito;
+/// aqui o valor é um segredo de 256 bits e duas empresas com o mesmo token é
+/// estado que deve ser impossível. Há caso de teste amarrando esta linha
+/// (`tests/unit/escopo-empresa.test.ts`, "`webhookTokenHash` é `@unique`
+/// GLOBAL"), para que a decisão não se desfaça num `prisma format` distraído.
+model WhatsappConnection {
+  id        String       @id @default(cuid())
+  companyId String
+  company   Company      @relation(fields: [companyId], references: [id])
+  canal     CanalConexao
+  /// Rótulo humano ("Comercial", "Suporte") — é como a pessoa distingue duas
+  /// conexões da mesma empresa numa lista.
+  nome      String
+  /// Interruptor do OPERADOR. NÃO é o estado de pareamento do WhatsApp — esse
+  /// depende do evento `connection.update`, que a rota descarta hoje, e é o
+  /// Ciclo 2c (QR Code). Mostrar "conectado" a partir daqui seria inventar um
+  /// estado que ninguém mede.
+  ativa     Boolean      @default(true)
+
+  dominio   String?
+  instancia String?
+
+  segredoCifrado         String
+  segredoUltimos4        String
+  segredoAtualizadoEm    DateTime
+  segredoAtualizadoPorId String?
+  segredoAtualizadoPor   User?    @relation("SegredosDeConexao", fields: [segredoAtualizadoPorId], references: [id])
+
+  webhookTokenHash String @unique
+
+  criadoEm     DateTime @default(now())
+  atualizadoEm DateTime @updatedAt
+
+  conversas Conversation[]
+
+  /// A mesma instância cadastrada duas vezes na mesma empresa não significa
+  /// nada. `instancia` nula não colide, porque o Postgres trata NULL como
+  /// distinto — que é o comportamento desejado para canal sem instância.
+  @@unique([companyId, canal, instancia])
+  @@index([companyId])
 }
 
 /**

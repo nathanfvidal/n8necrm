@@ -798,7 +798,7 @@ describe("prismaDaEmpresa", () => {
       expect(bloco.filter((l) => /^\s*id\s+String\s+@id/.test(l))).toHaveLength(1);
     });
 
-    it("os 12 modelos de tenant nomeiam a relação `company` — a varredura depende do nome", () => {
+    it("os 13 modelos de tenant nomeiam a relação `company` — a varredura depende do nome", () => {
       const semRelacao = [...MODELOS_DE_TENANT].filter(
         (m) => !blocoDoModelo(m).some((l) => /^\s*company\s+Company\b/.test(l))
       );
@@ -826,6 +826,28 @@ describe("prismaDaEmpresa", () => {
       // Ordem: a do `MODELOS_DE_TENANT`, não alfabética — o `filter` preserva
       // a ordem de inserção do Set.
       expect(comCompanyIdUnico).toEqual(["BotConfig", "CompanyConfig"]);
+    });
+
+    it("`WhatsappConnection` é modelo de tenant, e a lista tem exatamente 13", () => {
+      // Deriva: um modelo com `companyId` que ficasse FORA do Set passaria por
+      // `escoparArgumentos` intacto — sem filtro, sem injeção, sem erro. É o
+      // vazamento mais silencioso que este arquivo pode ter, e a única defesa
+      // é esta igualdade exata.
+      expect(MODELOS_DE_TENANT.has("WhatsappConnection")).toBe(true);
+      expect(MODELOS_DE_TENANT.size).toBe(13);
+    });
+
+    it("`WhatsappConnection.webhookTokenHash` é `@unique` GLOBAL — e isso é deliberado", () => {
+      const bloco = blocoDoModelo("WhatsappConnection");
+
+      // Diferente de `Conversation.waId` (⚠️ R2 do Ciclo 1a): `waId` é
+      // global-único sobre um identificador COMPARTILHÁVEL — o mesmo número
+      // pode ser atendido por duas empresas, e por isso aquilo é defeito. Um
+      // token de webhook é segredo de 256 bits: duas empresas com o mesmo
+      // token é estado que DEVE ser impossível. Se esta linha cair, a
+      // resolução do webhook (Tarefa 7) perde a garantia de que um token
+      // aponta uma conexão só.
+      expect(bloco.filter((l) => /^\s*webhookTokenHash\s+String\s+@unique/.test(l))).toHaveLength(1);
     });
 
     it("TODA mensagem lançada com escopo ativo carrega o companyId", async () => {

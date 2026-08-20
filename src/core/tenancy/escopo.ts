@@ -50,12 +50,13 @@ import type { PrismaClient } from "@prisma/client";
  * Fica registrado aqui como caminho de endurecimento futuro — não como
  * esquecimento.
  *
- * ## Os 12 modelos de tenant
+ * ## Os 13 modelos de tenant
  *
  * Medido em `prisma/schema.prisma` em 2026-08-20 (`awk` sobre os blocos
  * `model`, campo `companyId`): `Membership`, `Contact`, `PipelineStage`,
  * `Lead`, `LeadNote`, `Task`, `Notification`, `AuditLog`, `Conversation`,
- * `BotConfig`, `CompanyConfig`, `WhatsappMessage`. O 12º entrou no Ciclo 1c.
+ * `BotConfig`, `CompanyConfig`, `WhatsappMessage`, `WhatsappConnection`. O 12º
+ * entrou no Ciclo 1c; o 13º no Ciclo 2a.
  *
  * Ficam de FORA, e isso é deliberado:
  * - `User` — o comentário na linha 50 do schema diz por quê: "NÃO recebe
@@ -87,7 +88,7 @@ import type { PrismaClient } from "@prisma/client";
  * **Recusa, lançando**: `findUnique`, `findUniqueOrThrow`, `update`,
  * `delete`, `upsert`. O motivo é do Prisma, não uma escolha de gosto: o
  * `where` dessas operações é tipado como `XWhereUniqueInput` e só aceita
- * campo único (ou combinação `@@unique`). Em 10 dos 12 modelos de tenant
+ * campo único (ou combinação `@@unique`). Em 11 dos 13 modelos de tenant
  * `companyId` não é único, então o Prisma recusa o campo ali — não existe onde
  * pendurar o filtro. Deixar passar sem filtro devolveria a linha de OUTRA
  * empresa a quem pedisse pelo id; lançar transforma isso em erro de
@@ -108,6 +109,13 @@ import type { PrismaClient } from "@prisma/client";
  * de uniques (`tests/unit/escopo-empresa.test.ts`) quebra se um TERCEIRO
  * modelo ganhar `@@unique([companyId])`, e então esta frase precisa ser
  * reescrita de novo.
+ *
+ * `WhatsappConnection` (Ciclo 2a) NÃO entra nessa lista: a `@@unique` dela é
+ * COMPOSTA (`[companyId, canal, instancia]`), então `companyId` sozinho
+ * continua não sendo único ali e `findUnique` continua recusado pelo motivo
+ * geral. É deliberado: um `findUnique` por `webhookTokenHash` seria escopável
+ * pelo tipo e NÃO pela empresa, que é exatamente o caminho que a Tarefa 7 do
+ * Ciclo 2a fecha usando `findFirst` no cliente escopado.
  *
  * **Não alcança de jeito nenhum**: `$queryRaw`/`$executeRaw`. Eles não passam
  * por `$allModels`, e por isso o lint é a peça central — é ele que garante
@@ -138,8 +146,9 @@ import type { PrismaClient } from "@prisma/client";
  * vale saber qual é qual:
  *
  * - aninhado que OMITE `companyId` → o BANCO recusa, porque a Task 1 do Ciclo
- *   1a tornou a coluna `NOT NULL` nos 11 modelos originais, e o 12º
- *   (`CompanyConfig`, Ciclo 1c) já nasceu `NOT NULL`. O erro vem do banco e não explica a
+ *   1a tornou a coluna `NOT NULL` nos 11 modelos originais; o 12º
+ *   (`CompanyConfig`, Ciclo 1c) e o 13º (`WhatsappConnection`, Ciclo 2a) já
+ *   nasceram `NOT NULL`. O erro vem do banco e não explica a
  *   causa; quem ler precisa saber que é esta.
  * - aninhado que passa o `companyId` de OUTRA empresa → o banco ACEITA. O
  *   campo está preenchido, o `NOT NULL` está satisfeito, e a linha nasce na
@@ -193,12 +202,14 @@ import type { PrismaClient } from "@prisma/client";
  *
  * A regra prática é esta: **relação que fica dentro de `Company` é segura;
  * relação que passa por `User` não é.** `User` não é modelo de tenant (não tem
- * `companyId`, e o motivo está logo acima) e tem NOVE relações inversas —
+ * `companyId`, e o motivo está logo acima) e tem DEZ relações inversas —
  * `leadsAtribuidos`, `tasks`, `notes`, `notifications`, `auditLogs`,
- * `conversasPausadas`, `botConfigsEditadas`, `memberships`, `configsEditadas`
- * (`prisma/schema.prisma`). Eram oito até o Ciclo 1c pendurar `CompanyConfig`
- * em `User` por `atualizadoPorId` — o número aqui não é decorativo, ele conta
- * as portas de saída do tenant e envelhece a cada relação nova.
+ * `conversasPausadas`, `botConfigsEditadas`, `memberships`, `configsEditadas`,
+ * `segredosDeConexao` (`prisma/schema.prisma`). Eram oito até o Ciclo 1c
+ * pendurar `CompanyConfig` em `User` por `atualizadoPorId`, e nove até o Ciclo
+ * 2a pendurar `WhatsappConnection` por `segredoAtualizadoPorId` — o número
+ * aqui não é decorativo, ele conta as portas de saída do tenant e envelhece a
+ * cada relação nova.
  * Atravessá-lo sai do tenant. O caminho concreto:
  *
  *   lead.findMany({ include: { responsavel: { include: { leadsAtribuidos: true } } } })
@@ -264,6 +275,7 @@ export const MODELOS_DE_TENANT: ReadonlySet<string> = new Set([
   "BotConfig",
   "CompanyConfig",
   "WhatsappMessage",
+  "WhatsappConnection",
 ]);
 
 /** Operações cujo `where` aceita filtro comum — dá para injetar `companyId`. */
