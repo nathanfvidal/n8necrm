@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import { exigirModulo } from "@/lib/module-gate";
+import { usuarioAtualOuLogin } from "@/core/auth/session";
 import { listarConversas } from "@/modules/whatsapp/queries";
 import { EmptyState } from "@/components/empty-state";
 import { Badge } from "@/components/ui/badge";
@@ -35,14 +36,18 @@ import { formatarDataHoraBR, formatarDuracaoDesde } from "@/lib/date";
  * direto não pode contornar o gate).
  *
  * `(painel)/layout.tsx` já garante sessão válida antes de qualquer página
- * deste route group renderizar — não repetimos `usuarioAtual()` aqui
- * (mesma observação já feita em `leads/page.tsx`), porque esta página não
- * precisa saber QUEM está logado (sem formulário, sem responsável padrão).
+ * deste route group renderizar, e esta página não usava `usuarioAtual()` por
+ * não precisar saber QUEM está logado (sem formulário, sem responsável
+ * padrão). O Ciclo 1d mudou isso: ela precisa saber em QUAL EMPRESA, que é
+ * outra pergunta. `listarConversas` passou a exigir `companyId`, e a origem
+ * é `usuarioAtualOuLogin().companyId` — enquanto não era, a inbox listava
+ * conversa de todo cliente do banco.
  */
 export default async function ConversasPage() {
   exigirModulo("whatsapp");
 
-  const conversas = await listarConversas();
+  const usuario = await usuarioAtualOuLogin();
+  const conversas = await listarConversas(usuario.companyId);
 
   return (
     <div className="space-y-6 p-6">

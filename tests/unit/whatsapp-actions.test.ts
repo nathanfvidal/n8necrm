@@ -15,7 +15,7 @@
 // três actions agora devolvem `{ ok: false, erro: "Sua sessão expirou..." }`
 // em vez de deixar a promise rejeitar.
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import type { User } from "@prisma/client";
+import type { UsuarioAtivo } from "@/core/auth/usuario-ativo";
 
 const usuarioAtualMock = vi.fn();
 vi.mock("@/core/auth/session", () => ({ usuarioAtual: () => usuarioAtualMock() }));
@@ -42,15 +42,31 @@ const { responderConversaAction, pausarIaAction, religarIaAction } = await impor
 
 const MENSAGEM_SESSAO_INVALIDA = "Sua sessão expirou. Recarregue a página e entre de novo.";
 
-function usuarioFake(overrides: Partial<User> = {}): User {
+/**
+ * `UsuarioAtivo`, e NÃO `User` do Prisma.
+ *
+ * Era `User` — com `senhaHash` e `criadoEm`, sem `companyId`. Isso deixou de
+ * descrever o que `usuarioAtual()` devolve desde a Task 2 do Ciclo 1a
+ * (`core/auth/usuario-ativo.ts`): a projeção sem hash de senha, com a EMPRESA
+ * da requisição e o papel vindo do `Membership`. Mesmo conserto já feito em
+ * `tests/unit/export-leads.test.ts`.
+ *
+ * Enquanto o mock mentia sobre a forma, a action podia ler
+ * `usuario.companyId` e receber `undefined` sem nenhum caso ficar vermelho —
+ * e é justamente `usuario.companyId` que o Ciclo 1d passou a repassar para o
+ * módulo. Um `undefined` ali faria `prismaDaEmpresa` lançar em produção e o
+ * teste continuaria verde.
+ */
+const EMPRESA_FAKE = "empresa-fake-id";
+
+function usuarioFake(overrides: Partial<UsuarioAtivo> = {}): UsuarioAtivo {
   return {
     id: "usuario-fake-id",
     nome: "Usuário Fake",
     email: "fake@teste.local",
-    senhaHash: "hash",
     papel: "VENDEDOR",
     ativo: true,
-    criadoEm: new Date("2026-01-01T00:00:00.000Z"),
+    companyId: EMPRESA_FAKE,
     ...overrides,
   };
 }
@@ -105,7 +121,16 @@ describe("sessão válida", () => {
     const resultado = await responderConversaAction("conversa-1", "oi");
 
     expect(resultado).toEqual({ ok: true });
-    expect(responderComoHumanoMock).toHaveBeenCalledWith("conversa-1", "oi", "usuario-fake-id");
+    // A EMPRESA primeiro, e ela vem da SESSÃO — nunca do formulário. Server
+    // Action é endpoint HTTP público: um `companyId` de parâmetro seria
+    // forjável, e o defeito ALTA que o Ciclo 1d fechou aqui era justamente
+    // mandar mensagem de WhatsApp pela instância de outra empresa.
+    expect(responderComoHumanoMock).toHaveBeenCalledWith(
+      EMPRESA_FAKE,
+      "conversa-1",
+      "oi",
+      "usuario-fake-id"
+    );
     expect(revalidatePathMock).toHaveBeenCalledWith("/conversas/conversa-1");
     expect(revalidatePathMock).toHaveBeenCalledWith("/conversas");
   });
@@ -133,7 +158,7 @@ describe("sessão válida", () => {
     const resultado = await religarIaAction("conversa-1");
 
     expect(resultado).toEqual({ ok: true });
-    expect(religarIaMock).toHaveBeenCalledWith("conversa-1");
+    expect(religarIaMock).toHaveBeenCalledWith(EMPRESA_FAKE, "conversa-1");
     expect(revalidatePathMock).toHaveBeenCalledWith("/conversas/conversa-1");
     expect(revalidatePathMock).toHaveBeenCalledWith("/conversas");
   });

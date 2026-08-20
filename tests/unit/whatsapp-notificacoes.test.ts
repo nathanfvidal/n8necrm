@@ -13,7 +13,9 @@ vi.mock("server-only", () => ({}));
 // precisa vir antes de qualquer import que alcance `src/lib/prisma.ts`, e é por
 // isso que os imports aqui são dinâmicos.
 const { prisma } = await import("@/lib/prisma");
-const { criarConversation, limparConversasDeTeste } = await import("./helpers/whatsapp");
+const { companyIdSemeada, criarConversation, limparConversasDeTeste } = await import(
+  "./helpers/whatsapp"
+);
 const { marcarAguardandoHumano, limparAguardandoHumano } = await import(
   "../../src/modules/whatsapp/notificacoes"
 );
@@ -310,7 +312,9 @@ describe("aviso de conversa aguardando humano", () => {
       data: { iaAtiva: true },
     });
 
-    const lista = await listarConversas();
+    // `listarConversas` passou a exigir `companyId` no Ciclo 1d. A empresa é
+    // a única do seed — a mesma em que `criarConversaDeTeste` cria as linhas.
+    const lista = await listarConversas(await companyIdSemeada());
     const posicao = (id: string) => lista.findIndex((c) => c.id === id);
 
     // `findIndex` devolve -1 para quem não está na lista (ex.: caiu fora do

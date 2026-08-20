@@ -40,7 +40,7 @@ export default async function ContatoPage({ params }: { params: Promise<{ id: st
   if (!contato) notFound();
 
   const mostrarConversas = moduloAtivo("whatsapp");
-  const conversas = mostrarConversas ? await listarConversasDoContato(contato.id) : [];
+  const conversas = mostrarConversas ? await listarConversasDoContato(usuario.companyId, contato.id) : [];
 
   return (
     <div className="space-y-6 p-6">

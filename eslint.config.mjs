@@ -109,14 +109,17 @@ const PRISMA_CRU = {
 // item 1 de antes (`users/service.ts`) saiu por ter sido corrigido; o que
 // sobra é:
 //
-//   1. `src/modules/whatsapp/queries.ts` + `agente.ts` (6) — a inbox inteira e
-//      todas as mutações de conversa aceitam `conversationId` cru do cliente.
-//   2. `src/core/contacts/` (4)      — agenda global e `findUnique` por id de
+//   1. `src/core/contacts/` (4)      — agenda global e `findUnique` por id de
 //      rota.
-//   3. `src/app/(painel)/page.tsx` (1) — o `auditLog` sem `where`.
-//   4. o resto (BAIXA), onde o escopo já vem por FK ou por dono.
+//   2. `src/app/(painel)/page.tsx` (1) — o `auditLog` sem `where`.
+//   3. o resto (BAIXA), onde o escopo já vem por FK ou por dono.
 //
-// O item que encabeçava esta ordem (`src/core/pipeline/`, 13) saiu no Ciclo 1d.
+// Os dois itens que encabeçavam esta ordem saíram no Ciclo 1d:
+// `src/core/pipeline/` (13) e `src/modules/whatsapp/{queries,agente}.ts` (6).
+// `contacts/` ficou no topo por herança direta: era ele que alimentava
+// `listarConversasDoContato` com um `contactId` não validado, e essa metade
+// da cadeia (a que devolve CONVERSAS) fechou; a que devolve os DADOS do
+// contato continua aberta até aquele bloco rodar.
 //
 // **Os 18 restantes NÃO foram corrigidos**, de propósito: a decisão de quantos
 // e em que ordem é do dono do projeto, e as tarefas até aqui tiveram escopo de
@@ -244,13 +247,25 @@ const VIOLADORES_TEMPORARIOS_CORE = [
 ];
 
 const VIOLADORES_TEMPORARIOS_MODULES = [
-  // 3 defeitos, todos ALTA: `pausarIa` (`updateMany where: { id }`),
-  // `religarIa` (`update where: { id }`) e `responderComoHumano`
-  // (`findUniqueOrThrow` por id) recebem `conversationId` cru da Server Action
-  // e nunca conferem empresa. `responderComoHumano` é o pior: ele ENVIA uma
-  // mensagem de WhatsApp pela instância Evolution a partir de uma conversa que
-  // pode ser de outro cliente.
-  "src/modules/whatsapp/agente.ts",
+  // `src/modules/whatsapp/agente.ts` e `queries.ts` SAÍRAM desta lista no
+  // Ciclo 1d — os 6 defeitos deles (5 ALTA, 1 BAIXA) foram abatidos, e as
+  // nove funções públicas dos dois arquivos alcançam o banco só por
+  // `prismaDaEmpresa`. O lint passar com eles fora daqui é a prova de que não
+  // alcançam mais o `prisma` cru; a prova de que o escopo FUNCIONA é outra, e
+  // mora em `tests/unit/whatsapp-isolamento.test.ts`, que tem as duas metades
+  // para cada função.
+  //
+  // O pior deles não era leitura: `responderComoHumano` ENVIAVA uma mensagem
+  // de WhatsApp pela instância Evolution da outra empresa, para o cliente
+  // dela, com o número dela. O teste daquele caso afirma que o gateway NÃO
+  // foi chamado — "a função lançou" não provaria nada, porque lançar depois
+  // do envio passaria igual e continuaria vazando.
+  //
+  // As nove assinaturas ganharam `companyId` como PRIMEIRO parâmetro, e com
+  // elas mudaram as 5 Server Actions (`actions.ts`, `agente-actions.ts`,
+  // que tiram a empresa de `usuarioAtual().companyId`) e as 4 páginas que as
+  // consomem. `/conversas` passou a chamar `usuarioAtualOuLogin()`, que ela
+  // não chamava.
   // 1 defeito (MÉDIA): o `upsert` casa por `waId`, que é `@unique` GLOBAL em
   // `Conversation` — variante-irmã do `Contact.telefone`. Só se alcança com
   // duas instâncias Evolution, o que a ponte de `obterEvolutionCompanyId()`
@@ -259,12 +274,6 @@ const VIOLADORES_TEMPORARIOS_MODULES = [
   // 1 defeito (MÉDIA): `limparAguardandoHumano` faz `updateMany` por id sem
   // empresa. O fan-out do aviso, que era o ponto grave, fechou no 63cecd2.
   "src/modules/whatsapp/notificacoes.ts",
-  // 3 defeitos, 2 ALTA: `listarConversas` faz `findMany` sem `companyId` — a
-  // inbox é global —, e `buscarConversaComMensagens` faz `findUnique` pelo id
-  // da rota e devolve a thread INTEIRA de qualquer empresa. O terceiro
-  // (`listarConversasDoContato`, BAIXA) só vaza pela cadeia que vem de
-  // `contacts/queries.ts:150`, que não valida o contato.
-  "src/modules/whatsapp/queries.ts",
   // 0 defeitos. Toda consulta parte de um `conversationId` nascido dentro do
   // servidor (`ingest.ts` → fila), nunca de entrada de usuário, e o
   // `companyId` de escrita sai sempre da `Conversation` já carregada.

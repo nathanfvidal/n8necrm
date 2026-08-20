@@ -123,7 +123,11 @@ export async function salvarConfigAgenteAction(dados: {
       throw new ErroConfigAgente(`FAQ acima do limite de ${MAX_FAQ} caracteres.`);
     }
 
-    await salvarConfigBot({ ativo: dados.ativo, personaNome, personaPapel, regras, faq }, usuario.id);
+    await salvarConfigBot(
+      usuario.companyId,
+      { ativo: dados.ativo, personaNome, personaPapel, regras, faq },
+      usuario.id
+    );
   } catch (erro) {
     return paraResultadoErro(erro, "Falha ao salvar a configuração do agente. Tente novamente.");
   }
@@ -134,7 +138,7 @@ export async function salvarConfigAgenteAction(dados: {
 export async function restaurarConfigPadraoAction(): Promise<ResultadoAcao> {
   try {
     const usuario = await exigirAdmin();
-    await restaurarConfigPadrao(usuario.id);
+    await restaurarConfigPadrao(usuario.companyId, usuario.id);
   } catch (erro) {
     return paraResultadoErro(erro, "Falha ao restaurar a configuração padrão. Tente novamente.");
   }

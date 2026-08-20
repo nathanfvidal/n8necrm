@@ -14,7 +14,7 @@
 // inválida rejeita a promise sem nunca produzir um `ResultadoAcao`, e a tela
 // não mostra nada, nem sucesso nem erro.
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import type { User } from "@prisma/client";
+import type { UsuarioAtivo } from "@/core/auth/usuario-ativo";
 import {
   MAX_PERSONA_NOME,
   MAX_PERSONA_PAPEL,
@@ -45,15 +45,31 @@ const { salvarConfigAgenteAction, restaurarConfigPadraoAction } = await import(
 const MENSAGEM_SESSAO_INVALIDA = "Sua sessão expirou. Recarregue a página e entre de novo.";
 const MENSAGEM_SEM_PERMISSAO = "Você não tem permissão para configurar o agente.";
 
-function usuarioFake(overrides: Partial<User> = {}): User {
+/**
+ * `UsuarioAtivo`, e NÃO `User` do Prisma.
+ *
+ * Era `User` — com `senhaHash` e `criadoEm`, sem `companyId`. Isso deixou de
+ * descrever o que `usuarioAtual()` devolve desde a Task 2 do Ciclo 1a
+ * (`core/auth/usuario-ativo.ts`): a projeção sem hash de senha, com a EMPRESA
+ * da requisição e o papel vindo do `Membership`. Mesmo conserto já feito em
+ * `tests/unit/export-leads.test.ts`.
+ *
+ * Enquanto o mock mentia sobre a forma, a action podia ler
+ * `usuario.companyId` e receber `undefined` sem nenhum caso ficar vermelho —
+ * e é justamente `usuario.companyId` que o Ciclo 1d passou a repassar para o
+ * módulo. Um `undefined` ali faria `prismaDaEmpresa` lançar em produção e o
+ * teste continuaria verde.
+ */
+const EMPRESA_FAKE = "empresa-fake-id";
+
+function usuarioFake(overrides: Partial<UsuarioAtivo> = {}): UsuarioAtivo {
   return {
     id: "usuario-fake-id",
     nome: "Usuário Fake",
     email: "fake@teste.local",
-    senhaHash: "hash",
     papel: "ADMIN",
     ativo: true,
-    criadoEm: new Date("2026-01-01T00:00:00.000Z"),
+    companyId: EMPRESA_FAKE,
     ...overrides,
   };
 }
@@ -128,7 +144,11 @@ describe("ADMIN autenticado", () => {
     });
 
     expect(resultado).toEqual({ ok: true });
+    // A EMPRESA primeiro, e ela vem da SESSÃO — nunca do formulário. Server
+    // Action é endpoint HTTP público, e um `companyId` de parâmetro seria
+    // forjável.
     expect(salvarConfigBotMock).toHaveBeenCalledWith(
+      EMPRESA_FAKE,
       {
         ativo: true,
         personaNome: "Ana",
@@ -261,7 +281,7 @@ describe("ADMIN autenticado", () => {
     restaurarConfigPadraoMock.mockResolvedValue(undefined);
     const resultado = await restaurarConfigPadraoAction();
     expect(resultado).toEqual({ ok: true });
-    expect(restaurarConfigPadraoMock).toHaveBeenCalledWith("usuario-fake-id");
+    expect(restaurarConfigPadraoMock).toHaveBeenCalledWith(EMPRESA_FAKE, "usuario-fake-id");
     expect(revalidatePathMock).toHaveBeenCalledWith("/conversas/agente");
   });
 

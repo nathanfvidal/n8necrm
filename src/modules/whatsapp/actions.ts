@@ -93,7 +93,7 @@ export async function responderConversaAction(
   // `paraResultadoErro` acima para o raciocínio completo.
   try {
     const usuario = await usuarioAtual();
-    await responderComoHumano(conversationId, texto, usuario.id);
+    await responderComoHumano(usuario.companyId, conversationId, texto, usuario.id);
   } catch (erro) {
     return paraResultadoErro(erro, "Falha ao enviar a resposta. Tente novamente.");
   }
@@ -105,7 +105,7 @@ export async function responderConversaAction(
 export async function pausarIaAction(conversationId: string): Promise<ResultadoAcao> {
   try {
     const usuario = await usuarioAtual();
-    await pausarIa(conversationId, usuario.id);
+    await pausarIa(usuario.companyId, conversationId, usuario.id);
   } catch (erro) {
     return paraResultadoErro(erro, "Falha ao pausar a IA. Tente novamente.");
   }
@@ -124,8 +124,8 @@ export async function religarIaAction(conversationId: string): Promise<Resultado
     // apagá-la sem quebrar nada visível — não remova. Continua DENTRO do
     // try (fix round 1) pelo mesmo motivo das outras duas: fora dele, uma
     // sessão inválida rejeitava sem produzir `ResultadoAcao`.
-    await usuarioAtual();
-    await religarIa(conversationId);
+    const usuario = await usuarioAtual();
+    await religarIa(usuario.companyId, conversationId);
   } catch (erro) {
     return paraResultadoErro(erro, "Falha ao religar a IA. Tente novamente.");
   }

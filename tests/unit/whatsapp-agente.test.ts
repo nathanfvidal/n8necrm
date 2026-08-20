@@ -19,14 +19,27 @@ vi.mock("../../src/modules/whatsapp/gateway", () => ({
 
 import { prisma } from "../../src/lib/prisma";
 import { pausarIa, religarIa, responderComoHumano } from "../../src/modules/whatsapp/agente";
-import { criarConversation, idsDeUsuariosSemeados, limparConversasDeTeste } from "./helpers/whatsapp";
+import {
+  companyIdSemeada,
+  criarConversation,
+  idsDeUsuariosSemeados,
+  limparConversasDeTeste,
+} from "./helpers/whatsapp";
 
+// A empresa do seed. Desde o Ciclo 1d, `pausarIa`/`religarIa`/
+// `responderComoHumano` recebem `companyId` como PRIMEIRO parâmetro — a
+// prova de que elas recusam conversa de OUTRA empresa não mora aqui, e sim
+// em `tests/unit/whatsapp-isolamento.test.ts`, que cria duas empresas de
+// verdade. Este arquivo continua provando o que sempre provou: a ordem
+// pausa → envia → grava, e a autoria da pausa.
 describe("pausar e religar a IA", () => {
   let ID_DO_ADMIN: string;
   let ID_DO_VENDEDOR: string;
+  let COMPANY_ID: string;
 
   beforeAll(async () => {
     ({ ID_DO_ADMIN, ID_DO_VENDEDOR } = await idsDeUsuariosSemeados());
+    COMPANY_ID = await companyIdSemeada();
   });
 
   afterEach(limparConversasDeTeste);
@@ -34,7 +47,7 @@ describe("pausar e religar a IA", () => {
 
   it("pausar grava quem pausou e quando", async () => {
     const conversa = await criarConversation();
-    await pausarIa(conversa.id, ID_DO_ADMIN);
+    await pausarIa(COMPANY_ID, conversa.id, ID_DO_ADMIN);
 
     const depois = await prisma.conversation.findUniqueOrThrow({ where: { id: conversa.id } });
     expect(depois.iaAtiva).toBe(false);
@@ -46,10 +59,10 @@ describe("pausar e religar a IA", () => {
   // da pausa -- e a tela passaria a mostrar a pessoa errada.
   it("pausar de novo não reescreve quem pausou primeiro", async () => {
     const conversa = await criarConversation();
-    await pausarIa(conversa.id, ID_DO_ADMIN);
+    await pausarIa(COMPANY_ID, conversa.id, ID_DO_ADMIN);
     const primeira = await prisma.conversation.findUniqueOrThrow({ where: { id: conversa.id } });
 
-    await pausarIa(conversa.id, ID_DO_VENDEDOR);
+    await pausarIa(COMPANY_ID, conversa.id, ID_DO_VENDEDOR);
     const segunda = await prisma.conversation.findUniqueOrThrow({ where: { id: conversa.id } });
 
     expect(segunda.iaPausadaPorId).toBe(ID_DO_ADMIN);
@@ -58,8 +71,8 @@ describe("pausar e religar a IA", () => {
 
   it("religar limpa o estado da pausa", async () => {
     const conversa = await criarConversation();
-    await pausarIa(conversa.id, ID_DO_ADMIN);
-    await religarIa(conversa.id);
+    await pausarIa(COMPANY_ID, conversa.id, ID_DO_ADMIN);
+    await religarIa(COMPANY_ID, conversa.id);
 
     const depois = await prisma.conversation.findUniqueOrThrow({ where: { id: conversa.id } });
     expect(depois.iaAtiva).toBe(true);
@@ -70,9 +83,11 @@ describe("pausar e religar a IA", () => {
 
 describe("resposta humana", () => {
   let ID_DO_ADMIN: string;
+  let COMPANY_ID: string;
 
   beforeAll(async () => {
     ({ ID_DO_ADMIN } = await idsDeUsuariosSemeados());
+    COMPANY_ID = await companyIdSemeada();
   });
 
   beforeEach(() => {
@@ -86,7 +101,7 @@ describe("resposta humana", () => {
     const conversa = await criarConversation();
     enviarTextoMock.mockResolvedValueOnce({ idExterno: `teste-turno-humano-${crypto.randomUUID()}` });
 
-    await responderComoHumano(conversa.id, "Oi! Aqui é o João, vou te ajudar.", ID_DO_ADMIN);
+    await responderComoHumano(COMPANY_ID, conversa.id, "Oi! Aqui é o João, vou te ajudar.", ID_DO_ADMIN);
 
     expect(enviarTextoMock).toHaveBeenCalledWith(conversa.waId, "Oi! Aqui é o João, vou te ajudar.");
 
@@ -107,7 +122,7 @@ describe("resposta humana", () => {
     const conversa = await criarConversation();
     enviarTextoMock.mockRejectedValueOnce(new Error("gateway fora do ar"));
 
-    await expect(responderComoHumano(conversa.id, "teste", ID_DO_ADMIN)).rejects.toThrow(
+    await expect(responderComoHumano(COMPANY_ID, conversa.id, "teste", ID_DO_ADMIN)).rejects.toThrow(
       /gateway fora do ar/
     );
 
@@ -122,7 +137,7 @@ describe("resposta humana", () => {
 
   it("recusa texto vazio sem chamar o gateway", async () => {
     const conversa = await criarConversation();
-    await expect(responderComoHumano(conversa.id, "   ", ID_DO_ADMIN)).rejects.toThrow(
+    await expect(responderComoHumano(COMPANY_ID, conversa.id, "   ", ID_DO_ADMIN)).rejects.toThrow(
       /mensagem vazia/i
     );
     expect(enviarTextoMock).not.toHaveBeenCalled();
@@ -133,7 +148,7 @@ describe("resposta humana", () => {
   it("recusa texto acima do limite de 4000 caracteres sem chamar o gateway", async () => {
     const conversa = await criarConversation();
     const textoEnorme = "a".repeat(4001);
-    await expect(responderComoHumano(conversa.id, textoEnorme, ID_DO_ADMIN)).rejects.toThrow(
+    await expect(responderComoHumano(COMPANY_ID, conversa.id, textoEnorme, ID_DO_ADMIN)).rejects.toThrow(
       /limite de 4000 caracteres/i
     );
     expect(enviarTextoMock).not.toHaveBeenCalled();
@@ -147,7 +162,7 @@ describe("resposta humana", () => {
     });
     enviarTextoMock.mockResolvedValueOnce({ idExterno: `teste-${crypto.randomUUID()}` });
 
-    await responderComoHumano(conversa.id, "Oi! Já te ajudo.", ID_DO_ADMIN);
+    await responderComoHumano(COMPANY_ID, conversa.id, "Oi! Já te ajudo.", ID_DO_ADMIN);
 
     const depois = await prisma.conversation.findUniqueOrThrow({ where: { id: conversa.id } });
     expect(depois.aguardandoHumanoDesde).toBeNull();
@@ -164,7 +179,7 @@ describe("resposta humana", () => {
     });
     enviarTextoMock.mockRejectedValueOnce(new Error("gateway fora do ar"));
 
-    await expect(responderComoHumano(conversa.id, "teste", ID_DO_ADMIN)).rejects.toThrow();
+    await expect(responderComoHumano(COMPANY_ID, conversa.id, "teste", ID_DO_ADMIN)).rejects.toThrow();
 
     const depois = await prisma.conversation.findUniqueOrThrow({ where: { id: conversa.id } });
     expect(depois.aguardandoHumanoDesde).not.toBeNull();

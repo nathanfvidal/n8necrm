@@ -36,7 +36,7 @@ export default async function ConversaDetalhePage({
   // pra cá em `/conversas/agente/page.tsx` — beco sem saída, não falha de
   // segurança, mas sem motivo para expor o link a quem não pode usá-lo).
   const usuario = await usuarioAtualOuLogin();
-  const conversa = await buscarConversaComMensagens(id);
+  const conversa = await buscarConversaComMensagens(usuario.companyId, id);
 
   if (!conversa) {
     notFound();
@@ -44,7 +44,7 @@ export default async function ConversaDetalhePage({
 
   // Revisão final, achado I1: `ConversaEstadoIa` precisa do interruptor
   // GLOBAL, não só do estado desta conversa — ver o comentário no componente.
-  const configBot = await lerConfigBot(usuario.id);
+  const configBot = await lerConfigBot(usuario.companyId);
 
   return (
     <div className="space-y-6 p-6">
