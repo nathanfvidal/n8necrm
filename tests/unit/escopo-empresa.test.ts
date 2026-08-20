@@ -798,7 +798,7 @@ describe("prismaDaEmpresa", () => {
       expect(bloco.filter((l) => /^\s*id\s+String\s+@id/.test(l))).toHaveLength(1);
     });
 
-    it("os 11 modelos de tenant nomeiam a relação `company` — a varredura depende do nome", () => {
+    it("os 12 modelos de tenant nomeiam a relação `company` — a varredura depende do nome", () => {
       const semRelacao = [...MODELOS_DE_TENANT].filter(
         (m) => !blocoDoModelo(m).some((l) => /^\s*company\s+Company\b/.test(l))
       );
@@ -808,17 +808,24 @@ describe("prismaDaEmpresa", () => {
       expect(semRelacao).toEqual([]);
     });
 
-    it("`BotConfig` é o ÚNICO modelo de tenant onde companyId é único", () => {
+    it("`BotConfig` e `CompanyConfig` são os ÚNICOS modelos de tenant onde companyId é único", () => {
       const comCompanyIdUnico = [...MODELOS_DE_TENANT].filter((m) =>
         blocoDoModelo(m).some(
           (l) => /@@unique\(\[companyId\]\)/.test(l) || /^\s*companyId\s+String.*@unique/.test(l)
         )
       );
 
-      // O bloco "Recusa, lançando" de escopo.ts diz que `BotConfig` é a exceção —
-      // a frase anterior dizia "nenhum dos 11" e estava errada. Um segundo modelo
-      // aqui torna a frase corrigida errada de novo.
-      expect(comCompanyIdUnico).toEqual(["BotConfig"]);
+      // O bloco "Recusa, lançando" de `escopo.ts` diz quais são as exceções. A
+      // frase já esteve errada duas vezes: primeiro dizia "nenhum dos 11"
+      // (`BotConfig` desmentia), depois "só `BotConfig`" (o Ciclo 1c
+      // acrescentou `CompanyConfig`, também uma linha por empresa). Um
+      // TERCEIRO modelo aqui torna a frase de hoje errada de novo — e então o
+      // caminho não é frouxar este caso, é reescrever a prosa de `escopo.ts`
+      // junto com esta lista.
+      //
+      // Ordem: a do `MODELOS_DE_TENANT`, não alfabética — o `filter` preserva
+      // a ordem de inserção do Set.
+      expect(comCompanyIdUnico).toEqual(["BotConfig", "CompanyConfig"]);
     });
 
     it("TODA mensagem lançada com escopo ativo carrega o companyId", async () => {

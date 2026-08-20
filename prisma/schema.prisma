@@ -94,6 +94,7 @@ model User {
   conversasPausadas  Conversation[] @relation("ConversasPausadas")
   botConfigsEditadas BotConfig[]    @relation("BotConfigsEditadas")
   memberships        Membership[]
+  configsEditadas    CompanyConfig[] @relation("ConfigsEditadas")
 }
 
 /// A empresa — fronteira de tenancy. Cada linha de dado de tenant (`Contact`,
@@ -122,6 +123,9 @@ model Company {
   // `BotConfig?`, não `BotConfig[]`: `@@unique([companyId])` em BotConfig
   // torna a relação 1-para-1 aos olhos do Prisma.
   botConfig        BotConfig?
+  // `CompanyConfig?` pelo mesmo motivo, e pela mesma constraint — ver o bloco
+  // do modelo, logo depois de `BotConfig`.
+  config           CompanyConfig?
 }
 
 /// Vínculo entre pessoa e empresa, e é ONDE O PAPEL VIVE.
@@ -467,6 +471,59 @@ model BotConfig {
   atualizadoEm    DateTime @updatedAt
   atualizadoPorId String?
   atualizadoPor   User?    @relation("BotConfigsEditadas", fields: [atualizadoPorId], references: [id])
+
+  @@unique([companyId])
+}
+
+/// A metade de `config/client.ts` que NÃO pode ser a mesma para duas empresas
+/// no mesmo banco: a marca e os módulos. Ciclo 1c
+/// (`docs/superpowers/specs/2026-08-20-ciclo-1c-config-no-banco-design.md`,
+/// seção 4).
+///
+/// **A linha é OPCIONAL, e isso é decisão do spec, não um `?` por descuido.**
+/// Empresa sem linha usa os padrões do arquivo versionado — é o que resolve o
+/// ovo-e-galinha do layout raiz, que envolve `/login`, onde ainda não existe
+/// sessão e portanto não existe empresa. A leitura que materializa esse
+/// fallback é a Task 2 deste mesmo ciclo (`src/core/config/leitura.ts`); ela
+/// ainda NÃO existe quando este bloco é escrito, então o parágrafo descreve
+/// contrato acordado, não código medido.
+///
+/// **Colunas TIPADAS e não uma coluna `Json`.** A varredura de escopo recusa
+/// `companyId` divergente em qualquer profundidade de `data`, inclusive dentro
+/// de coluna `Json` — falso positivo DECLARADO em `src/core/tenancy/escopo.ts`
+/// ("Falsos positivos conhecidos", nº 1), com caso de teste vivo em
+/// `tests/unit/escopo-empresa.test.ts`. Um documento de configuração que um dia
+/// ganhasse uma chave `companyId` (ou `company`, o outro nome que a varredura
+/// persegue) seria recusado na escrita com uma mensagem sobre tenancy que não
+/// tem relação com o defeito.
+///
+/// **Nulo significa "não decidi, usa o arquivo"** em `corPrimaria`, `fonte`,
+/// `logoClaro` e `logoEscuro`. `modulos` não tem esse estado, e o motivo é do
+/// Prisma: lista escalar é tipada `string[]`, não `string[] | null`
+/// (`node_modules/.prisma/client/index.d.ts`, tipo `CompanyConfig`, conferido
+/// depois de `prisma generate` nesta árvore) — ausência vira `[]`. Então a
+/// regra dela é outra e vive na leitura da Task 2: se a linha existe, `modulos`
+/// manda, inclusive vazia. Empresa que não decidiu módulos é empresa SEM LINHA.
+///
+/// `logoClaro` e `logoEscuro` são pensados como os dois ou nenhum — logo
+/// monocromático some no fundo da mesma cor. A regra é cobrada na LEITURA (Task
+/// 2), e não por `CHECK` no Postgres, por dois motivos: o Prisma não modela
+/// `CHECK`, e o efeito de `prisma migrate dev` sobre um `CHECK` escrito à mão
+/// (tratar como deriva e propor reset do banco) NÃO foi medido neste ambiente —
+/// é NV2 do spec. Desenhar migração sobre comportamento não medido é o oposto
+/// do que este programa faz.
+model CompanyConfig {
+  id              String   @id @default(cuid())
+  companyId       String
+  company         Company  @relation(fields: [companyId], references: [id])
+  corPrimaria     String?
+  fonte           String?
+  logoClaro       String?
+  logoEscuro      String?
+  modulos         String[]
+  atualizadoEm    DateTime @updatedAt
+  atualizadoPorId String?
+  atualizadoPor   User?    @relation("ConfigsEditadas", fields: [atualizadoPorId], references: [id])
 
   @@unique([companyId])
 }

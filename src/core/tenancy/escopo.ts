@@ -50,12 +50,12 @@ import type { PrismaClient } from "@prisma/client";
  * Fica registrado aqui como caminho de endurecimento futuro — não como
  * esquecimento.
  *
- * ## Os 11 modelos de tenant
+ * ## Os 12 modelos de tenant
  *
  * Medido em `prisma/schema.prisma` em 2026-08-20 (`awk` sobre os blocos
  * `model`, campo `companyId`): `Membership`, `Contact`, `PipelineStage`,
  * `Lead`, `LeadNote`, `Task`, `Notification`, `AuditLog`, `Conversation`,
- * `BotConfig`, `WhatsappMessage`.
+ * `BotConfig`, `CompanyConfig`, `WhatsappMessage`. O 12º entrou no Ciclo 1c.
  *
  * Ficam de FORA, e isso é deliberado:
  * - `User` — o comentário na linha 50 do schema diz por quê: "NÃO recebe
@@ -87,27 +87,27 @@ import type { PrismaClient } from "@prisma/client";
  * **Recusa, lançando**: `findUnique`, `findUniqueOrThrow`, `update`,
  * `delete`, `upsert`. O motivo é do Prisma, não uma escolha de gosto: o
  * `where` dessas operações é tipado como `XWhereUniqueInput` e só aceita
- * campo único (ou combinação `@@unique`). Em 10 dos 11 modelos de tenant
+ * campo único (ou combinação `@@unique`). Em 10 dos 12 modelos de tenant
  * `companyId` não é único, então o Prisma recusa o campo ali — não existe onde
  * pendurar o filtro. Deixar passar sem filtro devolveria a linha de OUTRA
  * empresa a quem pedisse pelo id; lançar transforma isso em erro de
  * desenvolvimento, na hora, com o nome da operação escopável equivalente na
  * mensagem.
  *
- * **`BotConfig` é a exceção, e ela foi encontrada auditando esta própria
- * frase**, que antes dizia "nenhum dos 11". Ele tem `@@unique([companyId])`
- * (`prisma/schema.prisma`, uma config por empresa), e por isso
- * `BotConfigWhereUniqueInput` ACEITA `companyId`
- * (`node_modules/.prisma/client/index.d.ts`) — ali `findUnique` seria
- * escopável de verdade. O escopo recusa mesmo assim, por uniformidade: uma
- * regra "lança em `findUnique`, menos num modelo" é regra que ninguém lembra
- * na hora de ler o código, e `findFirst` resolve o caso com a mesma consulta.
- * O que muda com esta correção é a MENSAGEM: para `BotConfig` ela seria
- * enganosa se repetisse "o Prisma recusa o campo ali". Quem quiser mudar o
- * comportamento tem aqui o registro de que só um modelo está em jogo. O teste
- * de deriva de uniques (`tests/unit/escopo-empresa.test.ts`) quebra se um
- * segundo modelo ganhar `@@unique([companyId])`, e então esta frase precisa
- * ser reescrita de novo.
+ * **`BotConfig` e `CompanyConfig` são as exceções, e a lista já esteve errada
+ * duas vezes.** Ela dizia "nenhum dos 11" enquanto `BotConfig` tinha
+ * `@@unique([companyId])`; corrigida para "só `BotConfig`", ficou errada de
+ * novo quando o Ciclo 1c criou `CompanyConfig` — também uma linha por empresa,
+ * também com `@@unique([companyId])`. Nos dois, `XWhereUniqueInput` ACEITA
+ * `companyId` (`node_modules/.prisma/client/index.d.ts`), então ali
+ * `findUnique` seria escopável de verdade. O escopo recusa mesmo assim, por
+ * uniformidade: uma regra "lança em `findUnique`, menos em dois modelos" é
+ * regra que ninguém lembra na hora de ler o código, e `findFirst` resolve o
+ * caso com a mesma consulta. O que muda é a MENSAGEM: para esses dois ela
+ * seria enganosa se repetisse "o Prisma recusa o campo ali". O teste de deriva
+ * de uniques (`tests/unit/escopo-empresa.test.ts`) quebra se um TERCEIRO
+ * modelo ganhar `@@unique([companyId])`, e então esta frase precisa ser
+ * reescrita de novo.
  *
  * **Não alcança de jeito nenhum**: `$queryRaw`/`$executeRaw`. Eles não passam
  * por `$allModels`, e por isso o lint é a peça central — é ele que garante
@@ -137,8 +137,9 @@ import type { PrismaClient } from "@prisma/client";
  * Os dois buracos da escrita aninhada ficam fechados, por vias diferentes, e
  * vale saber qual é qual:
  *
- * - aninhado que OMITE `companyId` → o BANCO recusa, porque a Task 1 tornou a
- *   coluna `NOT NULL` nos 11 modelos. O erro vem do banco e não explica a
+ * - aninhado que OMITE `companyId` → o BANCO recusa, porque a Task 1 do Ciclo
+ *   1a tornou a coluna `NOT NULL` nos 11 modelos originais, e o 12º
+ *   (`CompanyConfig`, Ciclo 1c) já nasceu `NOT NULL`. O erro vem do banco e não explica a
  *   causa; quem ler precisa saber que é esta.
  * - aninhado que passa o `companyId` de OUTRA empresa → o banco ACEITA. O
  *   campo está preenchido, o `NOT NULL` está satisfeito, e a linha nasce na
@@ -192,10 +193,13 @@ import type { PrismaClient } from "@prisma/client";
  *
  * A regra prática é esta: **relação que fica dentro de `Company` é segura;
  * relação que passa por `User` não é.** `User` não é modelo de tenant (não tem
- * `companyId`, e o motivo está logo acima) e tem oito relações inversas —
+ * `companyId`, e o motivo está logo acima) e tem NOVE relações inversas —
  * `leadsAtribuidos`, `tasks`, `notes`, `notifications`, `auditLogs`,
- * `conversasPausadas`, `botConfigsEditadas`, `memberships`
- * (`prisma/schema.prisma`). Atravessá-lo sai do tenant. O caminho concreto:
+ * `conversasPausadas`, `botConfigsEditadas`, `memberships`, `configsEditadas`
+ * (`prisma/schema.prisma`). Eram oito até o Ciclo 1c pendurar `CompanyConfig`
+ * em `User` por `atualizadoPorId` — o número aqui não é decorativo, ele conta
+ * as portas de saída do tenant e envelhece a cada relação nova.
+ * Atravessá-lo sai do tenant. O caminho concreto:
  *
  *   lead.findMany({ include: { responsavel: { include: { leadsAtribuidos: true } } } })
  *
@@ -258,6 +262,7 @@ export const MODELOS_DE_TENANT: ReadonlySet<string> = new Set([
   "AuditLog",
   "Conversation",
   "BotConfig",
+  "CompanyConfig",
   "WhatsappMessage",
 ]);
 
@@ -638,9 +643,9 @@ export function escoparArgumentos(
     throw new EscopoDeEmpresaError(
       `${onde} não é escopável por empresa no escopo ${JSON.stringify(companyId)}: o \`where\` ` +
         `dela só aceita campo único, e \`companyId\` não é único em ${model} — o Prisma recusa ` +
-        `o campo ali. (Exceção conhecida: \`BotConfig\` tem \`@@unique([companyId])\`, então lá ` +
-        `o campo seria aceito; o escopo recusa mesmo assim, por uniformidade — ver o bloco ` +
-        `"Recusa, lançando" em core/tenancy/escopo.ts.) ` +
+        `o campo ali. (Exceções conhecidas: \`BotConfig\` e \`CompanyConfig\` têm ` +
+        `\`@@unique([companyId])\`, então lá o campo seria aceito; o escopo recusa mesmo assim, ` +
+        `por uniformidade — ver o bloco "Recusa, lançando" em core/tenancy/escopo.ts.) ` +
         `Use \`${equivalente}\` no cliente escopado. ` +
         `Devolver a linha sem filtro entregaria dado de outra empresa a quem soubesse o id.`
     );
