@@ -57,10 +57,17 @@ describe("registrarAuditoria", () => {
     userId = usuario.id;
   });
 
-  // Ordem obrigatória: as linhas de auditoria referenciam o usuário e a
-  // empresa, e o vínculo referencia os dois. Apagar a empresa primeiro
-  // esbarraria em chave estrangeira.
+  // Ordem obrigatória: as linhas de auditoria e as notificações referenciam o
+  // usuário e a empresa, e o vínculo referencia os dois. Apagar a empresa
+  // primeiro esbarraria em chave estrangeira.
+  //
+  // `Notification` está aqui pelo mesmo motivo de `users-service.test.ts`:
+  // `Notification.userId` é RESTRICT, e uma única linha sobrando trava o
+  // `delete` do usuário — o arquivo deixa usuário e empresa para trás no
+  // banco compartilhado, e a execução seguinte quebra no `beforeAll` por
+  // e-mail duplicado (`teste-audit-log@teste.local` é fixo).
   afterAll(async () => {
+    await prisma.notification.deleteMany({ where: { userId } });
     await prisma.auditLog.deleteMany({ where: { userId } });
     await prisma.user.delete({ where: { id: userId } });
     await prisma.company.delete({ where: { id: companyId } });

@@ -57,6 +57,15 @@ describe("core/contacts", () => {
 
   afterAll(async () => {
     await limpar();
+    // `Notification.userId` é RESTRICT, e este autor é ATIVO e vinculado à
+    // empresa REAL do banco de desenvolvimento — qualquer despacho legítimo
+    // que rode junto (o aviso de conversa aguardando humano é o caminho vivo)
+    // deixa uma linha apontando para ele, e o `delete` abaixo passa a falhar.
+    // Quando falha, o autor fica para trás com e-mail determinístico e a
+    // PRÓXIMA execução quebra no `beforeAll` por unicidade, sem que o sintoma
+    // aponte para a causa. Mesmo reparo aplicado em `users-service.test.ts`,
+    // onde o estrago foi medido de verdade.
+    await prisma.notification.deleteMany({ where: { userId: autorId } });
     await prisma.auditLog.deleteMany({ where: { userId: autorId } });
     await prisma.user.delete({ where: { id: autorId } });
   });

@@ -71,12 +71,32 @@ describe("core/users — service", () => {
   });
 
   afterAll(async () => {
-    // Ordem importa: `AuditLog.userId` é RESTRICT, então os registros de
-    // auditoria saem antes dos usuários que eles referenciam. `Membership`
+    // Ordem importa: `AuditLog.userId` e `Notification.userId` são RESTRICT,
+    // então tudo que aponta para os usuários sai antes deles. `Membership`
     // não precisa de `deleteMany` à parte — cascade de `User` (onDelete:
     // Cascade em `Membership.userId`) já leva os vínculos junto.
-    await prisma.auditLog.deleteMany({ where: { userId: autorId } });
-    await prisma.user.deleteMany({ where: { email: { startsWith: PREFIXO } } });
+    //
+    // `Notification` entrou aqui depois de um estrago medido, não por
+    // precaução: enquanto `marcarAguardandoHumano` notificava "todos os
+    // ativos" sem empresa nenhuma, os usuários deste arquivo recebiam avisos
+    // de conversas de OUTRA empresa; a FK `Notification_userId_fkey` barrava
+    // o `deleteMany` abaixo, o arquivo deixava 11 usuários e 8 empresas para
+    // trás, e TODA execução seguinte falhava no `beforeAll` por e-mail
+    // duplicado — o e-mail é determinístico. Um banco de desenvolvimento
+    // compartilhado se envenena de vez e o sintoma (`Unique constraint ...
+    // email`) não aponta para a causa.
+    //
+    // Aquele vazamento foi corrigido, mas a fixture continuaria frágil sem
+    // esta linha: qualquer notificação LEGÍTIMA futura para estes usuários
+    // repete o quadro inteiro. O `afterAll` limpa o que o arquivo cria.
+    const idsCriados = await prisma.user.findMany({
+      where: { email: { startsWith: PREFIXO } },
+      select: { id: true },
+    });
+    const ids = idsCriados.map((usuario) => usuario.id);
+    await prisma.notification.deleteMany({ where: { userId: { in: ids } } });
+    await prisma.auditLog.deleteMany({ where: { userId: { in: ids } } });
+    await prisma.user.deleteMany({ where: { id: { in: ids } } });
     await prisma.company.delete({ where: { id: companyId } });
   });
 

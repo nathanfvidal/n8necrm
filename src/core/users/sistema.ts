@@ -26,9 +26,10 @@
  * pessoa de verdade, achando que sobrou um administrador.
  *
  * Efeito colateral menor, mas real: `marcarAguardandoHumano`
- * (`src/modules/whatsapp/notificacoes.ts`) avisa todo `User` com
- * `ativo: true`. Um bot reativado passaria a acumular notificações que
- * ninguém lê.
+ * (`src/modules/whatsapp/notificacoes.ts`) avisa todo usuário ativo COM
+ * VÍNCULO na empresa da conversa — e o bot tem vínculo (o seed o cria como
+ * ADMIN da empresa), então é o `ativo: false` que o mantém de fora. Um bot
+ * reativado passaria a acumular notificações que ninguém lê.
  */
 export const ID_SISTEMA_WHATSAPP = "system-whatsapp-bot";
 

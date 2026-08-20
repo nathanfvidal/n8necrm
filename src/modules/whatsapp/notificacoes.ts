@@ -32,7 +32,8 @@ function rotuloMascarado(identificador: string): string {
 
 /**
  * Marca a conversa como aguardando atendimento humano e, **só quando esta
- * chamada foi quem fez a transição**, notifica toda a equipe.
+ * chamada foi quem fez a transição**, notifica a equipe DA EMPRESA DA
+ * CONVERSA — ver o comentário dos destinatários no corpo.
  *
  * ## Por que um UPDATE condicional e não "consulta, decide, grava"
  *
@@ -73,18 +74,38 @@ export async function marcarAguardandoHumano(conversationId: string): Promise<bo
 
   const payload: ConversaAguardandoPayload = { conversationId, nomeExibicao };
 
-  // Todos os ativos. O usuário de sistema do WhatsApp é `ativo: false` no seed,
-  // então o filtro já o exclui — sem lista de exceções para alguém manter.
-  const ativos = await prisma.user.findMany({ where: { ativo: true }, select: { id: true } });
-  if (ativos.length === 0) return true;
+  // Destinatários: usuário ativo COM VÍNCULO (`Membership`) na empresa DESTA
+  // conversa. `conversa.companyId` já está em mãos (a busca acima não usa
+  // `select`), então o escopo não custa consulta extra.
+  //
+  // Correção de reparo (2026-08-20): a versão anterior era
+  // `prisma.user.findMany({ where: { ativo: true } })` — "todos os ativos",
+  // sem empresa nenhuma — e cada linha saía carimbada com o `companyId` da
+  // conversa. Não é hipótese: o banco de desenvolvimento tinha 11
+  // `Notification` com `companyId: "company-migracao-1a"` e `userId` de
+  // usuários de 8 empresas de teste, cada uma carregando o rótulo do cliente
+  // no `payload`. Rótulo de cliente de uma empresa entregue no sino de gente
+  // de outra — mesma família do vazamento já corrigido em
+  // `core/audit/alerta.ts`, e resolvido do mesmo jeito: a consulta parte de
+  // `Membership`, que é o que define "pessoa desta empresa", e não de `User`,
+  // que não sabe de empresa alguma.
+  //
+  // O que o comentário antigo protegia continua valendo: o usuário de sistema
+  // do WhatsApp TEM `Membership` (o seed o vincula como ADMIN da empresa —
+  // ver `semearUsuarioSistemaWhatsapp` em `prisma/seed.ts`), então quem o
+  // exclui é, como antes, o `ativo: false` — aqui em `user: { ativo: true }`.
+  // Sem lista de exceções para alguém manter.
+  const destinatarios = await prisma.membership.findMany({
+    where: { companyId: conversa.companyId, user: { ativo: true } },
+    select: { userId: true },
+  });
+  if (destinatarios.length === 0) return true;
 
-  // `Notification.companyId` é `NOT NULL` desde a Task 1 do Ciclo 1a. `conversa`
-  // já está em mãos (buscada acima, sem `select`, então `companyId` já veio
-  // junto) — origem preferida das três, sem consulta extra.
+  // `Notification.companyId` é `NOT NULL` desde a Task 1 do Ciclo 1a.
   await prisma.notification.createMany({
-    data: ativos.map((usuario) => ({
+    data: destinatarios.map((destinatario) => ({
       companyId: conversa.companyId,
-      userId: usuario.id,
+      userId: destinatario.userId,
       tipo: TIPO_CONVERSA_AGUARDANDO,
       payload,
     })),

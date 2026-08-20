@@ -93,6 +93,15 @@ describe("usuarioAtual — fix round 1/5 (CRITICAL): usuário desativado não po
     // (schema.prisma), então os vínculos somem junto. Só depois a `Company`
     // — apagá-la antes falharia na FK `Membership_companyId_fkey` enquanto
     // algum vínculo ainda existisse.
+    //
+    // `Notification` antes de tudo: a FK `Notification_userId_fkey` é
+    // RESTRICT (não cascade), então uma linha sobrando trava o `deleteMany`
+    // abaixo e o arquivo deixa usuários com e-mail fixo para trás — a
+    // execução seguinte quebra no `beforeAll` por unicidade. Mesmo reparo de
+    // `users-service.test.ts`, onde o estrago foi medido.
+    await prisma.notification.deleteMany({
+      where: { userId: { in: [idAtivo, idDesativado] } },
+    });
     await prisma.user.deleteMany({ where: { id: { in: [idAtivo, idDesativado] } } });
     await prisma.company.delete({ where: { id: idEmpresa } });
   });
