@@ -69,36 +69,42 @@ const PRISMA_CRU = {
 // motivo. Um contador que só conta arquivos esconde o que interessa.
 //
 // A varredura de 2026-08-20 (`.superpowers/sdd/reparo-tasks-tenancy.md`, § 5)
-// leu os 18 arquivos restantes um a um e catalogou **32 defeitos de tenancy
-// vivos** — 18 de severidade ALTA, 9 MÉDIA, 5 BAIXA —, mais 1 no arquivo que
-// aquela tarefa corrigiu (`tasks/service.ts`, o `contactId`), que fica
-// registrado abaixo por ser da mesma família e continuar aberto.
+// leu os 18 arquivos restantes um a um e catalogou **33 defeitos de tenancy
+// vivos** — 32 neles (18 de severidade ALTA, 9 MÉDIA, 5 BAIXA) mais 1 no
+// arquivo que aquela tarefa corrigiu (`tasks/service.ts`, o `contactId`).
+//
+// **Hoje são 31** — 17 ALTA, 9 MÉDIA, 5 BAIXA. Dois foram fechados no reparo
+// registrado em `.superpowers/sdd/reparo-redefinir-senha.md`, os dois da
+// família descrita logo abaixo: `redefinirSenha` (`users/service.ts`, a tomada
+// de conta que encabeçava a ordem) e `exigirContatoDaEmpresa`
+// (`tasks/service.ts`, o `contactId` que sobrara do commit anterior). As duas
+// linhas continuam nesta lista — o que zerou foi a contagem de DEFEITOS, não o
+// import do prisma cru —, e as anotações delas dizem isso.
 //
 // **A família é sempre a mesma:** valida que o registro EXISTE, nunca que ele
-// é da MESMA EMPRESA. Já apareceu 4 vezes neste ciclo (3744e64, 63cecd2,
-// 6dfb325, e agora `tasks/service.ts`), e as anotações abaixo dizem onde ela
-// ainda mora. Variantes irmãs: `findMany`/`count`/`groupBy`/`updateMany` sem
-// `where: { companyId }`, e busca por campo `@unique` GLOBAL
+// é da MESMA EMPRESA. Já apareceu 6 vezes neste ciclo (3744e64, 63cecd2,
+// 6dfb325, da2a402 e as duas deste reparo), e as anotações abaixo dizem onde
+// ela ainda mora. Variantes irmãs: `findMany`/`count`/`groupBy`/`updateMany`
+// sem `where: { companyId }`, e busca por campo `@unique` GLOBAL
 // (`Contact.telefone`, `Conversation.waId`, `PipelineStage.ordem`).
 //
-// **A ordem de conversão que estes números sugerem** não é a alfabética:
+// **A ordem de conversão que estes números sugerem** não é a alfabética. O
+// item 1 de antes (`users/service.ts`) saiu por ter sido corrigido; o que
+// sobra é:
 //
-//   1. `src/core/users/service.ts`   — 1 defeito, e é o pior de todos:
-//      `redefinirSenha` acha o alvo por `user.findUnique({ id })` sem
-//      `Membership` nenhum. Um ADMIN da empresa A troca a senha de QUALQUER
-//      conta do banco. Não é leitura de dado alheio, é tomada de conta.
-//   2. `src/core/pipeline/` (13)     — nenhuma assinatura de `service.ts` nem
+//   1. `src/core/pipeline/` (13)     — nenhuma assinatura de `service.ts` nem
 //      de `stages.ts` recebe `companyId`. É o módulo sem noção de empresa.
-//   3. `src/modules/whatsapp/queries.ts` + `agente.ts` (6) — a inbox inteira e
+//   2. `src/modules/whatsapp/queries.ts` + `agente.ts` (6) — a inbox inteira e
 //      todas as mutações de conversa aceitam `conversationId` cru do cliente.
-//   4. `src/core/contacts/` (4)      — agenda global e `findUnique` por id de
+//   3. `src/core/contacts/` (4)      — agenda global e `findUnique` por id de
 //      rota.
-//   5. `src/app/(painel)/page.tsx` (1) — o `auditLog` sem `where`.
-//   6. o resto (BAIXA), onde o escopo já vem por FK ou por dono.
+//   4. `src/app/(painel)/page.tsx` (1) — o `auditLog` sem `where`.
+//   5. o resto (BAIXA), onde o escopo já vem por FK ou por dono.
 //
-// **Estes defeitos NÃO foram corrigidos**, de propósito: a decisão de quantos
-// e em que ordem é do dono do projeto, e a tarefa que os catalogou tinha
-// escopo de um. Corrigir 32 num commit seria a mesma pressa que os criou.
+// **Os 31 restantes NÃO foram corrigidos**, de propósito: a decisão de quantos
+// e em que ordem é do dono do projeto, e as tarefas de reparo até aqui tiveram
+// escopo de um ou dois. Corrigir 33 num commit seria a mesma pressa que os
+// criou.
 //
 // Cada linha abaixo carrega a contagem do arquivo e o pior caso dele. Quem
 // converter um arquivo APAGA a anotação junto com a linha — anotação que
@@ -170,14 +176,19 @@ const VIOLADORES_TEMPORARIOS_CORE = [
   // que o `leadId` a montante não for validado; com o reparo de 2026-08-20 em
   // `tasks/service.ts`, ele é.
   "src/core/tasks/queries.ts",
-  // 1 defeito ABERTO (ALTA): `exigirContatoExistente` valida `contactId` — que
-  // vem da Server Action `criarMinhaTaskAction`/`editarTaskAction` — só por
-  // EXISTÊNCIA. É a mesma família do vazamento de `leadId` fechado em
-  // 2026-08-20 (`exigirLeadDaEmpresa`), no mesmo arquivo e nas mesmas duas
-  // funções, e ficou de fora daquele commit de propósito: o dono do projeto
-  // pediu a contagem completa antes de decidir quantos corrigir. A cura é a
-  // mesma linha — `companyId` no `where` —, com a empresa vindo de onde
-  // `exigirLeadDaEmpresa` já a pega.
+  // 0 defeitos desde 2026-08-20. Eram dois, os dois da mesma família e no
+  // mesmo par de funções: `leadId` (fechado em `da2a402`,
+  // `exigirLeadDaEmpresa`) e `contactId` (fechado no reparo seguinte,
+  // `exigirContatoDaEmpresa`). Os dois chegam das Server Actions
+  // `criarMinhaTaskAction`/`editarTaskAction` e eram validados só por
+  // EXISTÊNCIA. `tests/unit/task-isolamento.test.ts` trava os dois, com as
+  // duas metades cada (recusa o registro da empresa de fora, aceita o da
+  // própria).
+  //
+  // Continua nesta fila porque a fila é do IMPORT, não da contagem: o arquivo
+  // ainda alcança `@/lib/prisma` e escreve `Task`, que É modelo de tenant.
+  // Converter para `prismaDaEmpresa` é do próximo ciclo, e é o que faz o
+  // filtro deixar de depender de alguém lembrar de escrevê-lo à mão.
   "src/core/tasks/service.ts",
   // `users/empresa.ts` está aqui, e NÃO na exceção permanente, de propósito.
   // Ele resolve `companyIdDoUsuario(usuarioId)` lendo `Membership`, o que o
@@ -197,16 +208,22 @@ const VIOLADORES_TEMPORARIOS_CORE = [
   // `companyId` obrigatório na assinatura — foi este arquivo que consertou o
   // `<select>` de responsável na Task 4. Converter é trocar o import.
   "src/core/users/queries.ts",
-  // **1 defeito, e é o mais grave da fila inteira (ALTA):** `redefinirSenha`
-  // acha o alvo com `user.findUnique({ where: { id: entrada.id } })` e nada
-  // mais — sem `Membership`, sem `companyId`. Um ADMIN da empresa A redefine a
-  // senha de QUALQUER conta do banco, inclusive o ADMIN da empresa B, e
-  // depois entra com ela. Não é leitura de dado alheio, é tomada de conta, e
-  // por isso encabeça a ordem sugerida acima apesar de ser um item só.
-  // As outras funções do arquivo (`atualizarUsuario`, `definirAtivo`,
-  // `garantirQueSobraAdmin`) JÁ recebem `companyId` do autor e recusam quem
-  // não tem vínculo naquela empresa — o que torna a omissão em
-  // `redefinirSenha` mais fácil de fechar, e mais difícil de justificar.
+  // 0 defeitos desde 2026-08-20. O que havia aqui era o pior da fila inteira, e
+  // fica registrado porque a FORMA se repete: `redefinirSenha` achava o alvo
+  // com `user.findUnique({ where: { id: entrada.id } })` e nada mais — sem
+  // `Membership`, sem `companyId` —, enquanto as três vizinhas do MESMO
+  // arquivo (`atualizarUsuario`, `definirAtivo`, `garantirQueSobraAdmin`) já
+  // recusavam quem não tem vínculo. Um ADMIN da empresa A redefinia a senha de
+  // qualquer conta do banco e entrava com ela: tomada de conta, não leitura de
+  // dado alheio. Fechado no padrão das vizinhas, com
+  // `tests/unit/users-service.test.ts` travando as duas metades.
+  //
+  // Continua nesta fila pelo IMPORT, e aqui o motivo é mais fundo que "ainda
+  // não converteram": `User` não tem `companyId` e `email` é `@unique` GLOBAL
+  // por decisão registrada no schema, então o escopo deste módulo é o vínculo
+  // conferido em cada função, como está. Converter para `prismaDaEmpresa` exige
+  // decidir antes o que o cliente escopado faz com `User` — não é troca de
+  // import.
   "src/core/users/service.ts",
 ];
 

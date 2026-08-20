@@ -323,3 +323,96 @@ describe("editarTask — reapontar o Lead não atravessa a empresa", () => {
     expect((await prisma.task.findUniqueOrThrow({ where: { id: TASK_A } })).leadId).toBe(LEAD_A);
   });
 });
+
+/**
+ * O IRMÃO do vazamento acima, fechado depois (2026-08-20).
+ *
+ * `exigirContatoExistente` validava `contactId` com
+ * `prisma.contact.findUnique({ where: { id } })` — a MESMA família, no MESMO
+ * arquivo, nas MESMAS duas funções, e a três linhas de distância do irmão que
+ * já tinha sido corrigido. Ficou aberto de propósito no commit anterior
+ * (`da2a402`) porque o dono do projeto pediu a contagem completa dos defeitos
+ * antes de decidir quantos fechar; a decisão veio, e a cura foi a mesma linha:
+ * `companyId` no `where`, com a empresa vindo de onde `exigirLeadDaEmpresa` já
+ * a pega (`companyIdDoUsuario(responsavelId)` ao criar, `task.companyId` ao
+ * editar).
+ *
+ * O que vazava: `Task.contactId` da empresa A apontando para `Contact` da B.
+ * Daí em diante a tarefa mostrava, na lista de `/tasks`, o NOME de um contato
+ * de outro cliente — `listarTasksComLead` (`tasks/queries.ts`) traz o contato
+ * junto —, e o vínculo servia de ponte para as consultas que partem de
+ * `contactId`.
+ */
+describe("criarTask — o Contato precisa ser da empresa de quem age", () => {
+  it("recusa contactId de outra empresa", async () => {
+    await expect(
+      criarTask({
+        titulo: "tarefa com contato forjado",
+        vencimento: VENCIMENTO,
+        responsavelId: USUARIO_A,
+        contactId: CONTATO_B,
+      })
+    ).rejects.toThrow(/^Contato não encontrado/);
+
+    const vazou = await prisma.task.findFirst({
+      where: { responsavelId: USUARIO_A, titulo: "tarefa com contato forjado" },
+    });
+    expect(vazou).toBeNull();
+  });
+
+  it("aceita contactId da PRÓPRIA empresa e grava o vínculo", async () => {
+    const criada = await criarTask({
+      titulo: "tarefa com contato legitimo",
+      vencimento: VENCIMENTO,
+      responsavelId: USUARIO_A,
+      contactId: CONTATO_A,
+    });
+
+    const noBanco = await prisma.task.findUniqueOrThrow({ where: { id: criada.id } });
+    expect(noBanco.contactId).toBe(CONTATO_A);
+    expect(noBanco.companyId).toBe(EMPRESA_A);
+  });
+
+  it("a empresa B enxerga o próprio Contato — a recusa é de EMPRESA, não do id", async () => {
+    // A metade que impede "recusar todo `contactId`" de passar por correção: o
+    // MESMO `CONTATO_B` que a empresa A não alcança é aceito por quem é da B.
+    const criada = await criarTask({
+      titulo: "tarefa da B com contato",
+      vencimento: VENCIMENTO,
+      responsavelId: USUARIO_B,
+      contactId: CONTATO_B,
+    });
+
+    expect(criada.contactId).toBe(CONTATO_B);
+    expect(criada.companyId).toBe(EMPRESA_B);
+  });
+});
+
+describe("editarTask — reapontar o Contato não atravessa a empresa", () => {
+  it("recusa contactId de outra empresa e não reaponta a tarefa", async () => {
+    await expect(
+      editarTask({
+        taskId: TASK_A,
+        titulo: "tarefa da empresa A",
+        vencimento: VENCIMENTO,
+        contactId: CONTATO_B,
+        autorId: USUARIO_A,
+      })
+    ).rejects.toThrow(/^Contato não encontrado/);
+
+    const depois = await prisma.task.findUniqueOrThrow({ where: { id: TASK_A } });
+    expect(depois.contactId).toBeNull();
+  });
+
+  it("aceita contactId da PRÓPRIA empresa", async () => {
+    await editarTask({
+      taskId: TASK_A,
+      titulo: "tarefa da empresa A",
+      vencimento: VENCIMENTO,
+      contactId: CONTATO_A,
+      autorId: USUARIO_A,
+    });
+
+    expect((await prisma.task.findUniqueOrThrow({ where: { id: TASK_A } })).contactId).toBe(CONTATO_A);
+  });
+});

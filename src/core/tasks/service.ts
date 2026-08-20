@@ -14,13 +14,45 @@ import { validarCamposNovosDaTarefa } from "./schema";
 import type { Task } from "@prisma/client";
 
 /**
- * Confere que o contato existe antes de gravar — mesmo raciocínio da checagem
- * de `leadId` logo abaixo: sem isto, um id que não corresponde a contato
- * nenhum faria o Prisma estourar violação de FK crua (P2003), sem mensagem
- * acionável, e a pessoa leria "Falha ao salvar a tarefa".
+ * Confere que o contato existe **E é da empresa da tarefa** antes de gravar o
+ * vínculo. Irmã de `exigirLeadDaEmpresa` (logo abaixo) em tudo — inclusive em
+ * por que ela existe.
+ *
+ * Sem a checagem de EXISTÊNCIA, um id que não corresponde a contato nenhum
+ * faria o Prisma estourar violação de FK crua (P2003), sem mensagem acionável,
+ * e a pessoa leria "Falha ao salvar a tarefa".
+ *
+ * Sem a checagem de EMPRESA — que é como esta função nasceu, sob o nome
+ * `exigirContatoExistente` —, `Task.contactId` da empresa A podia apontar para
+ * `Contact` da B. `contactId` chega de `criarMinhaTaskAction`/`editarTaskAction`
+ * (`actions.ts`), que são Server Actions, e Server Action é endpoint HTTP
+ * público: o id é forjável e o seletor da tela não é a fronteira. O efeito
+ * visível era a lista de `/tasks` mostrando o NOME de um contato de outro
+ * cliente (`listarTasksComLead`, `queries.ts`, traz o contato junto).
+ *
+ * Ficou aberta de propósito quando `exigirLeadDaEmpresa` foi fechada
+ * (`da2a402`): o dono do projeto pediu a contagem completa dos defeitos de
+ * tenancy antes de decidir quantos corrigir. A decisão veio em 2026-08-20, e a
+ * cura é a mesma linha — `companyId` no `where`, com a empresa vindo das
+ * mesmas duas origens já medidas para o lead (`companyIdDoUsuario(
+ * responsavelId)` ao criar, `task.companyId` ao editar).
+ *
+ * A mensagem é a MESMA de "não existe", palavra por palavra, pelos dois
+ * motivos de sempre: não confirmar a quem sonda ids que aquele cuid pertence a
+ * alguém, e porque `actions.ts` a reconhece por prefixo
+ * (`MENSAGENS_MELHORADAS`, `/^Contato não encontrado/`) para trocá-la por
+ * "Esse contato não existe mais. Atualize a página."
+ *
+ * `prisma` cru com `companyId` explícito, e não o cliente escopado, pelo mesmo
+ * motivo escrito em `exigirLeadDaEmpresa`: `tasks/` ainda está na exceção do
+ * lint e a conversão é do próximo ciclo — dois caminhos de acesso ao banco no
+ * mesmo arquivo é pior que um caminho consistente e anotado.
  */
-async function exigirContatoExistente(contactId: string): Promise<void> {
-  const contato = await prisma.contact.findUnique({ where: { id: contactId } });
+async function exigirContatoDaEmpresa(contactId: string, companyId: string): Promise<void> {
+  const contato = await prisma.contact.findFirst({
+    where: { id: contactId, companyId },
+    select: { id: true },
+  });
   if (!contato) {
     throw new Error(`Contato não encontrado: "${contactId}" não corresponde a nenhum contato.`);
   }
@@ -169,7 +201,9 @@ export async function criarTask(input: {
   });
 
   if (contactId) {
-    await exigirContatoExistente(contactId);
+    // Mesma `companyId` que já foi resolvida para o `leadId` acima e que vai
+    // para a coluna `Task.companyId` logo abaixo — nenhuma origem nova.
+    await exigirContatoDaEmpresa(contactId, companyId);
   }
 
   return prisma.task.create({
@@ -276,7 +310,10 @@ export async function editarTask(input: {
   });
 
   if (contactId) {
-    await exigirContatoExistente(contactId);
+    // `task.companyId`, pelo mesmo motivo do `leadId` acima: a invariante é
+    // `Task.contactId` apontar para Contact da MESMA empresa da Task, e a
+    // linha já está em mãos e já passou pela regra de dono.
+    await exigirContatoDaEmpresa(contactId, task.companyId);
   }
 
   return prisma.task.update({

@@ -370,6 +370,53 @@ describe("core/users — service", () => {
   });
 
   describe("redefinirSenha", () => {
+    // A METADE QUE FALTAVA, e o pior defeito do Ciclo 1a enquanto durou:
+    // `redefinirSenha` achava o alvo com `user.findUnique({ id })` e mais
+    // nada — sem `Membership`, sem `companyId` —, enquanto as três vizinhas
+    // do mesmo arquivo (`atualizarUsuario`, `definirAtivo`,
+    // `garantirQueSobraAdmin`) já recusavam quem não tem vínculo. `entrada.id`
+    // chega de `redefinirSenhaAction`, que é Server Action, ou seja, endpoint
+    // HTTP público: um ADMIN da empresa A trocava a senha do ADMIN da empresa
+    // B e entrava com ela. Não é leitura de dado alheio, é tomada de conta.
+    //
+    // Este caso e o de baixo ("troca o hash...") são um par indivisível: sem
+    // o segundo, "recusar todo mundo" passaria como correção.
+    it("recusa alvo sem vínculo com a empresa de quem age, e não toca no hash", async () => {
+      const outraEmpresa = await prisma.company.create({
+        data: { nome: `${PREFIXO}outra-empresa-senha` },
+      });
+      try {
+        const alvo = await criarUsuario(
+          { nome: "Admin da Outra", email: email("senha-outra"), papel: "ADMIN", senha: "senha-original" },
+          autorId,
+          outraEmpresa.id
+        );
+
+        await expect(
+          redefinirSenha({ id: alvo.id, senha: "senha-tomada" }, autorId, companyId)
+        ).rejects.toThrow(UsuarioInvalidoError);
+
+        // Recusar não basta: o hash antigo tem que continuar valendo. Sem
+        // esta leitura, uma implementação que gravasse e SÓ DEPOIS lançasse
+        // passaria — e a conta estaria tomada do mesmo jeito.
+        const { senhaHash } = await prisma.user.findUniqueOrThrow({
+          where: { id: alvo.id },
+          select: { senhaHash: true },
+        });
+        expect(await bcrypt.compare("senha-tomada", senhaHash)).toBe(false);
+        expect(await bcrypt.compare("senha-original", senhaHash)).toBe(true);
+
+        // E nada de auditoria de uma redefinição que não aconteceu.
+        const log = await prisma.auditLog.findFirst({
+          where: { entidadeId: alvo.id, acao: "redefinir_senha" },
+        });
+        expect(log).toBeNull();
+      } finally {
+        await prisma.user.deleteMany({ where: { email: email("senha-outra") } });
+        await prisma.company.delete({ where: { id: outraEmpresa.id } });
+      }
+    });
+
     it("troca o hash e a senha nova passa a valer", async () => {
       const alvo = await criarUsuario(
         { nome: "Esqueceu a Senha", email: email("senha"), papel: "VENDEDOR", senha: "senha-antiga" },
@@ -377,7 +424,7 @@ describe("core/users — service", () => {
         companyId
       );
 
-      await redefinirSenha({ id: alvo.id, senha: "senha-nova-valida" }, autorId);
+      await redefinirSenha({ id: alvo.id, senha: "senha-nova-valida" }, autorId, companyId);
 
       const { senhaHash } = await prisma.user.findUniqueOrThrow({
         where: { id: alvo.id },
@@ -394,7 +441,7 @@ describe("core/users — service", () => {
         companyId
       );
 
-      await redefinirSenha({ id: alvo.id, senha: "outra-senha-valida" }, autorId);
+      await redefinirSenha({ id: alvo.id, senha: "outra-senha-valida" }, autorId, companyId);
 
       const log = await prisma.auditLog.findFirstOrThrow({
         where: { userId: autorId, entidadeId: alvo.id, acao: "redefinir_senha" },
@@ -462,7 +509,7 @@ describe("core/users — service", () => {
       ).rejects.toThrow(/conta é do sistema/);
 
       await expect(
-        redefinirSenha({ id: ID_SISTEMA_WHATSAPP, senha: "senha-de-teste" }, autorId)
+        redefinirSenha({ id: ID_SISTEMA_WHATSAPP, senha: "senha-de-teste" }, autorId, companyId)
       ).rejects.toThrow(/conta é do sistema/);
 
       const robo = await prisma.user.findUniqueOrThrow({ where: { id: ID_SISTEMA_WHATSAPP } });

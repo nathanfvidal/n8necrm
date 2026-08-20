@@ -396,17 +396,44 @@ export async function definirAtivo(
  * A senha nova nunca é registrada em lugar nenhum além do próprio
  * `senhaHash`: o audit log guarda que houve redefinição e quem fez, sem
  * `antes` nem `depois`, porque não há nada aqui que seja seguro guardar.
+ *
+ * ## `companyId`, e por que ele chegou depois das vizinhas
+ *
+ * Esta função buscava o alvo com `user.findUnique({ where: { id } })` e mais
+ * nada — só EXISTÊNCIA, nunca empresa —, enquanto `atualizarUsuario`,
+ * `definirAtivo` e `garantirQueSobraAdmin` já exigiam vínculo com a empresa de
+ * quem age. `entrada.id` chega de `redefinirSenhaAction` (`actions.ts`), que é
+ * Server Action, ou seja, endpoint HTTP público: o id é forjável, e a lista da
+ * tela não é a fronteira. `exigirGestorDeUsuarios()` prova que QUEM AGE é
+ * gestor, e nunca provou nada sobre o ALVO.
+ *
+ * O que isso permitia não é leitura de dado alheio, é **tomada de conta**: um
+ * ADMIN da empresa A redefinia a senha do ADMIN da empresa B e entrava com
+ * ela. É a mesma família que já apareceu quatro vezes no Ciclo 1a ("valida que
+ * EXISTE, nunca que é da mesma empresa" — 3744e64, 63cecd2, 6dfb325, da2a402),
+ * e o caso mais grave dela.
+ *
+ * A cura é a das vizinhas, palavra por palavra: carregar `memberships`
+ * filtrado por `companyId` junto do alvo e tratar "sem vínculo" como
+ * "não encontrado" — a pessoa pode existir no banco (ligada a outra empresa),
+ * mas não é gerenciável por quem chama. A mensagem é a MESMA de "não existe",
+ * de propósito: distinguir as duas confirmaria, a quem sonda ids, que aquele
+ * cuid pertence a alguém.
  */
 export async function redefinirSenha(
   entrada: { id: string; senha: string },
-  autorId: string
+  autorId: string,
+  companyId: string
 ): Promise<void> {
   recusarContaDeSistema(entrada.id);
 
   const senha = validarSenha(entrada.senha);
 
-  const alvo = await prisma.user.findUnique({ where: { id: entrada.id }, select: { id: true } });
-  if (!alvo) throw new UsuarioInvalidoError("Usuário não encontrado.");
+  const alvo = await prisma.user.findUnique({
+    where: { id: entrada.id },
+    select: { id: true, memberships: { where: { companyId }, select: { id: true } } },
+  });
+  if (!alvo || !alvo.memberships[0]) throw new UsuarioInvalidoError("Usuário não encontrado.");
 
   const senhaHash = await bcrypt.hash(senha, CUSTO_BCRYPT);
   await prisma.user.update({ where: { id: alvo.id }, data: { senhaHash } });
