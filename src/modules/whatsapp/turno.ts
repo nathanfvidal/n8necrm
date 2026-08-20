@@ -5,7 +5,7 @@ import { DuplicateMessageError } from "@vercel/queue";
 import { prismaDaEmpresa } from "@/core/tenancy/escopo";
 
 import { publicarTurno, type TurnoJob } from "./fila";
-import { whatsappGateway } from "./gateway";
+import { gatewayDaConversa } from "./gateway/fabrica";
 import { llmProvider } from "./llm";
 import type { AutorMensagemContexto } from "./llm/tipos";
 import { limparAguardandoHumano, marcarAguardandoHumano } from "./notificacoes";
@@ -355,6 +355,26 @@ async function processarMensagensPendentes(
 
   const conversation = await db.conversation.findFirstOrThrow({ where: { id: conversationId } });
 
+  // ## De onde sai a conexão do envio (Ciclo 2a, Tarefa 8)
+  //
+  // Era `whatsappGateway`, um singleton por PROCESSO com a credencial de
+  // `EVOLUTION_*` (`gateway/index.ts`). Um processo serve várias empresas, e
+  // uma empresa pode ter mais de uma conexão (decisão travada 4 do
+  // `CLAUDE.md`): com credencial por empresa, aquele singleton responderia o
+  // cliente da empresa B pela instância da A.
+  //
+  // Resolvido UMA vez por turno, fora do laço: a conexão não muda no meio de
+  // um turno, e resolver dentro faria uma consulta ao banco e uma decifragem
+  // AES-GCM por mensagem enviada sem nada em troca. Tem caso de teste
+  // contando as chamadas ("resolve o gateway UMA vez por turno").
+  //
+  // `conversation` vem do `findFirstOrThrow` acima SEM `select`, então
+  // `connectionId` está em mãos. Se ele for nulo (conversa anterior ao Ciclo
+  // 2a — não houve backfill, decisão registrada na Tarefa 1), a fábrica cai
+  // em `credencialAtivaUnica` e RECUSA se houver mais de uma ativa:
+  // responder pelo número errado é pior que não responder.
+  const gateway = await gatewayDaConversa(companyId, conversation);
+
   // Fix round 1/5, achado do revisor (I4): antes, `pendentes` só era marcado
   // `processadoEm` depois que TODAS as `respostas` terminavam de enviar. Se
   // o envio da 2ª (ou 3ª) mensagem falhasse, o handler lançava com NENHUMA
@@ -369,7 +389,7 @@ async function processarMensagensPendentes(
   // duplicar não é.
   let pendentesMarcadas = false;
   for (const texto of respostas) {
-    const envio = await whatsappGateway.enviarTexto(conversation.waId, texto);
+    const envio = await gateway.enviarTexto(conversation.waId, texto);
     // `WhatsappMessage.companyId` é `NOT NULL` desde a Task 1. `conversation`
     // já está em mãos, linha inteira (sem `select` no fetch acima) — usa o
     // `companyId` dela, sem sessão nenhuma envolvida.

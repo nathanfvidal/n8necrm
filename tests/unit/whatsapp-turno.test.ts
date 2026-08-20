@@ -11,9 +11,20 @@ vi.mock("server-only", () => ({}));
 
 // Mocks dos três pontos de saída de turno.ts — nenhuma chamada real à
 // OpenAI ou à Evolution nestes testes (instrução explícita da Fatia 1).
+// Desde o Ciclo 2a (Tarefa 8) o envio não sai mais do singleton
+// `whatsappGateway`: `turno.ts` resolve o gateway pela CONEXÃO DA CONVERSA,
+// via `gatewayDaConversa`. O que é mockado aqui é a FÁBRICA; `enviarTextoMock`
+// continua sendo o mesmo espião do envio de sempre, e nenhuma expectativa
+// antiga sobre ele mudou.
+//
+// O caminho REAL da fábrica (credencial da conexão certa, recusa de conexão
+// desativada, apikey fora da mensagem de erro) é exercitado sem mock nenhum em
+// `tests/unit/whatsapp-envio-por-conexao.test.ts` — este arquivo prova a
+// ORIGEM do gateway, aquele prova o que a origem entrega.
 const enviarTextoMock = vi.fn();
-vi.mock("../../src/modules/whatsapp/gateway", () => ({
-  whatsappGateway: { enviarTexto: (...args: unknown[]) => enviarTextoMock(...args) },
+const gatewayDaConversaMock = vi.fn();
+vi.mock("@/modules/whatsapp/gateway/fabrica", () => ({
+  gatewayDaConversa: (...a: unknown[]) => gatewayDaConversaMock(...a),
 }));
 
 const gerarRespostaMock = vi.fn();
@@ -94,6 +105,12 @@ describe("processarTurno", () => {
     enviarTextoMock
       .mockReset()
       .mockImplementation(async () => ({ idExterno: `${PREFIXO}saida-${crypto.randomUUID()}` }));
+    // A fábrica devolve um gateway cujo `enviarTexto` é o espião de sempre —
+    // assim toda expectativa deste arquivo sobre `enviarTextoMock` continua
+    // medindo o ENVIO, e não a resolução da conexão.
+    gatewayDaConversaMock
+      .mockReset()
+      .mockResolvedValue({ enviarTexto: (...a: unknown[]) => enviarTextoMock(...a) });
     gerarRespostaMock.mockReset().mockResolvedValue({ mensagens: ["Oi! Como posso ajudar?"] });
     publicarTurnoMock.mockReset().mockResolvedValue(undefined);
   });
@@ -849,6 +866,71 @@ describe("processarTurno", () => {
       await processarTurno({ companyId: EMPRESA, conversationId: conversa.id, seq: conversa.bufferSeq });
 
       expect(await aguardandoDe(conversa.id)).toBeInstanceOf(Date);
+    });
+  });
+
+  describe("o envio sai pela conexão da conversa (Ciclo 2a)", () => {
+    it("resolve o gateway com o `companyId` e o `connectionId` da conversa", async () => {
+      // O mesmo cenário de "caminho feliz" acima — o que muda é a pergunta:
+      // não "a mensagem saiu?", e sim "por qual conexão ela ia sair?".
+      const conversation = await criarConversation({ bufferSeq: 1 });
+      await criarMensagemEntrada(conversation.id, { texto: "Quero saber do Gol 2018" });
+
+      await processarTurno({ companyId: EMPRESA, conversationId: conversation.id, seq: 1 });
+
+      expect(enviarTextoMock).toHaveBeenCalledTimes(1);
+      // ## Por que `null` explícito, e não `expect.anything()`
+      //
+      // O briefing desta tarefa pedia `connectionId: expect.anything()`. Isso
+      // NÃO passa aqui, e foi medido: `expect.anything()` reprova `null` tanto
+      // quanto `undefined`, e `criarConversation` (`helpers/whatsapp.ts`) cria
+      // conversa SEM conexão — `connectionId` nulo é justamente o caso de toda
+      // conversa anterior ao Ciclo 2a, já que não houve backfill (Tarefa 1).
+      //
+      // `connectionId: null` continua sendo uma afirmação que MORDE: a
+      // frouxidão conhecida do Vitest ao comparar objeto parcial é entre chave
+      // ausente e `undefined` (armadilha medida na Tarefa 7, em
+      // `publicarTurno`) — `null` contra ausente reprova. Se `turno.ts`
+      // chamasse a fábrica com um objeto sem `connectionId`, esta linha ficaria
+      // vermelha.
+      //
+      // Com valor NÃO nulo quem morde é `whatsapp-envio-por-conexao.test.ts`,
+      // que tem duas conexões ativas de verdade no banco.
+      expect(gatewayDaConversaMock).toHaveBeenCalledWith(
+        EMPRESA,
+        expect.objectContaining({ id: conversation.id, connectionId: null })
+      );
+      // A segunda metade: o objeto passado é a CONVERSA, não um literal
+      // montado com o id — se alguém trocar por `{ id, connectionId: null }`
+      // fixo, esta linha continua verde, e por isso ela não está sozinha; o
+      // caso que morde de verdade é o de duas conexões ativas em
+      // `tests/unit/whatsapp-envio-por-conexao.test.ts`, que exercita a
+      // fábrica sem mock.
+      const [empresaRecebida, conversaRecebida] = gatewayDaConversaMock.mock.calls[0] as [
+        string,
+        { id: string; connectionId: string | null },
+      ];
+      expect(empresaRecebida).toBe(EMPRESA);
+      expect(conversaRecebida.id).toBe(conversation.id);
+      expect("connectionId" in conversaRecebida).toBe(true);
+    });
+
+    it("resolve o gateway UMA vez por turno, não uma por mensagem", async () => {
+      // Com o modelo devolvendo DUAS respostas, o gateway continua sendo
+      // resolvido uma vez só: resolver dentro do laço faria uma consulta ao
+      // banco e uma decifragem AES-GCM por mensagem enviada, sem nada em
+      // troca — a conexão não muda no meio de um turno.
+      //
+      // Duas respostas, e não uma: com uma só, "uma vez por turno" e "uma vez
+      // por mensagem" dão o mesmo número e o caso não distinguiria nada.
+      gerarRespostaMock.mockResolvedValueOnce({ mensagens: ["Primeira", "Segunda"] });
+      const conversation = await criarConversation({ bufferSeq: 1 });
+      await criarMensagemEntrada(conversation.id, { texto: "oi" });
+
+      await processarTurno({ companyId: EMPRESA, conversationId: conversation.id, seq: 1 });
+
+      expect(enviarTextoMock).toHaveBeenCalledTimes(2);
+      expect(gatewayDaConversaMock).toHaveBeenCalledTimes(1);
     });
   });
 });

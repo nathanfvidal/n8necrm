@@ -12,9 +12,13 @@ vi.mock("server-only", () => ({}));
 // Mock do gateway — nenhuma chamada real à Evolution nestes testes (mesmo
 // padrão de tests/unit/whatsapp-turno.test.ts). Sem isto, um teste desta
 // suíte mandaria mensagem de verdade para um telefone real.
+// Desde o Ciclo 2a (Tarefa 8), quem é mockado é a FÁBRICA — `agente.ts`
+// resolve o gateway pela conexão da conversa. `enviarTextoMock` continua sendo
+// o espião do envio, e as expectativas deste arquivo não mudaram.
 const enviarTextoMock = vi.fn();
-vi.mock("../../src/modules/whatsapp/gateway", () => ({
-  whatsappGateway: { enviarTexto: (...args: unknown[]) => enviarTextoMock(...args) },
+const gatewayDaConversaMock = vi.fn();
+vi.mock("@/modules/whatsapp/gateway/fabrica", () => ({
+  gatewayDaConversa: (...a: unknown[]) => gatewayDaConversaMock(...a),
 }));
 
 import { prisma } from "../../src/lib/prisma";
@@ -92,6 +96,13 @@ describe("resposta humana", () => {
 
   beforeEach(() => {
     enviarTextoMock.mockReset();
+    // A fábrica devolve um gateway cujo `enviarTexto` é o espião de sempre:
+    // as expectativas abaixo continuam medindo o ENVIO, e não a resolução da
+    // conexão. Quem exercita a fábrica de verdade é
+    // `tests/unit/whatsapp-envio-por-conexao.test.ts`.
+    gatewayDaConversaMock
+      .mockReset()
+      .mockResolvedValue({ enviarTexto: (...a: unknown[]) => enviarTextoMock(...a) });
   });
 
   afterEach(limparConversasDeTeste);

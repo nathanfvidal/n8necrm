@@ -22,9 +22,13 @@ vi.mock("server-only", () => ({}));
 // passaria num teste que só olhasse a rejeição, e continuaria falando com o
 // cliente da outra empresa na vida real. Por isso todo caso de recusa afirma
 // `enviarTextoMock` NÃO chamado, e não só a rejeição.
+// Desde o Ciclo 2a (Tarefa 8) o que se interpõe é a FÁBRICA
+// (`gatewayDaConversa`), não o singleton — mas o ORÁCULO continua sendo
+// `enviarTextoMock`: é ele que responde "a mensagem saiu de verdade?".
 const enviarTextoMock = vi.fn();
-vi.mock("../../src/modules/whatsapp/gateway", () => ({
-  whatsappGateway: { enviarTexto: (...args: unknown[]) => enviarTextoMock(...args) },
+const gatewayDaConversaMock = vi.fn();
+vi.mock("@/modules/whatsapp/gateway/fabrica", () => ({
+  gatewayDaConversa: (...a: unknown[]) => gatewayDaConversaMock(...a),
 }));
 
 import { prisma } from "../../src/lib/prisma";
@@ -334,6 +338,12 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   enviarTextoMock.mockReset();
+  // A fábrica devolve um gateway cujo `enviarTexto` é o espião de sempre —
+  // assim toda expectativa deste arquivo sobre `enviarTextoMock` continua
+  // medindo o ENVIO, e não a resolução da conexão.
+  gatewayDaConversaMock
+    .mockReset()
+    .mockResolvedValue({ enviarTexto: (...a: unknown[]) => enviarTextoMock(...a) });
   await semear();
 });
 

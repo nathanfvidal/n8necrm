@@ -3,7 +3,7 @@ import "server-only";
 import { prismaDaEmpresa } from "@/core/tenancy/escopo";
 
 import { botConfig } from "../../../config/bot";
-import { whatsappGateway } from "./gateway";
+import { gatewayDaConversa } from "./gateway/fabrica";
 import { limparAguardandoHumano } from "./notificacoes";
 
 /**
@@ -240,7 +240,14 @@ export async function responderComoHumano(
   // ele já está em mãos, e o escopo o injeta no `create` do passo 3.
   const conversa = await escopo.conversation.findFirstOrThrow({
     where: { id: conversationId },
-    select: { waId: true },
+    // `connectionId` entra no `select` desde o Ciclo 2a: é por ele que a
+    // resposta sai. Sem ele aqui, o envio cairia sempre no caminho de "única
+    // conexão ativa" (`credencialAtivaUnica`) e uma empresa com DUAS conexões
+    // ativas receberia `ConexaoAmbiguaError` numa conversa que sabe
+    // perfeitamente por onde entrou. Há caso de teste com duas conexões ativas
+    // na fixture (`tests/unit/whatsapp-envio-por-conexao.test.ts`) — com uma
+    // só, este `select` poderia sumir e o arquivo continuaria verde.
+    select: { waId: true, connectionId: true },
   });
 
   // 1. Pausa primeiro — mesmo que tudo depois falhe, a IA fica calada.
@@ -249,9 +256,20 @@ export async function responderComoHumano(
   // 2. Envia. Loga no `conversationId` (nunca o texto nem `conversa.waId` —
   // é o telefone do cliente, dado pessoal) para deixar rastro de quando o
   // humano precisou repetir o envio.
+  //
+  // O gateway é resolvido DEPOIS da pausa e ANTES do envio, dentro do MESMO
+  // `try`: se a conexão estiver ausente, ambígua ou desativada, a IA já está
+  // calada (passo 1) e nada foi mandado — que é exatamente a ordem que o
+  // resto desta função protege. Recusa de conexão entra aqui pela mesma porta
+  // que "gateway fora do ar", e o caso de teste que afirma "nada enviado" é o
+  // mesmo (`tests/unit/whatsapp-envio-por-conexao.test.ts`).
   let envio: { idExterno: string };
   try {
-    envio = await whatsappGateway.enviarTexto(conversa.waId, conteudo);
+    const gateway = await gatewayDaConversa(companyId, {
+      id: conversationId,
+      connectionId: conversa.connectionId,
+    });
+    envio = await gateway.enviarTexto(conversa.waId, conteudo);
   } catch (erro) {
     console.error(
       `Falha ao enviar resposta humana (conversationId=${conversationId}) — IA pausada, nada enviado.`,
