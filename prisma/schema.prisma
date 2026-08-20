@@ -68,6 +68,21 @@ model User {
   nome               String
   email              String         @unique
   senhaHash          String
+  /// Espelho depreciado. A fonte de verdade do papel é `Membership.papel`
+  /// (ver comentário do modelo `Membership` acima) — esta coluna sobrevive
+  /// só por dual-write, escrita em paralelo a cada mudança de papel, e
+  /// NENHUMA decisão de autorização a lê: as 15 chamadas de `hasPermission`
+  /// em `src/` recebem o usuário de `usuarioAtual()`/`usuarioAtualOuLogin()`,
+  /// que resolve o papel pelo vínculo, verificado em 2026-08-19.
+  ///
+  /// Por que ela ainda existe: três tentativas de derrubá-la em 2026-08-19
+  /// descobriram três grupos de leitores diferentes cada vez; a medição
+  /// final encontrou `papel` referenciado em ~80 arquivos, entre
+  /// componentes, páginas, testes e e2e. Derrubar a coluna é varredura
+  /// mecânica desses ~80 pontos, um ciclo próprio — não passo de tarefa
+  /// avulsa, e por isso não foi feito aqui.
+  ///
+  /// Código novo lê o papel de `Membership`, nunca daqui.
   papel              Role
   ativo              Boolean        @default(true)
   criadoEm           DateTime       @default(now())
@@ -94,19 +109,19 @@ model Company {
   criadoEm     DateTime @default(now())
   atualizadoEm DateTime @updatedAt
 
-  memberships       Membership[]
-  contacts          Contact[]
-  pipelineStages    PipelineStage[]
-  leads             Lead[]
-  leadNotes         LeadNote[]
-  tasks             Task[]
-  notifications     Notification[]
-  conversations     Conversation[]
-  whatsappMessages  WhatsappMessage[]
-  auditLogs         AuditLog[]
+  memberships      Membership[]
+  contacts         Contact[]
+  pipelineStages   PipelineStage[]
+  leads            Lead[]
+  leadNotes        LeadNote[]
+  tasks            Task[]
+  notifications    Notification[]
+  conversations    Conversation[]
+  whatsappMessages WhatsappMessage[]
+  auditLogs        AuditLog[]
   // `BotConfig?`, não `BotConfig[]`: `@@unique([companyId])` em BotConfig
   // torna a relação 1-para-1 aos olhos do Prisma.
-  botConfig         BotConfig?
+  botConfig        BotConfig?
 }
 
 /// Vínculo entre pessoa e empresa, e é ONDE O PAPEL VIVE.
@@ -166,7 +181,7 @@ model Contact {
 
   observacoes String?
 
-  criadoEm DateTime @default(now())
+  criadoEm     DateTime @default(now())
   // `@updatedAt`: o Prisma carimba sozinho a cada `update`. Fazer isso na mão
   // no serviço significa que a próxima escrita esquecida deixa a coluna
   // mentindo — e uma coluna de auditoria que mente é pior que não existir.
@@ -269,15 +284,15 @@ model Lead {
 }
 
 model LeadNote {
-  id        String   @id @default(cuid())
+  id        String    @id @default(cuid())
   companyId String
-  company   Company  @relation(fields: [companyId], references: [id])
+  company   Company   @relation(fields: [companyId], references: [id])
   leadId    String
-  lead      Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  lead      Lead      @relation(fields: [leadId], references: [id], onDelete: Cascade)
   autorId   String
-  autor     User     @relation(fields: [autorId], references: [id])
+  autor     User      @relation(fields: [autorId], references: [id])
   texto     String
-  criadoEm  DateTime @default(now())
+  criadoEm  DateTime  @default(now())
   // Marca que o texto foi corrigido depois de escrito. Sem isto o histórico
   // mente por omissão: o texto muda e nada indica que mudou.
   editadoEm DateTime?
