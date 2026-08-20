@@ -366,6 +366,95 @@ describe("prismaDaEmpresa", () => {
         })
       ).rejects.toThrow(EscopoDeEmpresaError);
     });
+  });
+
+  describe("relação `company` aninhada: lista BRANCA, não lista de formas conhecidas", () => {
+    // A versão anterior conferia `company.connect.id` e deixava o resto passar.
+    // As outras duas formas que o próprio Prisma gera em
+    // `CompanyCreateNestedOneWithoutLeadNotesInput` escapavam, e as três passam
+    // no `tsc`: `connectOrCreate` gravava a linha na empresa do `where` dele, e
+    // `create` FABRICAVA uma empresa nova e gravava nela. O array em `connect`
+    // escapava por outro motivo — `.id` de um array é `undefined`, e
+    // `exigirCoerencia` trata `undefined` como "não passou nada".
+    //
+    // A lista branca é fechada porque `Company` tem `id` como ÚNICO campo
+    // único (prisma/schema.prisma): não sobra forma legítima por descobrir.
+    const aninhar = (company: unknown) => ({
+      nome: "Aninhado",
+      notes: { create: [{ texto: "n", company }] },
+    });
+
+    const recusadas: [string, unknown][] = [
+      ["connectOrCreate", { connectOrCreate: { where: { id: EMPRESA_B }, create: { nome: "B" } } }],
+      ["create (fabrica empresa nova)", { create: { nome: "Nova" } }],
+      ["connect em array", { connect: [{ id: EMPRESA_B }] }],
+      ["connect com campo que não é `id`", { connect: { nome: "Empresa B" } }],
+      ["connect junto de create", { connect: { id: EMPRESA_A }, create: { nome: "Nova" } }],
+      ["disconnect", { disconnect: true }],
+    ];
+
+    for (const [nome, company] of recusadas) {
+      it(`recusa \`company: { ${nome} }\``, async () => {
+        const a = escopadoPara(EMPRESA_A);
+
+        await expect(
+          (a as any).contact.create({ data: aninhar(company) })
+        ).rejects.toThrow(EscopoDeEmpresaError);
+        expect(chamadas).toHaveLength(0);
+      });
+    }
+
+    it("a única forma aceita continua passando: connect com o id do escopo", async () => {
+      const a = escopadoPara(EMPRESA_A);
+
+      await expect(
+        (a as any).contact.create({ data: aninhar({ connect: { id: EMPRESA_A } }) })
+      ).resolves.toMatchObject({ companyId: EMPRESA_A });
+    });
+  });
+
+  describe("falsos positivos conhecidos: recusam escrita legítima, e dizem por quê", () => {
+    // Os dois falham ALTO (recusam, não vazam). Não há exclusão no código de
+    // propósito: uma segunda lista, de caminhos a ignorar, compraria deriva
+    // silenciosa — o mesmo defeito que a lista branca da relação acabou de
+    // fechar. O que existe é mensagem acionável, e é isso que estes casos
+    // travam: se a dica sumir da mensagem, quem esbarrar aqui vai ler
+    // "bug ou ataque" tendo escrito um log de auditoria.
+    it("companyId como CONTEÚDO de coluna Json é recusado, com a saída na mensagem", async () => {
+      const a = escopadoPara(EMPRESA_A);
+
+      const promessa = (a as any).auditLog.create({
+        data: { acao: "membership.update", antes: { userId: "u1", companyId: EMPRESA_B } },
+      });
+
+      await expect(promessa).rejects.toThrow(EscopoDeEmpresaError);
+      await expect(promessa).rejects.toThrow("CONTEÚDO de coluna `Json`");
+      await expect(promessa).rejects.toThrow("companyIdAlvo");
+    });
+
+    it("`where` aninhado dentro de `data` é recusado, com a saída na mensagem", async () => {
+      const a = escopadoPara(EMPRESA_A);
+
+      const promessa = (a as any).contact.updateMany({
+        data: { notes: { updateMany: { where: { companyId: EMPRESA_B }, data: { texto: "x" } } } },
+      });
+
+      await expect(promessa).rejects.toThrow(EscopoDeEmpresaError);
+      await expect(promessa).rejects.toThrow("`where` ANINHADO");
+      await expect(promessa).rejects.toThrow("chamada separada no cliente escopado");
+    });
+
+    it("no TOPO do data a mensagem NÃO carrega a dica — ali é sempre a coluna", async () => {
+      const a = escopadoPara(EMPRESA_A);
+
+      const erro = await (a as any).contact
+        .create({ data: { nome: "x", companyId: EMPRESA_B } })
+        .catch((e: Error) => e);
+
+      expect(erro).toBeInstanceOf(EscopoDeEmpresaError);
+      expect(erro.message).toContain("data.companyId");
+      expect(erro.message).not.toContain("falso positivo");
+    });
 
     // Referência cíclica: a varredura tem de TERMINAR, e ainda enxergar a
     // divergência que está do outro lado do ciclo.

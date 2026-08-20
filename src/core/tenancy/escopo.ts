@@ -100,12 +100,17 @@ import type { PrismaClient } from "@prisma/client";
  * operação aos olhos da extensão: o `$allOperations` vê `Contact.create` e
  * nunca vê o `LeadNote.create` que acontece dentro. O escopo NÃO injeta
  * `companyId` no aninhado, de propósito — a forma do payload aninhado varia
- * demais (`create`, `createMany`, `connectOrCreate`, linha só ou lote, com
- * `data:` ou sem) para a injeção ser sólida ali.
+ * demais (`create`, `createMany`, linha só ou lote, com `data:` ou sem) para a
+ * injeção ser sólida ali.
  *
  * O que ele faz é VARRER o `data` inteiro, em qualquer profundidade, e recusar
- * `companyId` de outra empresa onde quer que apareça. Os dois buracos ficam
- * fechados, por vias diferentes, e vale saber qual é qual:
+ * empresa divergente onde quer que apareça — no campo `companyId` (direto ou
+ * `{ set }`) e na relação `company`, esta última por lista BRANCA fechada
+ * (`connect: { id: <escopo> }` e nada mais; o porquê está em
+ * `exigirRelacaoDeEmpresaFechada`).
+ *
+ * Os dois buracos da escrita aninhada ficam fechados, por vias diferentes, e
+ * vale saber qual é qual:
  *
  * - aninhado que OMITE `companyId` → o BANCO recusa, porque a Task 1 tornou a
  *   coluna `NOT NULL` nos 11 modelos. O erro vem do banco e não explica a
@@ -119,6 +124,38 @@ import type { PrismaClient } from "@prisma/client";
  * payload fundo), guarda os objetos já visitados num `WeakSet` (referência
  * cíclica não vira laço) e tem teto de nós — acima do teto ela LANÇA, em vez
  * de desistir calada.
+ *
+ * Uma versão anterior deste bloco dizia que os dois buracos estavam fechados
+ * enquanto `company: { create }` e `company: { connectOrCreate }` ainda
+ * passavam — o primeiro FABRICAVA uma empresa nova e gravava a linha nela.
+ * Afirmação de fechamento que não é verdade é pior que a lacuna, porque
+ * desliga a desconfiança de quem lê depois. Daí a lista branca: o que este
+ * bloco afirma agora, afirma porque não sobrou forma por descobrir.
+ *
+ * ## Falsos positivos conhecidos
+ *
+ * A varredura confere pelo NOME do campo, e existem dois lugares onde um campo
+ * chamado `companyId` NÃO grava a empresa da linha. Nos dois o escopo recusa
+ * escrita legítima. Isso é escolha: os dois falham ALTO, e a alternativa —
+ * uma segunda lista, de caminhos a ignorar — compraria conveniência com
+ * deriva silenciosa, que é exatamente o defeito que a lista branca acima
+ * acabou de fechar. A mensagem do erro nomeia os dois casos e diz o que fazer.
+ *
+ * 1. **Conteúdo de coluna `Json`.** `Lead.utm`, `Notification.payload`,
+ *    `AuditLog.antes` e `AuditLog.depois` (`prisma/schema.prisma`) guardam
+ *    documento livre. Um `auditLog.create({ data: { antes: { userId: "u1",
+ *    companyId: "outra" } } })` é recusado, embora `antes` seja conteúdo e o
+ *    `companyId` da LINHA venha certo do escopo. Não acontece hoje — os
+ *    instantâneos de auditoria em uso não carregam `companyId` — mas o Ciclo
+ *    1a acabou de criar `Membership`, e auditar mudança de vínculo ou logar
+ *    corpo de webhook põe o campo lá dentro. Saída: renomear a chave dentro
+ *    do Json (`empresaAlvo`, `companyIdAlvo`).
+ * 2. **`where` ANINHADO dentro de `data`.** `data: { notes: { updateMany: {
+ *    where: { companyId: outra } } } }` é recusado, ainda que pelo argumento
+ *    deste próprio arquivo (ver `exigirCoerencia`) divergência em `where` seja
+ *    inofensiva: a composição em AND devolveria vazio. A varredura não sabe
+ *    que atravessou um `where` — ela vê o nome do campo. Saída: fazer a
+ *    operação aninhada como chamada separada, no cliente escopado.
  *
  * ## Leitura ANINHADA: não alcança, e este é o caminho mais fácil de errar
  *
@@ -254,15 +291,113 @@ const OPERACOES_POR_CHAVE_UNICA: Record<string, string> = {
  * que é o chamador tentando escapar do escopo de propósito), e o resto dele
  * não é varrido. Isso é escolha registrada, não lacuna esquecida.
  */
-function exigirCoerencia(campo: string, valor: unknown, companyId: string, onde: string) {
+function exigirCoerencia(
+  campo: string,
+  valor: unknown,
+  companyId: string,
+  onde: string,
+  dica = ""
+) {
   if (valor === undefined) return;
   if (valor === companyId) return;
   throw new EscopoDeEmpresaError(
     `${onde} recebeu ${campo}=${JSON.stringify(valor)}, mas o escopo é ${JSON.stringify(companyId)}. ` +
       `O escopo NÃO sobrescreve em silêncio: divergência aqui é bug ou ataque, e os dois merecem parar. ` +
       `Use o cliente da empresa certa. No TOPO de \`data\`/\`where\` dá para remover o campo e deixar ` +
-      `o escopo injetar; no ANINHADO não há injeção — ver "Escrita ANINHADA" no topo deste arquivo.`
+      `o escopo injetar; no ANINHADO não há injeção — ver "Escrita ANINHADA" no topo deste arquivo.` +
+      dica
   );
+}
+
+/**
+ * A dica que acompanha toda recusa em caminho ANINHADO.
+ *
+ * A varredura confere pelo NOME do campo, e há dois lugares onde um campo
+ * chamado `companyId` não grava a empresa da linha — os dois estão listados na
+ * seção "Falsos positivos conhecidos" no topo do arquivo. Quem esbarrar num
+ * deles precisa entender em dez segundos que topou num limite conhecido do
+ * escopo, e não num vazamento; sem esta dica, a mensagem acusa "bug ou ataque"
+ * a quem só escreveu um log de auditoria.
+ */
+const DICA_DE_FALSO_POSITIVO =
+  ` Se este caminho for CONTEÚDO de coluna \`Json\` (\`Lead.utm\`, ` +
+  `\`Notification.payload\`, \`AuditLog.antes\`/\`depois\`) ou um \`where\` ANINHADO, ` +
+  `isto é falso positivo conhecido: a varredura confere pelo nome do campo e não ` +
+  `distingue coluna de conteúdo. Nesses dois casos nada grava a empresa da linha. ` +
+  `Saída: renomeie a chave dentro do Json (\`empresaAlvo\`, \`companyIdAlvo\`) ou faça ` +
+  `a operação aninhada como chamada separada no cliente escopado. ` +
+  `Ver "Falsos positivos conhecidos" em core/tenancy/escopo.ts.`;
+
+/**
+ * A relação `company` aninhada, com lista branca FECHADA.
+ *
+ * A forma anterior conferia `company.connect.id` e deixava passar o resto, o
+ * que era conferir FORMATO CONHECIDO num arquivo que é fecha-fechado em todo o
+ * resto (operação não classificada lança; modelo fora do Set tem teste de
+ * deriva). Enquanto for lista de formas conhecidas, sempre falta uma — e as
+ * que faltavam não eram exóticas, eram as outras duas que o próprio Prisma
+ * gera em `CompanyCreateNestedOneWithoutXInput`:
+ *
+ * - `connectOrCreate: { where: { id: "B" }, create: {...} }` gravava a linha
+ *   aninhada na empresa B;
+ * - `create: { nome: "Nova" }` FABRICAVA uma empresa nova e gravava nela;
+ * - `connect: [{ id }]` (array) passava batido, porque `.id` de um array é
+ *   `undefined` e `exigirCoerencia` trata `undefined` como "não passou nada".
+ *
+ * Agora só existe UMA forma aceita: `connect: { id: <escopo> }`, objeto
+ * simples, chave única de cada lado. Isso é lista branca de verdade e não uma
+ * lista de proibições, e ela é fechada porque `Company` tem `id` como ÚNICO
+ * campo único (`prisma/schema.prisma`: `id String @id`, sem `@unique` em
+ * `nome`, sem `@@unique`). Não existe outro jeito legítimo de apontar uma
+ * empresa — então nada de legítimo cai aqui por descuido.
+ */
+function exigirRelacaoDeEmpresaFechada(
+  valor: unknown,
+  companyId: string,
+  onde: string,
+  caminho: string
+) {
+  const recusar = (motivo: string) => {
+    throw new EscopoDeEmpresaError(
+      `${onde} passou \`${caminho}\` numa forma que o escopo NÃO aceita: ${motivo}. ` +
+        `Sob escopo, a única forma aceita para a relação \`company\` aninhada é ` +
+        `\`company: { connect: { id: ${JSON.stringify(companyId)} } }\` — ou, mais simples, ` +
+        `\`companyId: ${JSON.stringify(companyId)}\`. ` +
+        `\`create\` fabricaria uma empresa NOVA e gravaria a linha nela; ` +
+        `\`connectOrCreate\` gravaria na empresa do \`where\` dele. As duas passam no \`tsc\` e ` +
+        `as duas saem do escopo, por isso a lista aqui é branca e fechada em vez de proibir ` +
+        `forma a forma.`
+    );
+  };
+
+  if (valor === undefined) return;
+  if (valor === null || typeof valor !== "object" || Array.isArray(valor)) {
+    return recusar(`esperava um objeto \`{ connect: { id } }\`, veio ${JSON.stringify(valor)}`);
+  }
+
+  const chaves = Object.keys(valor);
+  if (chaves.length !== 1 || chaves[0] !== "connect") {
+    return recusar(`as chaves são [${chaves.join(", ")}], e a única aceita é \`connect\``);
+  }
+
+  const conectar = (valor as Record<string, unknown>).connect;
+  if (conectar === null || typeof conectar !== "object" || Array.isArray(conectar)) {
+    return recusar(`\`connect\` esperava \`{ id }\`, veio ${JSON.stringify(conectar)}`);
+  }
+
+  const chavesDoConnect = Object.keys(conectar);
+  if (chavesDoConnect.length !== 1 || chavesDoConnect[0] !== "id") {
+    return recusar(
+      `\`connect\` tem as chaves [${chavesDoConnect.join(", ")}], e \`id\` é o único campo ` +
+        `único de \`Company\` — qualquer outra coisa ali não aponta empresa nenhuma`
+    );
+  }
+
+  const id = (conectar as Record<string, unknown>).id;
+  if (typeof id !== "string") {
+    return recusar(`\`connect.id\` esperava string, veio ${JSON.stringify(id)}`);
+  }
+  exigirCoerencia(`${caminho}.connect.id`, id, companyId, onde, DICA_DE_FALSO_POSITIVO);
 }
 
 /**
@@ -299,13 +434,15 @@ function valorGravadoEmCompanyId(valor: unknown): unknown {
  * Teto de nós: payload absurdo lança em vez de travar o processo.
  */
 function exigirEmpresaCoerenteEmData(dado: unknown, companyId: string, onde: string) {
-  const pilha: { valor: unknown; caminho: string }[] = [{ valor: dado, caminho: "data" }];
+  const pilha: { valor: unknown; caminho: string; aninhado: boolean }[] = [
+    { valor: dado, caminho: "data", aninhado: false },
+  ];
   const visitados = new WeakSet<object>();
   let nos = 0;
 
   while (pilha.length > 0) {
     const atual = pilha.pop()!;
-    const { valor, caminho } = atual;
+    const { valor, caminho, aninhado } = atual;
 
     if (valor === null || typeof valor !== "object") continue;
     // `Date`, `Buffer`, `Decimal` e afins são valores, não estrutura: descer
@@ -324,7 +461,7 @@ function exigirEmpresaCoerenteEmData(dado: unknown, companyId: string, onde: str
 
     if (Array.isArray(valor)) {
       for (let i = 0; i < valor.length; i += 1) {
-        pilha.push({ valor: valor[i], caminho: `${caminho}[${i}]` });
+        pilha.push({ valor: valor[i], caminho: `${caminho}[${i}]`, aninhado });
       }
       continue;
     }
@@ -333,28 +470,25 @@ function exigirEmpresaCoerenteEmData(dado: unknown, companyId: string, onde: str
       const caminhoFilho = `${caminho}.${chave}`;
 
       if (chave === "companyId") {
-        exigirCoerencia(caminhoFilho, valorGravadoEmCompanyId(filho), companyId, onde);
+        // A dica de falso positivo só acompanha caminho ANINHADO: no topo do
+        // `data`, `companyId` é sempre a coluna, e nunca conteúdo de Json nem
+        // `where` — dizer o contrário ali seria ruído em cima do caso comum.
+        exigirCoerencia(
+          caminhoFilho,
+          valorGravadoEmCompanyId(filho),
+          companyId,
+          onde,
+          aninhado ? DICA_DE_FALSO_POSITIVO : ""
+        );
         continue;
       }
 
-      // `company: { connect: { id } }` é o mesmo `companyId` escrito por
-      // relação. No TOPO do `data` ele é recusado de saída (ver
-      // `injetarEmData`, e o motivo lá); ANINHADO ele é legítimo — é como um
-      // `LeadNote` criado junto declara a empresa dele — desde que a empresa
-      // seja esta.
-      if (chave === "company" && filho !== null && typeof filho === "object") {
-        const conectar = (filho as Record<string, unknown>).connect;
-        if (conectar !== null && typeof conectar === "object") {
-          exigirCoerencia(
-            `${caminhoFilho}.connect.id`,
-            (conectar as Record<string, unknown>).id,
-            companyId,
-            onde
-          );
-        }
+      if (chave === "company") {
+        exigirRelacaoDeEmpresaFechada(filho, companyId, onde, caminhoFilho);
+        continue;
       }
 
-      pilha.push({ valor: filho, caminho: caminhoFilho });
+      pilha.push({ valor: filho, caminho: caminhoFilho, aninhado: true });
     }
   }
 }
