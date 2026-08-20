@@ -49,6 +49,14 @@ const PRISMA_CRU = {
 // desta lista é o contador de quanto falta: quando ela esvaziar, os blocos
 // somem junto. Exceção nomeada conta; disciplina não conta nada.
 //
+// **Esta lista é lida por um teste.** `tests/unit/catraca-prisma-cru.test.ts`
+// compara as quatro listas deste arquivo com a árvore de `src/` e reprova
+// quem entrar sem ser declarado, quem for declarado sem importar mais nada, e
+// quem escrever um caminho com metacaractere de glob nu (a armadilha do `[id]`,
+// registrada mais abaixo). Diminuir a lista não reprova ninguém — a catraca
+// gira num sentido só —, mas quem diminuir deve baixar junto a
+// `LINHA_DE_BASE_DE_IMPORTADORES_TEMPORARIOS` de lá, que hoje é 19.
+//
 // Os 3 de `src/app` entraram numa segunda passada, e vale registrar por quê: a
 // regra nascera limitada a `core` + `modules`, enquanto `escopo.ts` dizia no
 // próprio comentário que o lint "garante que ninguém alcance o `prisma` cru".
