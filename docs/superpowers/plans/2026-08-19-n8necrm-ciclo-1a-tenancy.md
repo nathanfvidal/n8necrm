@@ -188,11 +188,17 @@ A ordem é obrigatória:
 5. `UPDATE` preenchendo com o id da empresa criada
 6. `ALTER COLUMN ... SET NOT NULL` + `ADD CONSTRAINT` das FKs + `CREATE INDEX`
 7. `BotConfig`: novo id, `@@unique([companyId])`
-8. **Verificação que falha** (passo 9) e só então
-9. `ALTER TABLE "User" DROP COLUMN "papel"`
+**`User.papel` NÃO é derrubada aqui.** Ela sai na Task 2, numa segunda
+migração, logo depois de `usuarioAtual()` parar de lê-la.
 
-O passo de verificação, antes do `DROP`, é o que substitui a ideia descartada de
-"manter a coluna por um ciclo":
+O motivo é de ordem, não de gosto: derrubar a coluna nesta tarefa regenera o
+client do Prisma sem `papel`, e os 26 lugares que fazem `usuario.papel` param de
+compilar **antes** de a Task 2 existir para consertá-los. O repositório ficaria
+quebrado entre duas tarefas, e o `typecheck` de fechamento desta seria
+impossível de passar.
+
+A verificação que protege o `DROP` está escrita abaixo porque pertence a este
+raciocínio, mas o SQL dela vai no `migration.sql` da **Task 2**:
 
 ```sql
 -- Não derruba `User.papel` sem provar que ninguém perde o papel.
@@ -275,10 +281,11 @@ cd "d:/Projetos Programação/N8n + Crm"
 git add prisma/
 git commit -m "feat(tenancy): Company, Membership e companyId nas tabelas de tenant
 
-O papel sai de User e passa a viver no vinculo: papel e relacao entre pessoa
-e empresa, nao atributo da pessoa. A migracao copia o papel ANTES de
-derrubar a coluna, e um DO block ABORTA se algum usuario ficaria sem
-Membership com o papel que a coluna declarava -- nada e apagado sem prova.
+O papel passa a viver no vinculo: papel e relacao entre pessoa e empresa, nao
+atributo da pessoa. Esta migracao COPIA o papel para o Membership e deixa
+User.papel de pe -- derruba-la aqui quebraria o typecheck dos 26 lugares que
+a leem, antes de a tarefa seguinte existir para consertar. O DROP, e a
+verificacao que o protege, vao na proxima.
 
 BotConfig perde o id constante que impunha linha unica; a unicidade passa a
 ser @@unique([companyId]), imposta pelo banco do mesmo jeito por outro
@@ -473,11 +480,38 @@ for por campo de `User` que não está em `UsuarioAtivo` (tipo `senhaHash`), iss
 é o comportamento pretendido e o consumidor é que estava lendo o que não devia —
 reporte qual, não contorne acrescentando o campo ao tipo.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 7: Só agora, derrubar `User.papel`**
+
+Nada mais lê a coluna. Crie uma segunda migração, à mão, com **a verificação
+antes do `DROP`** (o SQL está na Task 1, na seção da ordem da migração).
 
 ```bash
 cd "d:/Projetos Programação/N8n + Crm"
-git add src/core/auth tests/unit/usuario-ativo.test.ts
+npx prisma migrate deploy
+npm run typecheck
+npx vitest run tests/unit/usuario-ativo.test.ts tests/unit/session.test.ts
+```
+
+Prove que a coluna sumiu e que o papel sobreviveu:
+
+```sql
+SELECT column_name FROM information_schema.columns
+WHERE table_schema='public' AND table_name='User' AND column_name='papel';
+-- espera-se ZERO linhas
+
+SELECT u.email, m.papel FROM "User" u JOIN "Membership" m ON m."userId" = u.id ORDER BY u.email;
+-- espera-se um vinculo por usuario, com o papel que a coluna dizia
+```
+
+**Se a verificação da migração abortar, não force.** Ela abortou porque algum
+usuário ficaria sem papel — reporte quem, com a saída, e pare. É exatamente o
+caso para o qual ela existe.
+
+- [ ] **Step 8: Commit**
+
+```bash
+cd "d:/Projetos Programação/N8n + Crm"
+git add src/core/auth tests/unit/usuario-ativo.test.ts prisma/
 git commit -m "feat(tenancy): usuarioAtual resolve empresa e papel pelo vinculo
 
 Preserva o campo papel de proposito: as 26 chamadas de hasPermission nao
