@@ -151,19 +151,42 @@ export async function avaliarAtividadeSuspeita(input: {
   );
   if (!primeiroDaJanela) return;
 
-  // Destinatários: ADMIN ativo, menos o autor e menos as contas de sistema.
+  // `Notification.companyId` é `NOT NULL` desde a Task 1 do Ciclo 1a. O
+  // alerta é sobre uma rajada de AÇÕES DE `input.userId` — a empresa dele é a
+  // origem certa (mesma lógica de `gravarLinhaDeAuditoria`, `core/audit/log.ts`,
+  // que resolve `AuditLog.companyId` da mesma forma para o mesmo autor).
+  //
+  // Resolvida ANTES da busca de destinatários porque agora ela também serve
+  // para ESCOPAR quem recebe — ver comentário abaixo.
+  const companyId = await companyIdDoUsuario(input.userId);
+
+  // Destinatários: ADMIN ativo DA MESMA EMPRESA do suspeito, menos o autor e
+  // menos as contas de sistema.
+  //
+  // Correção de reparo (2026-08-19): a versão anterior buscava ADMIN em
+  // `prisma.user` direto, sem `companyId` nenhum — ADMIN de QUALQUER empresa
+  // era destinatário de QUALQUER rajada. Com uma empresa só no banco isso não
+  // se via; no dia em que existir uma segunda, um alerta sobre a empresa A
+  // chegaria ao ADMIN da empresa B, que não tem nada a ver com aquilo, não
+  // pode agir sobre aquilo, e passaria a receber sinal de segurança de um
+  // cliente que não é dele. Alerta de segurança de um cliente não pode
+  // vazar para outro — a consulta agora parte de `Membership`, o vínculo que
+  // define "ADMIN desta empresa" (mesmo padrão de `listarUsuarios`,
+  // `core/users/queries.ts`), não de `User.papel`, que é espelho depreciado
+  // (ver comentário do campo em `prisma/schema.prisma`).
   //
   // Excluir o autor não é cortesia — avisar o suspeito não protege nada e só
-  // entrega que ele foi percebido. Se o autor for o ÚNICO ADMIN ativo, a
-  // lista fica vazia e nenhum alerta é enviado: é o limite honesto deste
-  // controle, e o `AuditLog` continua guardando tudo para depois.
-  const destinatarios = await prisma.user.findMany({
+  // entrega que ele foi percebido. Se o autor for o ÚNICO ADMIN ativo desta
+  // empresa, a lista fica vazia e nenhum alerta é enviado: é o limite honesto
+  // deste controle, e o `AuditLog` continua guardando tudo para depois.
+  const destinatarios = await prisma.membership.findMany({
     where: {
+      companyId,
       papel: "ADMIN",
-      ativo: true,
-      id: { notIn: [...idsDeSistema(), input.userId] },
+      userId: { notIn: [...idsDeSistema(), input.userId] },
+      user: { ativo: true },
     },
-    select: { id: true },
+    select: { userId: true },
   });
   if (destinatarios.length === 0) return;
 
@@ -183,19 +206,10 @@ export async function avaliarAtividadeSuspeita(input: {
     janelaMinutos: Math.round(JANELA_ALERTA_MS / 60_000),
   };
 
-  // `Notification.companyId` é `NOT NULL` desde a Task 1 do Ciclo 1a. O
-  // alerta é sobre uma rajada de AÇÕES DE `input.userId` — a empresa dele é a
-  // origem certa (mesma lógica de `gravarLinhaDeAuditoria`, `core/audit/log.ts`,
-  // que resolve `AuditLog.companyId` da mesma forma para o mesmo autor). Os
-  // destinatários (ADMINs) ainda não são filtrados por empresa aqui — isso é
-  // isolamento de LEITURA (o `findMany` de ADMINs acima continua global), que
-  // é trabalho da Task 3/4 deste ciclo, não desta tarefa de reparo.
-  const companyId = await companyIdDoUsuario(input.userId);
-
   await prisma.notification.createMany({
     data: destinatarios.map((destinatario) => ({
       companyId,
-      userId: destinatario.id,
+      userId: destinatario.userId,
       tipo: TIPO_ALERTA_ATIVIDADE,
       payload,
     })),

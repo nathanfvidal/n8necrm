@@ -42,9 +42,11 @@ const MARCA = "ZZAlertaAtividade";
 let idSuspeito = "";
 let idAdminA = "";
 let idAdminB = "";
-// Empresa única do Ciclo 1a (mesma suposição de `prisma/seed.ts`) —
-// `AuditLog.companyId` agora é obrigatório, e não há mais de uma empresa
-// neste banco de teste.
+// Empresa do suspeito e dos dois ADMINs "normais" deste arquivo. A suíte
+// inteira, salvo o caso de isolamento por empresa abaixo, roda dentro dela —
+// mesma suposição de `prisma/seed.ts`, que só semeia uma. O caso que prova
+// isolamento cria a SEGUNDA empresa localmente e a desfaz no próprio `finally`,
+// sem tocar nesta.
 let companyId = "";
 
 /**
@@ -126,6 +128,19 @@ beforeAll(async () => {
       ativo: true,
     },
   });
+  // Os dois precisam de `Membership` ADMIN NESTA `companyId` — desde o reparo
+  // de escopo por empresa, `avaliarAtividadeSuspeita` busca destinatários em
+  // `prisma.membership`, não mais em `prisma.user`. Sem este vínculo, os dois
+  // ficam invisíveis para a consulta e todo teste que espera notificação
+  // falha com zero destinatários — foi exatamente o que aconteceu ao rodar a
+  // suíte antes desta correção: `User.papel = "ADMIN"` sozinho não basta mais,
+  // é `Membership.papel = "ADMIN"` na empresa certa que conta.
+  await prisma.membership.create({
+    data: { userId: adminA.id, companyId, papel: "ADMIN" },
+  });
+  await prisma.membership.create({
+    data: { userId: adminB.id, companyId, papel: "ADMIN" },
+  });
   idSuspeito = suspeito.id;
   idAdminA = adminA.id;
   idAdminB = adminB.id;
@@ -186,7 +201,7 @@ describe("alerta de atividade destrutiva em rajada", () => {
     expect(await alertasRecebidos()).toBe(0);
   });
 
-  it("atingido o limite, TODO admin ativo recebe o alerta", async () => {
+  it("atingido o limite, TODO admin ativo DESTA EMPRESA recebe o alerta", async () => {
     await registrarRajada(LIMITE_ALERTA);
 
     await avaliarAtividadeSuspeita({ userId: idSuspeito, acao: ACOES_SENSIVEIS[0] });
@@ -204,7 +219,14 @@ describe("alerta de atividade destrutiva em rajada", () => {
   // Avisar o próprio suspeito não protege ninguém — só entrega que ele foi
   // percebido. Se o saboteur for ADMIN, os OUTROS admins é que precisam saber.
   it("o proprio autor NAO recebe alerta sobre si mesmo, mesmo sendo admin", async () => {
+    // `Membership.papel`, não só `User.papel`: é de lá que a consulta de
+    // destinatários lê hoje. Atualizar as duas colunas é o mesmo dual-write
+    // que `core/users/service.ts` faz em produção.
     await prisma.user.update({ where: { id: idSuspeito }, data: { papel: "ADMIN" } });
+    await prisma.membership.updateMany({
+      where: { userId: idSuspeito, companyId },
+      data: { papel: "ADMIN" },
+    });
     try {
       await registrarRajada(LIMITE_ALERTA);
 
@@ -224,6 +246,10 @@ describe("alerta de atividade destrutiva em rajada", () => {
       expect(await alertasRecebidos()).toBe(2);
     } finally {
       await prisma.user.update({ where: { id: idSuspeito }, data: { papel: "VENDEDOR" } });
+      await prisma.membership.updateMany({
+        where: { userId: idSuspeito, companyId },
+        data: { papel: "VENDEDOR" },
+      });
     }
   });
 
@@ -309,5 +335,51 @@ describe("alerta de atividade destrutiva em rajada", () => {
     await avaliarAtividadeSuspeita({ userId: idSuspeito, acao: ACOES_SENSIVEIS[0] });
 
     expect(await alertasRecebidos()).toBe(0);
+  });
+
+  // O entregável real do reparo: antes, a consulta de destinatários vinha de
+  // `prisma.user` direto, sem `companyId` nenhum, e QUALQUER ADMIN ativo no
+  // banco era notificado — inclusive o de uma empresa que não tem nada a ver
+  // com a rajada. Este caso cria uma SEGUNDA empresa, com seu próprio ADMIN,
+  // e prova que o alerta da empresa do suspeito não vaza para ela: alerta de
+  // segurança de um cliente não pode chegar a outro.
+  it("ADMIN de OUTRA empresa nao recebe alerta de rajada desta empresa", async () => {
+    const outraEmpresa = await prisma.company.create({
+      data: { nome: `${MARCA} Outra Empresa` },
+    });
+    const adminOutraEmpresa = await prisma.user.create({
+      data: {
+        nome: `AdminOutraEmpresa ${MARCA}`,
+        email: `admin-outra-empresa-${MARCA.toLowerCase()}@teste.invalid`,
+        senhaHash: HASH_INERTE,
+        papel: "ADMIN",
+        ativo: true,
+      },
+    });
+    await prisma.membership.create({
+      data: { userId: adminOutraEmpresa.id, companyId: outraEmpresa.id, papel: "ADMIN" },
+    });
+
+    try {
+      await registrarRajada(LIMITE_ALERTA);
+
+      await avaliarAtividadeSuspeita({ userId: idSuspeito, acao: ACOES_SENSIVEIS[0] });
+
+      const doOutraEmpresa = await prisma.notification.findMany({
+        where: { userId: adminOutraEmpresa.id, tipo: TIPO_ALERTA_ATIVIDADE },
+      });
+      expect(doOutraEmpresa).toHaveLength(0);
+
+      // A exclusão é por empresa, não uma falha geral de envio: os ADMINs da
+      // MESMA empresa do suspeito continuam recebendo normalmente.
+      expect(await alertasRecebidos()).toBe(2);
+    } finally {
+      // Nesta ordem: User (cascade leva o Membership) antes da Company,
+      // mesmo raciocínio do `recusa editar quem não tem vínculo com esta
+      // empresa` em `users-service.test.ts`.
+      await prisma.notification.deleteMany({ where: { userId: adminOutraEmpresa.id } });
+      await prisma.user.delete({ where: { id: adminOutraEmpresa.id } });
+      await prisma.company.delete({ where: { id: outraEmpresa.id } });
+    }
   });
 });
