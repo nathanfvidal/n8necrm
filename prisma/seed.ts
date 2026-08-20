@@ -64,6 +64,9 @@ const CORES = ["#94a3b8", "#60a5fa", "#fbbf24", "#f97316", "#22c55e"];
  *   etapa ficou com `ehGanho: true` (fix round 1/5: encolher o funil sem
  *   isso deixava a etapa removida órfã com `ehGanho: true` para sempre,
  *   fazendo `ehGanho` apontar para duas etapas ao mesmo tempo).
+ * - CompanyConfig: uma linha por empresa, criada só quando não existe
+ *   (`Company` não tem chave natural, então também não há `upsert` aqui). Nasce
+ *   com `modulos` e com as colunas de marca NULAS — ver o comentário no corpo.
  * - User: upsert por `email` (único no schema). `senhaHash` só é regravado
  *   numa reexecução quando `SEED_PASSWORD` está explicitamente definida (ver
  *   comentário junto a `senhaPlanoExplicita` abaixo) — fix round 1/5: antes
@@ -85,6 +88,42 @@ export async function seed(): Promise<void> {
   // vezes criaria uma segunda empresa a cada execução.
   const empresaExistente = await prisma.company.findFirst();
   const empresa = empresaExistente ?? (await prisma.company.create({ data: { nome: client.nome } }));
+
+  // A configuração por empresa nasce com os MÓDULOS e SÓ com eles.
+  //
+  // Mesma regra de instalação de `semearBotConfig` e do funil logo abaixo:
+  // existe? deixa como está. Não existe? cria UMA. O seed é SEMENTE, não
+  // reconciliador — o `upsert` por `ordem` que morava aqui para as etapas virou
+  // destrutivo no dia em que `/etapas` existiu, renomeando etapa criada pela
+  // tela. `tests/unit/seed.test.ts` ("é idempotente na config") grava uma cor
+  // entre duas execuções e exige que ela sobreviva à segunda.
+  //
+  // As colunas de MARCA ficam NULAS de propósito, e nulo significa "não decidi,
+  // usa o padrão de config/client.ts" (`mesclarConfig`, em
+  // src/core/config/schema.ts, sobrepõe campo a campo e ignora nulo). A decisão
+  // 8 do spec do programa mantém a identidade do produto EM ABERTO; gravar a
+  // cor atual do arquivo aqui congelaria essa não-decisão no banco, e a partir
+  // daí editar o arquivo deixaria de ter efeito para esta empresa, em silêncio.
+  //
+  // `modulos` é diferente porque não TEM estado nulo: lista escalar no Prisma
+  // nunca é nula (citação do client gerado em `LinhaDeConfig`,
+  // src/core/config/schema.ts), e por isso a regra dela é "se a linha existe,
+  // ela manda". Semear com `client.modulos` mantém o comportamento idêntico ao
+  // de antes deste ciclo e é o que põe o caminho de banco em uso de verdade na
+  // aplicação — em vez de deixar uma tabela criada e nunca lida.
+  //
+  // `findUnique` por `companyId`, e não `findFirst`: `@@unique([companyId])` no
+  // schema faz do campo uma chave única aos olhos do Prisma — é a mesma leitura
+  // que `semearBotConfig` faz sobre a mesma constraint, lá embaixo.
+  const configExistente = await prisma.companyConfig.findUnique({
+    where: { companyId: empresa.id },
+    select: { id: true },
+  });
+  if (!configExistente) {
+    await prisma.companyConfig.create({
+      data: { companyId: empresa.id, modulos: [...client.modulos] },
+    });
+  }
 
   // O funil só nasce do config na PRIMEIRA vez. Depois disso quem manda é o
   // banco, porque `/etapas` (ADMIN) cria, renomeia, recolore, reordena e

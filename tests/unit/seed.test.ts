@@ -21,6 +21,7 @@ vi.mock("server-only", () => ({}));
 import bcrypt from "bcryptjs";
 import { prisma } from "../../src/lib/prisma";
 import { seed, WHATSAPP_SYSTEM_USER_ID } from "../../prisma/seed";
+import { client } from "../../config/client";
 
 // `auth()` (Auth.js) depende de contexto de requisição HTTP real — mockamos
 // só esse ponto de entrada, mesmo padrão de tests/unit/session.test.ts, para
@@ -173,6 +174,90 @@ describe("prisma/seed.ts", () => {
         }
       );
     }
+  );
+
+  // A empresa é resolvida aqui por `criadoEm` crescente, e o seed a resolve por
+  // `prisma.company.findFirst()` sem `orderBy` (prisma/seed.ts, "Empresa única
+  // do Ciclo 1a"). As duas leituras caem na mesma linha nesta árvore porque a
+  // base tem UMA `Company` — medido em 2026-08-20 com `select count(*) from
+  // "Company"`: 1, a `company-migracao-1a` criada pela migração de tenancy. As
+  // empresas de fixture dos outros arquivos (`ZZTesteConfig1c-A/B` em
+  // config-isolamento.test.ts, por exemplo) nascem com `criadoEm` de agora, ou
+  // seja, sempre DEPOIS dessa — então `asc` continua caindo na do seed mesmo
+  // com a suíte inteira rodando. Se algum dia divergirem, este teste falha
+  // ALTO (`configs` vem vazio), que é o modo de falha desejado: espelhar o
+  // `findFirst()` sem ordem esconderia a divergência num verde.
+  async function empresaDoSeed() {
+    return prisma.company.findFirstOrThrow({ orderBy: { criadoEm: "asc" } });
+  }
+
+  it(
+    "cria UMA linha de CompanyConfig com os módulos, e nenhuma coluna de marca",
+    async () => {
+      await seed();
+
+      const empresa = await empresaDoSeed();
+      const configs = await prisma.companyConfig.findMany({ where: { companyId: empresa.id } });
+
+      expect(configs).toHaveLength(1);
+      expect(configs[0].modulos).toEqual([...client.modulos]);
+
+      // As colunas de marca nascem NULAS de propósito: nulo significa "não
+      // decidi, usa o padrão do arquivo" (`mesclarConfig` em
+      // src/core/config/schema.ts sobrepõe campo a campo e ignora nulo). A
+      // decisão 8 do spec do programa mantém a identidade do produto EM
+      // ABERTO, e gravar a cor atual do arquivo aqui congelaria essa
+      // não-decisão no banco — a partir daí, editar `config/client.ts`
+      // deixaria de ter efeito, em silêncio.
+      expect(configs[0].corPrimaria).toBeNull();
+      expect(configs[0].fonte).toBeNull();
+      expect(configs[0].logoClaro).toBeNull();
+      expect(configs[0].logoEscuro).toBeNull();
+    },
+    // Mesmo motivo dos outros timeouts deste arquivo: uma chamada de `seed()`
+    // faz ~20 round-trips sequenciais contra o Postgres real mais dois
+    // `bcrypt.hash`, e não cabe com folga nos 5000ms padrão do Vitest.
+    20_000
+  );
+
+  it(
+    "é idempotente na config: rodar de novo não cria uma segunda linha nem sobrescreve a existente",
+    async () => {
+      await seed();
+      const empresa = await empresaDoSeed();
+
+      try {
+        // Alguém "decidiu" a cor depois da instalação — é o que uma tela
+        // futura faria, e é o que um UPDATE à mão faz hoje.
+        await prisma.companyConfig.updateMany({
+          where: { companyId: empresa.id },
+          data: { corPrimaria: "#0F62FE" },
+        });
+
+        await seed();
+
+        const configs = await prisma.companyConfig.findMany({ where: { companyId: empresa.id } });
+        expect(configs).toHaveLength(1);
+        // O seed é SEMENTE de instalação, não reconciliador. `client.funil` já
+        // aprendeu isso do jeito caro: o `upsert` por `ordem` que morava no
+        // seed renomeava etapa criada pela tela (ver o comentário em
+        // prisma/seed.ts).
+        expect(configs[0].corPrimaria).toBe("#0F62FE");
+      } finally {
+        // Devolve o banco ao estado que o seed cria, para não deixar uma cor
+        // de teste pendurada no banco de desenvolvimento (⚠️ R1 do Ciclo 1a).
+        // Em `finally`, e não no fim do corpo: uma asserção que falhe no meio
+        // aborta o teste, e sem isto a cor ficaria gravada — mesma forma que
+        // as provas de SEED_PASSWORD logo abaixo usam para restaurar o
+        // ambiente.
+        await prisma.companyConfig.updateMany({
+          where: { companyId: empresa.id },
+          data: { corPrimaria: null },
+        });
+      }
+    },
+    // duas chamadas a `seed()` nesta prova — ver o timeout acima.
+    20_000
   );
 
   describe(
