@@ -136,6 +136,28 @@ const PRISMA_CRU = {
 // converter um arquivo APAGA a anotação junto com a linha — anotação que
 // sobrevive ao defeito vira mentira, e mentira em comentário é pior que
 // silêncio.
+//
+// ─────────────────────────────────────────────────────────────────────────
+// A LISTA CHEGOU A ZERO em 2026-08-20, no fim do Ciclo 1d.
+// ─────────────────────────────────────────────────────────────────────────
+//
+// As três listas TEMPORÁRIAS estão vazias, e o que sobra é a
+// `EXCECAO_PERMANENTE`, de quatro arquivos que não podem ser escopados por
+// motivo verificável (o motivo de cada um está lá em baixo). A proibição do
+// `prisma` cru deixou de ter exceção temporária e virou trava estrutural: de
+// `src/core/**`, `src/modules/**` e `src/app/**` não existe mais caminho até
+// `@/lib/prisma`, e a família que reincidiu seis vezes neste ciclo — "valida
+// que EXISTE, nunca que é da MESMA EMPRESA" — perdeu a porta por onde
+// reaparecia.
+//
+// **As três constantes continuam existindo, vazias, de propósito.**
+// `tests/unit/catraca-prisma-cru.test.ts` as lê por NOME; apagá-las faria
+// `listaDeclarada` devolver `[]` sem distinguir "vazia" de "não encontrei", e
+// a catraca ficaria verde por um motivo diferente do que ela afirma. Enquanto
+// forem lidas, `[]` é uma afirmação, não uma ausência.
+//
+// Quem precisar acrescentar um arquivo aqui de novo: a catraca reprova. A
+// linha de base dela é ZERO, e ela gira num sentido só.
 const VIOLADORES_TEMPORARIOS_CORE = [
   // `src/core/audit/*` SAIU desta lista no Ciclo 1d, e a conversão foi mais
   // funda que um import: `ParamsDeAuditoria` ganhou `companyId` OBRIGATÓRIO, e
@@ -273,20 +295,43 @@ const VIOLADORES_TEMPORARIOS_MODULES = [
   // que tiram a empresa de `usuarioAtual().companyId`) e as 4 páginas que as
   // consomem. `/conversas` passou a chamar `usuarioAtualOuLogin()`, que ela
   // não chamava.
-  // 1 defeito (MÉDIA): o `upsert` casa por `waId`, que é `@unique` GLOBAL em
-  // `Conversation` — variante-irmã do `Contact.telefone`. Só se alcança com
-  // duas instâncias Evolution, o que a ponte de `obterEvolutionCompanyId()`
-  // (env, deliberada até o Ciclo 2) ainda não permite.
-  "src/modules/whatsapp/ingest.ts",
-  // 1 defeito (MÉDIA): `limparAguardandoHumano` faz `updateMany` por id sem
-  // empresa. O fan-out do aviso, que era o ponto grave, fechou no 63cecd2.
-  "src/modules/whatsapp/notificacoes.ts",
-  // 0 defeitos. Toda consulta parte de um `conversationId` nascido dentro do
-  // servidor (`ingest.ts` → fila), nunca de entrada de usuário, e o
-  // `companyId` de escrita sai sempre da `Conversation` já carregada.
-  // Converter é trocar o import — e é o candidato mais seguro da fila para
-  // quem quiser abrir a conversão sem risco.
-  "src/modules/whatsapp/turno.ts",
+  // `ingest.ts`, `notificacoes.ts` e `turno.ts` SAÍRAM desta lista no Ciclo 1d,
+  // e com eles a lista inteira. O que cada um custou:
+  //
+  // - `ingest.ts` (1 MÉDIA): o `upsert` por `waId` é RECUSADO pelo escopo, e
+  //   virou `findFirst` + `create`/`updateMany` dentro da transação que já
+  //   existia. Isso reabriu no código a corrida que o `upsert` resolvia no
+  //   banco — ela cai no mesmo `catch` de `P2002` que já existia, que aprendeu
+  //   a distinguir colisão de `idExterno` (redelivery: confirma) de colisão de
+  //   `waId` (corrida: deixa subir e a Evolution reentrega). O `$queryRaw` que
+  //   incrementa `bufferSeq` ganhou `AND "companyId"` escrito à mão.
+  //
+  //   A pendência de SCHEMA continua e não é deste ciclo: `Conversation.waId` é
+  //   `@unique` GLOBAL, então com duas instâncias Evolution o `findFirst`
+  //   escopado não acharia a conversa da outra empresa e tentaria criar uma
+  //   segunda, batendo na constraint. A ponte `EVOLUTION_COMPANY_ID` (uma
+  //   instância por deploy) é o que impede o caso hoje.
+  //
+  // - `notificacoes.ts` (1 MÉDIA): `marcarAguardandoHumano` e
+  //   `limparAguardandoHumano` alcançavam a conversa por id sozinho. O dano do
+  //   primeiro não é leitura — é criar uma `Notification` por pessoa da empresa
+  //   da conversa, com o RÓTULO do cliente no payload.
+  //
+  // - `turno.ts` (0 defeitos, e o mais difícil): ele roda FORA de requisição,
+  //   como consumidor de fila, então não há sessão de onde tirar a empresa. E a
+  //   PRIMEIRA operação dele é `claimLease`, que é `$queryRaw` — fora do
+  //   alcance do escopo por construção. A saída foi fazer o `companyId` viajar
+  //   no `TurnoJob`, resolvido por quem tem origem sã para ele (`ingest.ts`,
+  //   via `EVOLUTION_COMPANY_ID`), com o `WHERE "companyId"` do lease escrito à
+  //   mão. O custo de migração está registrado no cabeçalho de `turno.ts`: job
+  //   publicado antes deste commit é RECUSADO pelo `zod` da rota consumidora,
+  //   lançando — nunca rodado numa empresa escolhida por padrão.
+  //
+  // Os três `WHERE "companyId"` à mão são cobrados nos DOIS sentidos: a Parte
+  // 2b de `tests/unit/catraca-prisma-cru.test.ts` exige que a linha exista no
+  // texto do template, e `tests/unit/whatsapp-isolamento.test.ts` exige que ela
+  // funcione — inclusive que um `claimLease` recusado não TOQUE a coluna, o que
+  // seria negação de serviço de uma empresa sobre a outra.
 ];
 
 // A página do painel que ainda lê o banco direto. Eram três; duas saíram na

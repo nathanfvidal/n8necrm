@@ -38,11 +38,11 @@ describe("POST /api/queues/whatsapp-turn (consumidor)", () => {
   });
 
   it("processa o job normalmente quando o segredo compartilhado confere", async () => {
-    await handlerCapturado!({ conversationId: "conv-1", seq: 1, segredo: SEGREDO });
+    await handlerCapturado!({ companyId: "empresa-1", conversationId: "conv-1", seq: 1, segredo: SEGREDO });
 
     expect(processarTurnoMock).toHaveBeenCalledTimes(1);
     expect(processarTurnoMock).toHaveBeenCalledWith(
-      expect.objectContaining({ conversationId: "conv-1", seq: 1 })
+      expect.objectContaining({ companyId: "empresa-1", conversationId: "conv-1", seq: 1 })
     );
   });
 
@@ -50,7 +50,7 @@ describe("POST /api/queues/whatsapp-turn (consumidor)", () => {
     const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
     await expect(
-      handlerCapturado!({ conversationId: "conv-1", seq: 1, segredo: "segredo-errado" })
+      handlerCapturado!({ companyId: "empresa-1", conversationId: "conv-1", seq: 1, segredo: "segredo-errado" })
     ).resolves.toBeUndefined();
 
     expect(processarTurnoMock).not.toHaveBeenCalled();
@@ -61,7 +61,7 @@ describe("POST /api/queues/whatsapp-turn (consumidor)", () => {
   it("NÃO processa quando o payload não tem campo `segredo` nenhum", async () => {
     // zod rejeita (campo obrigatório) -- o handler deve lançar aqui (schema
     // inválido), não silenciar como no caso de segredo incorreto.
-    await expect(handlerCapturado!({ conversationId: "conv-1", seq: 1 })).rejects.toThrow();
+    await expect(handlerCapturado!({ companyId: "empresa-1", conversationId: "conv-1", seq: 1 })).rejects.toThrow();
     expect(processarTurnoMock).not.toHaveBeenCalled();
   });
 
@@ -69,7 +69,7 @@ describe("POST /api/queues/whatsapp-turn (consumidor)", () => {
     delete process.env.WHATSAPP_QUEUE_SECRET;
     const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    await handlerCapturado!({ conversationId: "conv-1", seq: 1, segredo: SEGREDO });
+    await handlerCapturado!({ companyId: "empresa-1", conversationId: "conv-1", seq: 1, segredo: SEGREDO });
 
     expect(processarTurnoMock).not.toHaveBeenCalled();
     consoleErrorSpy.mockRestore();
@@ -77,10 +77,23 @@ describe("POST /api/queues/whatsapp-turn (consumidor)", () => {
   });
 
   it("repassa tentativaReagendamento ao processarTurno quando presente no job", async () => {
-    await handlerCapturado!({ conversationId: "conv-2", seq: 4, tentativaReagendamento: 2, segredo: SEGREDO });
+    await handlerCapturado!({ companyId: "empresa-1", conversationId: "conv-2", seq: 4, tentativaReagendamento: 2, segredo: SEGREDO });
 
     expect(processarTurnoMock).toHaveBeenCalledWith(
-      expect.objectContaining({ conversationId: "conv-2", seq: 4, tentativaReagendamento: 2 })
+      expect.objectContaining({ companyId: "empresa-1", conversationId: "conv-2", seq: 4, tentativaReagendamento: 2 })
     );
+  });
+
+  // O custo de migracao do Ciclo 1d, afirmado em vez de suposto: job publicado
+  // ANTES de `TurnoJob` ganhar `companyId` e RECUSADO aqui, e recusado
+  // LANCANDO — a fila reentrega e desiste, e o operador ve o erro. A
+  // alternativa (campo opcional com padrao) faria o turno rodar na empresa
+  // errada em silencio. Ver o bloco de cabecalho de `modules/whatsapp/turno.ts`.
+  it("recusa, lancando, um job antigo sem companyId — nunca escolhe uma empresa por padrao", async () => {
+    await expect(
+      handlerCapturado!({ conversationId: "conv-1", seq: 1, segredo: SEGREDO })
+    ).rejects.toThrow();
+
+    expect(processarTurnoMock).not.toHaveBeenCalled();
   });
 });

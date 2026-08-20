@@ -57,7 +57,7 @@ describe("publicarTurno — idempotencyKey por tentativa de reagendamento (fix r
   });
 
   it("a publicação original (sem tentativaReagendamento) usa a chave ${conversationId}:${seq}", async () => {
-    await publicarTurno({ conversationId: "conv-1", seq: 3 });
+    await publicarTurno({ companyId: "empresa-1", conversationId: "conv-1", seq: 3 });
 
     expect(sendMock).toHaveBeenCalledTimes(1);
     const opcoes = sendMock.mock.calls[0]?.[2];
@@ -66,9 +66,9 @@ describe("publicarTurno — idempotencyKey por tentativa de reagendamento (fix r
   });
 
   it("cada reagendamento usa uma chave DIFERENTE, sufixada pelo número da tentativa", async () => {
-    await publicarTurno({ conversationId: "conv-2", seq: 5, tentativaReagendamento: 1 }, { delaySeconds: 5 });
-    await publicarTurno({ conversationId: "conv-2", seq: 5, tentativaReagendamento: 2 }, { delaySeconds: 5 });
-    await publicarTurno({ conversationId: "conv-2", seq: 5, tentativaReagendamento: 3 }, { delaySeconds: 5 });
+    await publicarTurno({ companyId: "empresa-1", conversationId: "conv-2", seq: 5, tentativaReagendamento: 1 }, { delaySeconds: 5 });
+    await publicarTurno({ companyId: "empresa-1", conversationId: "conv-2", seq: 5, tentativaReagendamento: 2 }, { delaySeconds: 5 });
+    await publicarTurno({ companyId: "empresa-1", conversationId: "conv-2", seq: 5, tentativaReagendamento: 3 }, { delaySeconds: 5 });
 
     expect(sendMock).toHaveBeenCalledTimes(3);
     const chaves = sendMock.mock.calls.map((chamada) => chamada[2]?.idempotencyKey);
@@ -82,7 +82,7 @@ describe("publicarTurno — idempotencyKey por tentativa de reagendamento (fix r
       "seguida por reagendamentos sucessivos (simulando o loop real de turno.ts quando o lease fica " +
       "ocupado repetidas vezes) NÃO lança — cada tentativa usa uma chave própria",
     async () => {
-      const job = { conversationId: "conv-3", seq: 7 };
+      const job = { companyId: "empresa-1", conversationId: "conv-3", seq: 7 };
 
       // Publicação original (ingest.ts).
       await expect(publicarTurno(job)).resolves.toBeUndefined();
@@ -104,7 +104,7 @@ describe("publicarTurno — idempotencyKey por tentativa de reagendamento (fix r
       "para um reagendamento (o comportamento ANTES deste fix) É rejeitado pelo serviço, confirmando que " +
       "a mudança para uma chave por tentativa era necessária, não cosmética",
     async () => {
-      const job = { conversationId: "conv-4", seq: 9 };
+      const job = { companyId: "empresa-1", conversationId: "conv-4", seq: 9 };
       await publicarTurno(job); // registra a chave "conv-4:9"
 
       // Simula literalmente o que o código ANTIGO fazia: reenviar com a

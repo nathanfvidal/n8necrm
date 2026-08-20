@@ -16,6 +16,20 @@
  * handler. `undefined`/`0` = publicação original, feita por `ingest.ts`.
  */
 export interface TurnoJob {
+  /**
+   * A empresa dona da conversa.
+   *
+   * Viaja no job porque `turno.ts` roda fora de qualquer requisição — não há
+   * sessão de onde tirá-la — e porque a PRIMEIRA operação dele (`claimLease`) é
+   * `$queryRaw`, que o escopo por empresa não alcança e cujo `WHERE
+   * "companyId"` precisa ser escrito à mão. O porquê completo está no bloco de
+   * cabeçalho de `modules/whatsapp/turno.ts`.
+   *
+   * Não é entrada de usuário: quem publica é a rota do webhook, com o valor de
+   * `ingerirMensagem` (`EVOLUTION_COMPANY_ID`), e a rota consumidora valida um
+   * segredo compartilhado antes de chamar `processarTurno`.
+   */
+  companyId: string;
   conversationId: string;
   seq: number;
   tentativaReagendamento?: number;

@@ -1,6 +1,6 @@
 import "server-only";
 
-import { prisma } from "@/lib/prisma";
+import { prismaDaEmpresa } from "@/core/tenancy/escopo";
 
 import { TIPO_CONVERSA_AGUARDANDO, type ConversaAguardandoPayload } from "./notificacao-tipos";
 
@@ -51,15 +51,29 @@ function rotuloMascarado(identificador: string): string {
  * Devolve `true` quando esta chamada ganhou a transição (e portanto notificou),
  * `false` quando outra já havia marcado.
  */
-export async function marcarAguardandoHumano(conversationId: string): Promise<boolean> {
-  const { count } = await prisma.conversation.updateMany({
+export async function marcarAguardandoHumano(
+  companyId: string,
+  conversationId: string
+): Promise<boolean> {
+  const db = prismaDaEmpresa(companyId);
+
+  // O `where` ganhou `companyId` sem ninguém escrevê-lo: o escopo o injeta.
+  // Antes este `updateMany` alcançava a conversa por id sozinho — e id de
+  // conversa nasce dentro do servidor (`ingest.ts` → fila), o que segurava o
+  // caso comum e não é garantia: bastava um caminho futuro aceitar o id de
+  // fora para a empresa A marcar a conversa da B como "aguardando humano" e
+  // disparar o fan-out de avisos lá dentro.
+  const { count } = await db.conversation.updateMany({
     where: { id: conversationId, aguardandoHumanoDesde: null },
     data: { aguardandoHumanoDesde: new Date() },
   });
 
   if (count === 0) return false;
 
-  const conversa = await prisma.conversation.findUniqueOrThrow({
+  // `findFirstOrThrow` e não `findUniqueOrThrow`: a segunda é recusada pelo
+  // escopo em modelo de tenant (ver "Recusa, lançando" em
+  // `core/tenancy/escopo.ts`).
+  const conversa = await db.conversation.findFirstOrThrow({
     where: { id: conversationId },
     include: { contact: { select: { nome: true } } },
   });
@@ -95,14 +109,18 @@ export async function marcarAguardandoHumano(conversationId: string): Promise<bo
   // ver `semearUsuarioSistemaWhatsapp` em `prisma/seed.ts`), então quem o
   // exclui é, como antes, o `ativo: false` — aqui em `user: { ativo: true }`.
   // Sem lista de exceções para alguém manter.
-  const destinatarios = await prisma.membership.findMany({
-    where: { companyId: conversa.companyId, user: { ativo: true } },
+  const destinatarios = await db.membership.findMany({
+    where: { user: { ativo: true } },
     select: { userId: true },
   });
   if (destinatarios.length === 0) return true;
 
-  // `Notification.companyId` é `NOT NULL` desde a Task 1 do Ciclo 1a.
-  await prisma.notification.createMany({
+  // `Notification.companyId` é `NOT NULL` desde a Task 1 do Ciclo 1a. Continua
+  // escrito, e não omitido para o escopo injetar, porque aqui o escopo age como
+  // VERIFICADOR: `conversa.companyId` e o `companyId` do cliente têm de ser o
+  // mesmo valor, e divergência entre eles RECUSA, lançando. Omitir trocaria essa
+  // conferência por uma injeção silenciosa.
+  await db.notification.createMany({
     data: destinatarios.map((destinatario) => ({
       companyId: conversa.companyId,
       userId: destinatario.userId,
@@ -121,8 +139,11 @@ export async function marcarAguardandoHumano(conversationId: string): Promise<bo
  * vezes tem o mesmo efeito de limpar uma. `updateMany` em vez de `update` para
  * não lançar se a conversa tiver sido apagada nesse meio tempo.
  */
-export async function limparAguardandoHumano(conversationId: string): Promise<void> {
-  await prisma.conversation.updateMany({
+export async function limparAguardandoHumano(
+  companyId: string,
+  conversationId: string
+): Promise<void> {
+  await prismaDaEmpresa(companyId).conversation.updateMany({
     where: { id: conversationId },
     data: { aguardandoHumanoDesde: null },
   });

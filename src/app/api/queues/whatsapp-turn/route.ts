@@ -58,6 +58,12 @@ export const POST = handleCallback(async (mensagemBruta) => {
 });
 
 const turnoJobSchema = z.object({
+  // Obrigatório, e NÃO opcional com padrão: job publicado antes do Ciclo 1d não
+  // carrega `companyId`, e um padrão o faria rodar na empresa errada em
+  // silêncio. Assim ele é recusado aqui, o handler lança, a fila reentrega e
+  // desiste — barulhento e limitado à janela de deploy. Ver o bloco de
+  // cabeçalho de `modules/whatsapp/turno.ts`.
+  companyId: z.string().min(1),
   conversationId: z.string().min(1),
   seq: z.number().int(),
   tentativaReagendamento: z.number().int().nonnegative().optional(),

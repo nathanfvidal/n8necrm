@@ -115,7 +115,7 @@ describe("aviso de conversa aguardando humano", () => {
     it("sem contato e sem nome: mascara, mantendo so os 4 ultimos digitos", async () => {
       const conversa = await criarConversaDeTeste({ telefone: "11987654321" });
 
-      await marcarAguardandoHumano(conversa.id);
+      await marcarAguardandoHumano(conversa.companyId, conversa.id);
 
       const [aviso] = await notificacoesDaConversa(conversa.id);
       const rotulo = (aviso.payload as { nomeExibicao: string }).nomeExibicao;
@@ -136,7 +136,7 @@ describe("aviso de conversa aguardando humano", () => {
         telefone: null,
       });
 
-      await marcarAguardandoHumano(conversa.id);
+      await marcarAguardandoHumano(conversa.companyId, conversa.id);
 
       const [aviso] = await notificacoesDaConversa(conversa.id);
       const rotulo = (aviso.payload as { nomeExibicao: string }).nomeExibicao;
@@ -153,7 +153,7 @@ describe("aviso de conversa aguardando humano", () => {
         nomeExibicao: "Joana Cliente",
       });
 
-      await marcarAguardandoHumano(conversa.id);
+      await marcarAguardandoHumano(conversa.companyId, conversa.id);
 
       const [aviso] = await notificacoesDaConversa(conversa.id);
       const rotulo = (aviso.payload as { nomeExibicao: string }).nomeExibicao;
@@ -164,7 +164,7 @@ describe("aviso de conversa aguardando humano", () => {
 
   it("marca a conversa e notifica os usuários ativos da empresa da conversa", async () => {
     const conversa = await criarConversaDeTeste();
-    const ganhou = await marcarAguardandoHumano(conversa.id);
+    const ganhou = await marcarAguardandoHumano(conversa.companyId, conversa.id);
 
     expect(ganhou).toBe(true);
 
@@ -179,10 +179,10 @@ describe("aviso de conversa aguardando humano", () => {
   // ansioso mandando cinco mensagens não vira cinco avisos por pessoa.
   it("marcar de novo não cria segundo aviso", async () => {
     const conversa = await criarConversaDeTeste();
-    await marcarAguardandoHumano(conversa.id);
+    await marcarAguardandoHumano(conversa.companyId, conversa.id);
     const primeira = await prisma.conversation.findUniqueOrThrow({ where: { id: conversa.id } });
 
-    const ganhouDeNovo = await marcarAguardandoHumano(conversa.id);
+    const ganhouDeNovo = await marcarAguardandoHumano(conversa.companyId, conversa.id);
 
     expect(ganhouDeNovo).toBe(false);
     const esperados = await destinatariosEsperados(conversa.companyId);
@@ -200,9 +200,9 @@ describe("aviso de conversa aguardando humano", () => {
     const conversa = await criarConversaDeTeste();
 
     const resultados = await Promise.all([
-      marcarAguardandoHumano(conversa.id),
-      marcarAguardandoHumano(conversa.id),
-      marcarAguardandoHumano(conversa.id),
+      marcarAguardandoHumano(conversa.companyId, conversa.id),
+      marcarAguardandoHumano(conversa.companyId, conversa.id),
+      marcarAguardandoHumano(conversa.companyId, conversa.id),
     ]);
 
     expect(resultados.filter(Boolean)).toHaveLength(1);
@@ -212,7 +212,7 @@ describe("aviso de conversa aguardando humano", () => {
 
   it("não notifica usuário inativo — inclusive o usuário de sistema do WhatsApp", async () => {
     const conversa = await criarConversaDeTeste();
-    await marcarAguardandoHumano(conversa.id);
+    await marcarAguardandoHumano(conversa.companyId, conversa.id);
 
     const avisos = await notificacoesDaConversa(conversa.id);
     const usuarios = await prisma.user.findMany({
@@ -253,7 +253,7 @@ describe("aviso de conversa aguardando humano", () => {
     });
 
     try {
-      await marcarAguardandoHumano(conversa.id);
+      await marcarAguardandoHumano(conversa.companyId, conversa.id);
 
       const doForasteiro = await prisma.notification.findMany({
         where: { userId: deOutraEmpresa.id, tipo: TIPO_CONVERSA_AGUARDANDO },
@@ -280,14 +280,14 @@ describe("aviso de conversa aguardando humano", () => {
 
   it("limpar zera o campo e deixa a conversa pronta para marcar de novo", async () => {
     const conversa = await criarConversaDeTeste();
-    await marcarAguardandoHumano(conversa.id);
-    await limparAguardandoHumano(conversa.id);
+    await marcarAguardandoHumano(conversa.companyId, conversa.id);
+    await limparAguardandoHumano(conversa.companyId, conversa.id);
 
     const depois = await prisma.conversation.findUniqueOrThrow({ where: { id: conversa.id } });
     expect(depois.aguardandoHumanoDesde).toBeNull();
 
     // O ciclo fecha e reabre: o cliente voltou, ninguém respondeu, avisa de novo.
-    expect(await marcarAguardandoHumano(conversa.id)).toBe(true);
+    expect(await marcarAguardandoHumano(conversa.companyId, conversa.id)).toBe(true);
   });
 
   it("listarConversas põe quem aguarda no topo, mais antiga primeiro", async () => {

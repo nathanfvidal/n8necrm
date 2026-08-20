@@ -42,6 +42,15 @@ import {
   restaurarConfigPadrao,
   responderComoHumano,
 } from "../../src/modules/whatsapp/agente";
+import {
+  claimLease,
+  confirmarTitularidadeLease,
+  liberarLease,
+} from "../../src/modules/whatsapp/turno";
+import {
+  limparAguardandoHumano,
+  marcarAguardandoHumano,
+} from "../../src/modules/whatsapp/notificacoes";
 
 /**
  * O par de `tests/unit/pipeline-isolamento.test.ts` e
@@ -528,5 +537,110 @@ describe("responderComoHumano", () => {
     const a = await lerConversaCrua(CONVERSA_A);
     expect(a.iaAtiva).toBe(false);
     expect(a.aguardandoHumanoDesde).toBeNull();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// Ciclo 1d — o lease, que é SQL CRU, e o aviso de conversa aguardando humano
+// ─────────────────────────────────────────────────────────────────────────
+//
+// Os casos acima cobrem as nove portas de `queries.ts`/`agente.ts`, que o
+// escopo protege sozinho. Os de baixo cobrem os dois pontos do módulo onde ele
+// NÃO protege, e por motivos diferentes:
+//
+// 1. `claimLease`/`liberarLease` são `$queryRaw`/`$executeRaw`. O escopo não os
+//    alcança POR CONSTRUÇÃO — a extensão vê os delegates de modelo, e SQL cru
+//    não passa por lá (`core/tenancy/escopo.ts`, "Não alcança de jeito
+//    nenhum"). O `WHERE "companyId"` deles é escrito à mão, e escrita à mão
+//    precisa de teste, não de leitura atenta. A Parte 2b da catraca cobra que a
+//    linha EXISTA no texto do template; estes casos cobram que ela FUNCIONE.
+//
+// 2. `marcarAguardandoHumano` alcançava a conversa por id sozinho, e o efeito
+//    dela não é ler: é criar uma `Notification` para cada pessoa da empresa da
+//    conversa, com o RÓTULO do cliente no payload.
+
+describe("o lease do turno, que é SQL cru", () => {
+  it("claimLease com o escopo da A não reivindica a conversa da B", async () => {
+    const lease = await claimLease(EMPRESA_A, CONVERSA_B);
+
+    expect(lease).toBeNull();
+
+    // Não basta devolver `null`: a coluna não pode ter sido tocada. Um `UPDATE`
+    // que gravasse e devolvesse vazio deixaria a conversa da B presa até o
+    // lease expirar — negação de serviço de uma empresa sobre a outra.
+    const noBanco = await prisma.conversation.findUniqueOrThrow({ where: { id: CONVERSA_B } });
+    expect(noBanco.processandoAte).toBeNull();
+  });
+
+  it("claimLease com o escopo da B reivindica a conversa da B — a recusa é de EMPRESA", async () => {
+    const lease = await claimLease(EMPRESA_B, CONVERSA_B);
+
+    expect(lease).not.toBeNull();
+
+    const noBanco = await prisma.conversation.findUniqueOrThrow({ where: { id: CONVERSA_B } });
+    expect(noBanco.processandoAte).not.toBeNull();
+  });
+
+  it("liberarLease com o escopo da A não solta o lease que a B está segurando", async () => {
+    const lease = await claimLease(EMPRESA_B, CONVERSA_B);
+    expect(lease).not.toBeNull();
+
+    await liberarLease(EMPRESA_A, CONVERSA_B, lease!.processandoAte);
+
+    const noBanco = await prisma.conversation.findUniqueOrThrow({ where: { id: CONVERSA_B } });
+    expect(noBanco.processandoAte).not.toBeNull();
+
+    // A metade que impede "não soltar nunca" de passar por correção.
+    await liberarLease(EMPRESA_B, CONVERSA_B, lease!.processandoAte);
+    const depois = await prisma.conversation.findUniqueOrThrow({ where: { id: CONVERSA_B } });
+    expect(depois.processandoAte).toBeNull();
+  });
+
+  it("confirmarTitularidadeLease da A dá `lease-perdido` para a conversa da B", async () => {
+    const lease = await claimLease(EMPRESA_B, CONVERSA_B);
+
+    // Mesmo com o token CERTO em mãos, o escopo da A não enxerga a linha — e o
+    // desfecho é o que aborta o turno antes de qualquer envio ao cliente.
+    expect(await confirmarTitularidadeLease(EMPRESA_A, CONVERSA_B, lease!.processandoAte)).toBe(
+      "lease-perdido"
+    );
+    expect(await confirmarTitularidadeLease(EMPRESA_B, CONVERSA_B, lease!.processandoAte)).toBeNull();
+  });
+});
+
+describe("marcarAguardandoHumano / limparAguardandoHumano", () => {
+  it("a empresa A não marca a conversa da B, e ninguém é avisado", async () => {
+    const marcou = await marcarAguardandoHumano(EMPRESA_A, CONVERSA_B);
+
+    expect(marcou).toBe(false);
+
+    // O fan-out é o dano real: uma `Notification` por pessoa da empresa, com o
+    // rótulo do cliente no payload. "Devolveu false" não provaria que ele não
+    // aconteceu — avisar e só depois devolver `false` passaria igual.
+    expect(await prisma.notification.count({ where: { userId: USUARIO_B } })).toBe(0);
+    expect(await prisma.notification.count({ where: { userId: USUARIO_A } })).toBe(0);
+
+    const noBanco = await prisma.conversation.findUniqueOrThrow({ where: { id: CONVERSA_B } });
+    expect(noBanco.aguardandoHumanoDesde).toEqual(ESPERA_DA_B);
+  });
+
+  it("a empresa A marca a PRÓPRIA conversa e avisa só a própria equipe", async () => {
+    const marcou = await marcarAguardandoHumano(EMPRESA_A, CONVERSA_A_SEM_ESPERA);
+
+    expect(marcou).toBe(true);
+    expect(await prisma.notification.count({ where: { userId: USUARIO_A } })).toBe(1);
+    expect(await prisma.notification.count({ where: { userId: USUARIO_B } })).toBe(0);
+  });
+
+  it("a empresa A não limpa a espera da conversa da B", async () => {
+    await limparAguardandoHumano(EMPRESA_A, CONVERSA_B);
+
+    const noBanco = await prisma.conversation.findUniqueOrThrow({ where: { id: CONVERSA_B } });
+    expect(noBanco.aguardandoHumanoDesde).toEqual(ESPERA_DA_B);
+
+    // A metade que impede "não limpar nunca" de passar por correção.
+    await limparAguardandoHumano(EMPRESA_B, CONVERSA_B);
+    const depois = await prisma.conversation.findUniqueOrThrow({ where: { id: CONVERSA_B } });
+    expect(depois.aguardandoHumanoDesde).toBeNull();
   });
 });

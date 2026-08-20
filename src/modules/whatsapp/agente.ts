@@ -302,11 +302,10 @@ export async function responderComoHumano(
   // cliente ainda espera, e a conversa sumiria do topo da lista sem ninguém
   // ter falado com ele.
   //
-  // `limparAguardandoHumano` (`notificacoes.ts`) ainda alcança o `prisma`
-  // cru e filtra só por id — é o defeito MÉDIA que a fila do lint anota
-  // naquele arquivo, e ele NÃO é desta tarefa. Por este caminho ele não
-  // vaza: o `conversationId` que chega aqui já passou pelo portão escopado
-  // acima. O outro chamador (`turno.ts`) é que fica dependendo da conversão
-  // daquele arquivo.
-  await limparAguardandoHumano(conversationId);
+  // `limparAguardandoHumano` (`notificacoes.ts`) foi convertida no Ciclo 1d e
+  // passou a EXIGIR o `companyId` — o `updateMany` dela filtrava só por id.
+  // Por este caminho ela nunca vazou (o `conversationId` que chega aqui já
+  // passou pelo portão escopado acima); quem dependia da conversão era o outro
+  // chamador, `turno.ts`, que roda fora de requisição.
+  await limparAguardandoHumano(companyId, conversationId);
 }

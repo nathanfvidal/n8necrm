@@ -98,8 +98,14 @@ const SCHEMA = join(RAIZ_PROJETO, "prisma", "schema.prisma");
  * O que impede a lista de crescer NÃO é este número (ele afrouxa sozinho a
  * cada conversão): é a igualdade exata entre árvore e listas, no caso logo
  * abaixo, que nomeia o arquivo que entrou.
+ *
+ * **Hoje ele é ZERO** — o Ciclo 1d terminou a conversão dos 25 arquivos que a
+ * fila tinha em 2026-08-20. Com a linha de base em zero, "não cresceu" e "está
+ * vazia" viraram a mesma afirmação, e o `toBeLessThanOrEqual` deixou de ser
+ * catraca frouxa: qualquer nome novo nas três listas reprova, aqui e no caso da
+ * igualdade exata.
  */
-const LINHA_DE_BASE_DE_IMPORTADORES_TEMPORARIOS = 3;
+const LINHA_DE_BASE_DE_IMPORTADORES_TEMPORARIOS = 0;
 
 /**
  * Arquivos que podem nomear o tipo do cliente CRU sem estar na fila de
@@ -468,11 +474,25 @@ describe("catraca do prisma cru", () => {
     // duas listas vazias e TODOS os casos abaixo passariam sem ter comparado
     // nada — o "teste que não exercita" da tabela de armadilhas da auditoria.
     expect(arquivos.length, "a varredura não achou o código-fonte em src/").toBeGreaterThan(50);
-    expect(
-      temporarios.length,
-      "nenhuma exceção TEMPORÁRIA lida do eslint.config.mjs — os nomes das " +
-        "constantes mudaram? Este teste lê VIOLADORES_TEMPORARIOS_{CORE,MODULES,APP}."
-    ).toBeGreaterThan(0);
+    // A guarda de "li mesmo o arquivo" NÃO pode mais se apoiar na lista
+    // temporária: ela chegou a zero no Ciclo 1d, e "vazia" é o resultado
+    // desejado, indistinguível de "não achei a constante" para quem só conta
+    // itens. Então a guarda passou a ser a PRESENÇA das três declarações no
+    // texto — se alguém as renomear ou apagar, `listaDeclarada` devolveria `[]`
+    // em silêncio e os casos abaixo passariam sem ter comparado nada.
+    for (const nome of [
+      "VIOLADORES_TEMPORARIOS_CORE",
+      "VIOLADORES_TEMPORARIOS_MODULES",
+      "VIOLADORES_TEMPORARIOS_APP",
+    ]) {
+      expect(
+        fonteEslint,
+        `a constante ${nome} sumiu do eslint.config.mjs. Ela precisa continuar ` +
+          "declarada, mesmo vazia: este teste a lê por NOME, e sem ela " +
+          "`listaDeclarada` devolve [] sem distinguir 'lista vazia' de 'não " +
+          "encontrei' — a catraca ficaria verde por um motivo diferente do que afirma."
+      ).toContain(`const ${nome} = [`);
+    }
     expect(
       permanentes.length,
       "nenhuma exceção PERMANENTE lida do eslint.config.mjs — a constante " +
@@ -542,12 +562,18 @@ describe("catraca do prisma cru", () => {
     ).toEqual([]);
   });
 
-  it("a fila de conversão não cresceu além da linha de base de 2026-08-20", () => {
+  it("a fila de conversão continua em zero — a proibição não tem mais exceção temporária", () => {
     expect(
       temporarios.length,
       `a fila de conversão do prisma cru tem ${temporarios.length} arquivos e a ` +
-        `linha de base é ${LINHA_DE_BASE_DE_IMPORTADORES_TEMPORARIOS} (2026-08-20). ` +
-        `Fila: ${temporarios.join(", ")}`
+        `linha de base é ${LINHA_DE_BASE_DE_IMPORTADORES_TEMPORARIOS} (zerada no Ciclo 1d, ` +
+        `2026-08-20). Fila: ${temporarios.join(", ")}. ` +
+        "Acrescentar um arquivo aqui desfaz a trava estrutural que o ciclo inteiro " +
+        "existiu para construir: enquanto a lista está vazia, NÃO EXISTE caminho de " +
+        "src/core, src/modules ou src/app até `@/lib/prisma`, e a família 'valida que " +
+        "EXISTE, nunca que é da MESMA EMPRESA' — seis reincidências neste ciclo — perde " +
+        "a porta por onde reaparecia. Se um arquivo novo realmente não puder ser " +
+        "escopado, ele é EXCEÇÃO PERMANENTE, com justificativa verificável junto."
     ).toBeLessThanOrEqual(LINHA_DE_BASE_DE_IMPORTADORES_TEMPORARIOS);
   });
 });

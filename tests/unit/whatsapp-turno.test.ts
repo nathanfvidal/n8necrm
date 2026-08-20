@@ -43,6 +43,18 @@ import { criarConversation, criarMensagemEntrada, companyIdSemeada } from "./hel
 
 const PREFIXO = "teste-turno-";
 
+/**
+ * A empresa das conversas que este arquivo cria — a mesma que
+ * `criarConversation` usa (`helpers/whatsapp.ts`).
+ *
+ * `turno.ts` passou a receber `companyId` no Ciclo 1d: ele roda fora de
+ * requisicao (e consumidor de fila), entao nao ha sessao de onde tira-lo, e a
+ * PRIMEIRA operacao do turno (`claimLease`) e `$queryRaw`, que o escopo nao
+ * alcanca e cujo `WHERE "companyId"` e escrito a mao. O valor viaja no
+ * `TurnoJob`, publicado pelo webhook com o que `ingerirMensagem` devolve.
+ */
+let EMPRESA = "";
+
 async function limparDadosDeTeste() {
   const conversas = await prisma.conversation.findMany({
     where: { waId: { startsWith: PREFIXO } },
@@ -73,7 +85,8 @@ async function limparDadosDeTeste() {
 }
 
 describe("processarTurno", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    EMPRESA = await companyIdSemeada();
     // Cada chamada precisa de um idExterno ÚNICO (a coluna é @unique) — um
     // teste que envia mais de uma mensagem de saída (ex.: texto + fallback
     // de mídia) colidiria na constraint se todas as chamadas devolvessem o
@@ -91,7 +104,7 @@ describe("processarTurno", () => {
     const conversation = await criarConversation({ bufferSeq: 1 });
     const mensagem = await criarMensagemEntrada(conversation.id, { texto: "Quero saber do Gol 2018" });
 
-    await processarTurno({ conversationId: conversation.id, seq: 1 });
+    await processarTurno({ companyId: EMPRESA, conversationId: conversation.id, seq: 1 });
 
     expect(gerarRespostaMock).toHaveBeenCalledTimes(1);
     expect(enviarTextoMock).toHaveBeenCalledWith(conversation.waId, "Oi! Como posso ajudar?");
@@ -120,7 +133,7 @@ describe("processarTurno", () => {
     await criarMensagemEntrada(conversation.id, { texto: "quero saber" });
     await criarMensagemEntrada(conversation.id, { texto: "do gol 2018" });
 
-    await processarTurno({ conversationId: conversation.id, seq: 3 });
+    await processarTurno({ companyId: EMPRESA, conversationId: conversation.id, seq: 3 });
 
     expect(gerarRespostaMock).toHaveBeenCalledTimes(1);
     const contexto = gerarRespostaMock.mock.calls[0]?.[0];
@@ -137,7 +150,7 @@ describe("processarTurno", () => {
     const conversation = await criarConversation({ bufferSeq: 5 }); // já avançou além do seq deste job
     await criarMensagemEntrada(conversation.id);
 
-    await processarTurno({ conversationId: conversation.id, seq: 3 });
+    await processarTurno({ companyId: EMPRESA, conversationId: conversation.id, seq: 3 });
 
     expect(gerarRespostaMock).not.toHaveBeenCalled();
     expect(enviarTextoMock).not.toHaveBeenCalled();
@@ -155,7 +168,7 @@ describe("processarTurno", () => {
     const conversation = await criarConversation({ bufferSeq: 1 });
     await criarMensagemEntrada(conversation.id, { tipo: "AUDIO", texto: null });
 
-    await processarTurno({ conversationId: conversation.id, seq: 1 });
+    await processarTurno({ companyId: EMPRESA, conversationId: conversation.id, seq: 1 });
 
     expect(gerarRespostaMock).not.toHaveBeenCalled();
     expect(enviarTextoMock).toHaveBeenCalledTimes(1);
@@ -168,7 +181,7 @@ describe("processarTurno", () => {
     await criarMensagemEntrada(conversation.id, { texto: "quanto custa esse carro?" });
     await criarMensagemEntrada(conversation.id, { tipo: "AUDIO", texto: null });
 
-    await processarTurno({ conversationId: conversation.id, seq: 2 });
+    await processarTurno({ companyId: EMPRESA, conversationId: conversation.id, seq: 2 });
 
     expect(gerarRespostaMock).toHaveBeenCalledTimes(1);
     expect(enviarTextoMock).toHaveBeenCalledTimes(2); // resposta do modelo + fallback de mídia
@@ -194,7 +207,7 @@ describe("processarTurno", () => {
           )
       );
 
-      const job = { conversationId: conversation.id, seq: 1 };
+      const job = { companyId: EMPRESA, conversationId: conversation.id, seq: 1 };
       await Promise.all([processarTurno(job), processarTurno(job)]);
 
       expect(gerarRespostaMock).toHaveBeenCalledTimes(1);
@@ -239,7 +252,7 @@ describe("processarTurno", () => {
 
       // `tentativaReagendamento` já no teto — a próxima tentativa (31ª)
       // deve desistir em vez de reagendar de novo.
-      await processarTurno({ conversationId: conversation.id, seq: 1, tentativaReagendamento: 30 });
+      await processarTurno({ companyId: EMPRESA, conversationId: conversation.id, seq: 1, tentativaReagendamento: 30 });
 
       expect(publicarTurnoMock).not.toHaveBeenCalled();
       expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining("desistiu depois de"));
@@ -275,7 +288,7 @@ describe("processarTurno", () => {
       publicarTurnoMock.mockRejectedValueOnce(new DuplicateMessageError("já publicado"));
 
       await expect(
-        processarTurno({ conversationId: conversation.id, seq: 1, tentativaReagendamento: 0 })
+        processarTurno({ companyId: EMPRESA, conversationId: conversation.id, seq: 1, tentativaReagendamento: 0 })
       ).resolves.toBeUndefined();
 
       expect(publicarTurnoMock).toHaveBeenCalledTimes(1);
@@ -290,7 +303,7 @@ describe("processarTurno", () => {
         const conversation = await criarConversation({ bufferSeq: 1 });
 
         // Processador A reivindica o lease — token A.
-        const tokenA = await claimLease(conversation.id);
+        const tokenA = await claimLease(EMPRESA, conversation.id);
         expect(tokenA).not.toBeNull();
 
         // Simula o lease de A expirando DE VERDADE (relógio avançou, ou A
@@ -303,7 +316,7 @@ describe("processarTurno", () => {
 
         // Processador B reivindica o lease agora livre — token B, DIFERENTE
         // do token A.
-        const tokenB = await claimLease(conversation.id);
+        const tokenB = await claimLease(EMPRESA, conversation.id);
         expect(tokenB).not.toBeNull();
         expect(tokenB!.processandoAte.getTime()).not.toBe(tokenA!.processandoAte.getTime());
 
@@ -311,7 +324,7 @@ describe("processarTurno", () => {
         // Achado CRÍTICO do revisor: sem o fencing token, isto apagava o
         // lease de B incondicionalmente — abrindo espaço para um TERCEIRO
         // processador entrar enquanto B ainda trabalha.
-        await liberarLease(conversation.id, tokenA!.processandoAte);
+        await liberarLease(EMPRESA, conversation.id, tokenA!.processandoAte);
 
         const conversationAposLiberacaoDeA = await prisma.conversation.findUniqueOrThrow({
           where: { id: conversation.id },
@@ -323,7 +336,7 @@ describe("processarTurno", () => {
 
         // B, ao terminar de verdade, libera com o PRÓPRIO token — agora sim
         // o lease é liberado.
-        await liberarLease(conversation.id, tokenB!.processandoAte);
+        await liberarLease(EMPRESA, conversation.id, tokenB!.processandoAte);
         const conversationAposLiberacaoDeB = await prisma.conversation.findUniqueOrThrow({
           where: { id: conversation.id },
         });
@@ -333,22 +346,22 @@ describe("processarTurno", () => {
 
     it("confirmarTitularidadeLease reflete corretamente titular atual vs. token antigo", async () => {
       const conversation = await criarConversation({ bufferSeq: 1 });
-      const tokenA = await claimLease(conversation.id);
+      const tokenA = await claimLease(EMPRESA, conversation.id);
 
       // Ainda titular e IA ativa: pode seguir (`null`).
-      expect(await confirmarTitularidadeLease(conversation.id, tokenA!.processandoAte)).toBeNull();
+      expect(await confirmarTitularidadeLease(EMPRESA, conversation.id, tokenA!.processandoAte)).toBeNull();
 
       await prisma.conversation.update({
         where: { id: conversation.id },
         data: { processandoAte: new Date(Date.now() - 1000) },
       });
-      const tokenB = await claimLease(conversation.id);
+      const tokenB = await claimLease(EMPRESA, conversation.id);
 
       // O token antigo (A) não é mais o titular; o novo (B) é.
-      expect(await confirmarTitularidadeLease(conversation.id, tokenA!.processandoAte)).toBe(
+      expect(await confirmarTitularidadeLease(EMPRESA, conversation.id, tokenA!.processandoAte)).toBe(
         "lease-perdido"
       );
-      expect(await confirmarTitularidadeLease(conversation.id, tokenB!.processandoAte)).toBeNull();
+      expect(await confirmarTitularidadeLease(EMPRESA, conversation.id, tokenB!.processandoAte)).toBeNull();
     });
 
     // A outra metade da distinção que motivou o tipo `MotivoAborto`: ainda
@@ -356,14 +369,14 @@ describe("processarTurno", () => {
     // tem que devolver "ia-pausada", não "lease-perdido" nem `null`.
     it("confirmarTitularidadeLease devolve \"ia-pausada\" quando o titular do lease está com a IA pausada", async () => {
       const conversation = await criarConversation({ bufferSeq: 1 });
-      const token = await claimLease(conversation.id);
+      const token = await claimLease(EMPRESA, conversation.id);
 
       await prisma.conversation.update({
         where: { id: conversation.id },
         data: { iaAtiva: false, iaPausadaEm: new Date() },
       });
 
-      expect(await confirmarTitularidadeLease(conversation.id, token!.processandoAte)).toBe(
+      expect(await confirmarTitularidadeLease(EMPRESA, conversation.id, token!.processandoAte)).toBe(
         "ia-pausada"
       );
     });
@@ -390,7 +403,7 @@ describe("processarTurno", () => {
         .mockImplementationOnce(() => chamadaLentaDeA) // 1ª chamada (A): fica pendurada até resolvermos.
         .mockResolvedValueOnce({ mensagens: ["Resposta de B"] }); // 2ª chamada (B): resolve na hora.
 
-      const job = { conversationId: conversation.id, seq: 1 };
+      const job = { companyId: EMPRESA, conversationId: conversation.id, seq: 1 };
 
       // Dispara A — ele reivindica o lease e fica bloqueado dentro da
       // chamada ao modelo (ainda não resolvida).
@@ -471,7 +484,7 @@ describe("processarTurno", () => {
 
       const pendente = await criarMensagemEntrada(conversation.id, { texto: "mais uma pergunta" });
 
-      await processarTurno({ conversationId: conversation.id, seq: 1 });
+      await processarTurno({ companyId: EMPRESA, conversationId: conversation.id, seq: 1 });
 
       expect(gerarRespostaMock).not.toHaveBeenCalled();
       expect(enviarTextoMock).not.toHaveBeenCalled();
@@ -500,7 +513,7 @@ describe("processarTurno", () => {
       });
       await criarMensagemEntrada(conversation.id, { texto: "mais uma pergunta" });
 
-      await processarTurno({ conversationId: conversation.id, seq: 1 });
+      await processarTurno({ companyId: EMPRESA, conversationId: conversation.id, seq: 1 });
 
       expect(gerarRespostaMock).toHaveBeenCalledTimes(1);
       expect(enviarTextoMock).toHaveBeenCalledTimes(1);
@@ -523,7 +536,7 @@ describe("processarTurno", () => {
       });
       await criarMensagemEntrada(conversation.id, { texto: "pergunta nova" });
 
-      await processarTurno({ conversationId: conversation.id, seq: 1 });
+      await processarTurno({ companyId: EMPRESA, conversationId: conversation.id, seq: 1 });
 
       expect(gerarRespostaMock).toHaveBeenCalledTimes(1);
     });
@@ -543,7 +556,7 @@ describe("processarTurno", () => {
         .mockResolvedValueOnce({ idExterno: `${PREFIXO}saida-ok-${crypto.randomUUID()}` })
         .mockRejectedValueOnce(new Error("Evolution fora do ar"));
 
-      await expect(processarTurno({ conversationId: conversation.id, seq: 1 })).rejects.toThrow(
+      await expect(processarTurno({ companyId: EMPRESA, conversationId: conversation.id, seq: 1 })).rejects.toThrow(
         "Evolution fora do ar"
       );
 
@@ -574,7 +587,7 @@ describe("processarTurno", () => {
     const textoEnorme = "a".repeat(5000);
     await criarMensagemEntrada(conversation.id, { texto: textoEnorme });
 
-    await processarTurno({ conversationId: conversation.id, seq: 1 });
+    await processarTurno({ companyId: EMPRESA, conversationId: conversation.id, seq: 1 });
 
     const contexto = gerarRespostaMock.mock.calls[0]?.[0];
     const ultimaEntrada = contexto.historico.at(-1);
@@ -587,7 +600,7 @@ describe("processarTurno", () => {
       const conversation = await criarConversation({ iaAtiva: false });
       const pendente = await criarMensagemEntrada(conversation.id, { texto: "oi, tem o Onix 2020?" });
 
-      await processarTurno({ conversationId: conversation.id, seq: conversation.bufferSeq });
+      await processarTurno({ companyId: EMPRESA, conversationId: conversation.id, seq: conversation.bufferSeq });
 
       expect(enviarTextoMock).not.toHaveBeenCalled();
       // Busca pelo id e confere `processadoEm` não nulo (mesmo padrão do
@@ -620,7 +633,7 @@ describe("processarTurno", () => {
         const conversation = await criarConversation();
         await criarMensagemEntrada(conversation.id, { texto: "bom dia" });
 
-        await processarTurno({ conversationId: conversation.id, seq: conversation.bufferSeq });
+        await processarTurno({ companyId: EMPRESA, conversationId: conversation.id, seq: conversation.bufferSeq });
 
         expect(enviarTextoMock).not.toHaveBeenCalled();
       } finally {
@@ -644,7 +657,7 @@ describe("processarTurno", () => {
         return { mensagens: ["Resposta que não deve ser enviada"] };
       });
 
-      await processarTurno({ conversationId: conversation.id, seq: conversation.bufferSeq });
+      await processarTurno({ companyId: EMPRESA, conversationId: conversation.id, seq: conversation.bufferSeq });
 
       expect(enviarTextoMock).not.toHaveBeenCalled();
 
@@ -674,7 +687,7 @@ describe("processarTurno", () => {
         return { mensagens: ["resposta órfã"] };
       });
 
-      await processarTurno({ conversationId: conversation.id, seq: conversation.bufferSeq });
+      await processarTurno({ companyId: EMPRESA, conversationId: conversation.id, seq: conversation.bufferSeq });
 
       const pendentes = await prisma.whatsappMessage.findMany({
         where: { conversationId: conversation.id, direcao: "ENTRADA", processadoEm: null },
@@ -695,7 +708,7 @@ describe("processarTurno", () => {
         await criarMensagemEntrada(conversation.id, { texto: "oi" });
         enviarTextoMock.mockResolvedValue({ idExterno: `${PREFIXO}saida-${conversation.id}` });
 
-        await processarTurno({ conversationId: conversation.id, seq: conversation.bufferSeq });
+        await processarTurno({ companyId: EMPRESA, conversationId: conversation.id, seq: conversation.bufferSeq });
 
         const [chamada] = gerarRespostaMock.mock.calls.at(-1)!;
         expect(chamada.systemPrompt).toContain("Beatriz-do-teste");
@@ -725,7 +738,7 @@ describe("processarTurno", () => {
       const conversa = await criarConversation({ iaAtiva: false });
       await criarMensagemEntrada(conversa.id, { texto: "oi, tem o Onix?" });
 
-      await processarTurno({ conversationId: conversa.id, seq: conversa.bufferSeq });
+      await processarTurno({ companyId: EMPRESA, conversationId: conversa.id, seq: conversa.bufferSeq });
 
       expect(await aguardandoDe(conversa.id)).toBeInstanceOf(Date);
     });
@@ -738,7 +751,7 @@ describe("processarTurno", () => {
         const conversa = await criarConversation();
         await criarMensagemEntrada(conversa.id, { texto: "bom dia" });
 
-        await processarTurno({ conversationId: conversa.id, seq: conversa.bufferSeq });
+        await processarTurno({ companyId: EMPRESA, conversationId: conversa.id, seq: conversa.bufferSeq });
 
         expect(await aguardandoDe(conversa.id)).toBeInstanceOf(Date);
       } finally {
@@ -755,7 +768,7 @@ describe("processarTurno", () => {
       const conversa = await criarConversation();
       await criarMensagemEntrada(conversa.id, { texto: "quanto custa?" });
 
-      await processarTurno({ conversationId: conversa.id, seq: conversa.bufferSeq });
+      await processarTurno({ companyId: EMPRESA, conversationId: conversa.id, seq: conversa.bufferSeq });
 
       expect(await aguardandoDe(conversa.id)).toBeNull();
     });
@@ -768,7 +781,7 @@ describe("processarTurno", () => {
       });
       await criarMensagemEntrada(conversa.id, { texto: "voltei" });
 
-      await processarTurno({ conversationId: conversa.id, seq: conversa.bufferSeq });
+      await processarTurno({ companyId: EMPRESA, conversationId: conversa.id, seq: conversa.bufferSeq });
 
       expect(await aguardandoDe(conversa.id)).toBeNull();
     });
@@ -789,7 +802,7 @@ describe("processarTurno", () => {
       });
       await criarMensagemEntrada(conversa.id, { texto: "mais uma pergunta" });
 
-      await processarTurno({ conversationId: conversa.id, seq: conversa.bufferSeq });
+      await processarTurno({ companyId: EMPRESA, conversationId: conversa.id, seq: conversa.bufferSeq });
 
       expect(await aguardandoDe(conversa.id)).toBeInstanceOf(Date);
     });
@@ -812,7 +825,7 @@ describe("processarTurno", () => {
         return { mensagens: ["resposta órfã"] };
       });
 
-      await processarTurno({ conversationId: conversa.id, seq: conversa.bufferSeq });
+      await processarTurno({ companyId: EMPRESA, conversationId: conversa.id, seq: conversa.bufferSeq });
 
       expect(await aguardandoDe(conversa.id)).toBeNull();
     });
@@ -833,7 +846,7 @@ describe("processarTurno", () => {
         return { mensagens: ["Resposta que não deve ser enviada"] };
       });
 
-      await processarTurno({ conversationId: conversa.id, seq: conversa.bufferSeq });
+      await processarTurno({ companyId: EMPRESA, conversationId: conversa.id, seq: conversa.bufferSeq });
 
       expect(await aguardandoDe(conversa.id)).toBeInstanceOf(Date);
     });

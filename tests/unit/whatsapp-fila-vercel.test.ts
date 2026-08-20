@@ -38,12 +38,13 @@ describe("FilaVercel — adaptador de @vercel/queue", () => {
   });
 
   it("publica no tópico whatsapp-turn com o segredo embutido no payload", async () => {
-    await new FilaVercel().publicar({ conversationId: "conv-1", seq: 3 });
+    await new FilaVercel().publicar({ companyId: "empresa-1", conversationId: "conv-1", seq: 3 });
 
     expect(sendMock).toHaveBeenCalledTimes(1);
     const [topico, payload] = sendMock.mock.calls[0] ?? [];
     expect(topico).toBe("whatsapp-turn");
     expect(payload).toMatchObject({
+      companyId: "empresa-1",
       conversationId: "conv-1",
       seq: 3,
       segredo: "segredo-teste-adaptador",
@@ -51,7 +52,7 @@ describe("FilaVercel — adaptador de @vercel/queue", () => {
   });
 
   it("usa a chave de idempotência sem sufixo na publicação original, e delay padrão de 8s", async () => {
-    await new FilaVercel().publicar({ conversationId: "conv-1", seq: 3 });
+    await new FilaVercel().publicar({ companyId: "empresa-1", conversationId: "conv-1", seq: 3 });
 
     const opcoes = sendMock.mock.calls[0]?.[2];
     expect(opcoes?.idempotencyKey).toBe("conv-1:3");
@@ -60,7 +61,7 @@ describe("FilaVercel — adaptador de @vercel/queue", () => {
 
   it("sufixa a chave por tentativa de reagendamento e respeita o delay informado", async () => {
     await new FilaVercel().publicar(
-      { conversationId: "conv-2", seq: 5, tentativaReagendamento: 2 },
+      { companyId: "empresa-1", conversationId: "conv-2", seq: 5, tentativaReagendamento: 2 },
       { delaySeconds: 5 }
     );
 

@@ -110,7 +110,11 @@ export async function POST(request: Request, { params }: { params: Promise<{ tok
     try {
       const resultado = await ingerirMensagem(evento);
       try {
-        await publicarTurno({ conversationId: resultado.conversationId, seq: resultado.bufferSeq });
+        await publicarTurno({
+          companyId: resultado.companyId,
+          conversationId: resultado.conversationId,
+          seq: resultado.bufferSeq,
+        });
       } catch (erroPublicacao) {
         if (erroPublicacao instanceof DuplicateMessageError) {
           // Esperado no caminho de redelivery: o job para este MESMO
