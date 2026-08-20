@@ -18,7 +18,7 @@
 // chegou ao serviço?". A chave tem de estar AUSENTE, não vazia: ausente é
 // "não mexa nesta coluna".
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import type { User } from "@prisma/client";
+import type { UsuarioAtivo } from "../../src/core/auth/usuario-ativo";
 
 const usuarioAtualMock = vi.fn();
 vi.mock("@/core/auth/session", () => ({ usuarioAtual: () => usuarioAtualMock() }));
@@ -37,15 +37,23 @@ const { criarContatoAction, atualizarContatoAction } = await import(
   "../../src/core/contacts/actions"
 );
 
-function usuarioFake(overrides: Partial<User> = {}): User {
+// `UsuarioAtivo`, e não o modelo `User` do Prisma. A troca não é cosmética:
+// `usuarioAtual()` devolve `UsuarioAtivo` desde a Task 2 do Ciclo 1a, e o
+// campo que interessa aqui é o `companyId`, que `User` não tem.
+//
+// Enquanto o fake era um `User`, ele não carregava `companyId` — e como as
+// actions só repassavam o objeto adiante, o teste ficava VERDE repassando
+// `undefined` para o serviço. Foi assim que dois pontos escaparam do bloco
+// anterior deste ciclo. Com o tipo certo, esquecer o campo passa a ser erro de
+// compilação, e os dois casos de "autor vem sempre da sessão" afirmam o valor.
+function usuarioFake(overrides: Partial<UsuarioAtivo> = {}): UsuarioAtivo {
   return {
     id: "usuario-fake-id",
     nome: "Usuário Fake",
     email: "fake@teste.local",
-    senhaHash: "hash",
+    companyId: "empresa-da-sessao",
     papel: "VENDEDOR",
     ativo: true,
-    criadoEm: new Date("2026-01-01T00:00:00.000Z"),
     ...overrides,
   };
 }
@@ -66,7 +74,7 @@ describe("documento é restrito a quem tem permissão", () => {
 
     await criarContatoAction({ ...BASE, documento: "12345678901" });
 
-    const enviado = criarContatoMock.mock.calls[0][0] as Record<string, unknown>;
+    const enviado = criarContatoMock.mock.calls[0][1] as Record<string, unknown>;
     expect("documento" in enviado).toBe(false);
     // Nem por outro caminho: o valor não pode sobrar em lugar nenhum do objeto.
     expect(JSON.stringify(enviado)).not.toContain("12345678901");
@@ -80,7 +88,7 @@ describe("documento é restrito a quem tem permissão", () => {
     // não foi renderizado mas o valor padrão continua no estado do form.
     await atualizarContatoAction({ id: "contato-1", ...BASE, documento: "" });
 
-    const enviado = atualizarContatoMock.mock.calls[0][0] as Record<string, unknown>;
+    const enviado = atualizarContatoMock.mock.calls[0][1] as Record<string, unknown>;
     expect(
       "documento" in enviado,
       "a chave precisa estar AUSENTE: presente e vazia vira null, e null apaga a coluna"
@@ -92,7 +100,7 @@ describe("documento é restrito a quem tem permissão", () => {
 
     await atualizarContatoAction({ id: "contato-1", ...BASE, documento: "12345678901" });
 
-    expect(atualizarContatoMock.mock.calls[0][0]).toMatchObject({ documento: "12345678901" });
+    expect(atualizarContatoMock.mock.calls[0][1]).toMatchObject({ documento: "12345678901" });
   });
 
   it("ADMIN grava documento normalmente", async () => {
@@ -100,7 +108,7 @@ describe("documento é restrito a quem tem permissão", () => {
 
     await criarContatoAction({ ...BASE, documento: "12345678901" });
 
-    expect(criarContatoMock.mock.calls[0][0]).toMatchObject({ documento: "12345678901" });
+    expect(criarContatoMock.mock.calls[0][1]).toMatchObject({ documento: "12345678901" });
   });
 
   it("GESTOR consegue APAGAR o documento de propósito", async () => {
@@ -110,7 +118,7 @@ describe("documento é restrito a quem tem permissão", () => {
 
     await atualizarContatoAction({ id: "contato-1", ...BASE, documento: "" });
 
-    const enviado = atualizarContatoMock.mock.calls[0][0] as Record<string, unknown>;
+    const enviado = atualizarContatoMock.mock.calls[0][1] as Record<string, unknown>;
     expect(enviado.documento).toBe("");
   });
 
@@ -130,7 +138,7 @@ describe("documento é restrito a quem tem permissão", () => {
       observacoes: "Ligar de manhã.",
     });
 
-    expect(atualizarContatoMock.mock.calls[0][0]).toMatchObject({
+    expect(atualizarContatoMock.mock.calls[0][1]).toMatchObject({
       empresa: "Acme",
       cargo: "Diretor",
       endereco: "Rua X",
@@ -141,13 +149,13 @@ describe("documento é restrito a quem tem permissão", () => {
   });
 });
 
-describe("autor vem sempre da sessão", () => {
+describe("autor e empresa vêm sempre da sessão", () => {
   it("criar usa o id de usuarioAtual, nunca um id vindo do cliente", async () => {
     usuarioAtualMock.mockResolvedValue(usuarioFake({ id: "vendedor-7" }));
 
     await criarContatoAction(BASE);
 
-    expect(criarContatoMock.mock.calls[0][1]).toBe("vendedor-7");
+    expect(criarContatoMock.mock.calls[0][2]).toBe("vendedor-7");
   });
 
   it("editar usa o id de usuarioAtual", async () => {
@@ -155,6 +163,32 @@ describe("autor vem sempre da sessão", () => {
 
     await atualizarContatoAction({ id: "contato-1", ...BASE });
 
-    expect(atualizarContatoMock.mock.calls[0][1]).toBe("gestor-3");
+    expect(atualizarContatoMock.mock.calls[0][2]).toBe("gestor-3");
+  });
+
+  // A empresa é o PRIMEIRO parâmetro do serviço desde o Ciclo 1a, e sai de
+  // `usuarioAtual().companyId`. Estes dois casos existem porque a origem é o
+  // ponto: uma Server Action é endpoint HTTP público, então um `companyId`
+  // aceito dentro de `dados` seria escolhido por quem chama.
+  it("criar escopa na empresa da sessão", async () => {
+    usuarioAtualMock.mockResolvedValue(usuarioFake({ companyId: "empresa-a" }));
+
+    await criarContatoAction(BASE);
+
+    expect(criarContatoMock.mock.calls[0][0]).toBe("empresa-a");
+  });
+
+  it("editar escopa na empresa da sessão, e ignora a que vier do cliente", async () => {
+    usuarioAtualMock.mockResolvedValue(usuarioFake({ companyId: "empresa-a" }));
+
+    // `companyId` forjado no payload do formulário. O tipo da action não o
+    // declara; um POST direto o manda assim mesmo.
+    await atualizarContatoAction({
+      id: "contato-1",
+      ...BASE,
+      ...({ companyId: "empresa-b" } as Record<string, string>),
+    });
+
+    expect(atualizarContatoMock.mock.calls[0][0]).toBe("empresa-a");
   });
 });

@@ -38,16 +38,15 @@ export default async function ContatosPage({
   const { q } = await searchParams;
   const busca = q?.trim() ?? "";
 
-  // As duas juntas: `listarContatos` não olha para `usuario`, então esperar a
-  // sessão para só então começar a busca era uma viagem de rede em fila por
-  // nada. Ver o comentário longo em `leads/page.tsx` sobre por que isso pesa
-  // (85 ms de mediana por consulta, banco em `sa-east-1`) e o que muda para a
-  // auditoria — as consultas passam a começar antes de a sessão ser
-  // confirmada, e `redirect()` continua lançando antes de qualquer render.
-  const [usuario, { itens: contatos, truncado }] = await Promise.all([
-    usuarioAtualOuLogin(),
-    listarContatos(busca),
-  ]);
+  // O `Promise.all` que existia aqui SAIU no Ciclo 1a, e a perda é real: as
+  // duas consultas iam juntas porque `listarContatos` não olhava para
+  // `usuario` (ver o comentário longo em `leads/page.tsx` — 85 ms de mediana
+  // por consulta, banco em `sa-east-1`). Agora a agenda é escopada, e a
+  // empresa só existe depois da sessão: começar a busca antes dela significa
+  // buscar sem saber de quem, que é o defeito que acabou de ser fechado. A
+  // sequência é o preço do escopo, e é o preço certo.
+  const usuario = await usuarioAtualOuLogin();
+  const { itens: contatos, truncado } = await listarContatos(usuario.companyId, busca);
 
   // Mesma regra da tela de detalhe: quem não pode ver o documento também não
   // pode preenchê-lo no cadastro. Sem isto, o campo apareceria em "Adicionar

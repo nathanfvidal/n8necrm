@@ -29,7 +29,12 @@ export default async function TasksPage({
   const usuario = await usuarioAtualOuLogin();
   const [{ itens: tasks, truncado }, { itens: contatos }] = await Promise.all([
     listarMinhasTasks(usuario.id, { concluidas: mostrarConcluidas }),
-    listarContatos(),
+    // O `<select>` de contato do formulário de tarefa. Escopado desde o Ciclo
+    // 1a: sem `companyId`, ele listava a agenda de TODAS as empresas, e
+    // escolher uma linha ali gravava a tarefa apontando para o cliente de
+    // outro fork — o mesmo defeito que o `<select>` de responsável do funil
+    // teve na Task 4.
+    listarContatos(usuario.companyId),
   ]);
 
   const linhas: TaskLinha[] = tasks.map((t) => ({

@@ -123,16 +123,19 @@ export type ConversaComMensagens = NonNullable<Awaited<ReturnType<typeof buscarC
  * só chama esta função quando `moduloAtivo("whatsapp")`, então num fork com o
  * módulo desligado a tabela nem é consultada.
  *
- * ## O elo do meio de uma cadeia que ainda não fechou inteira
+ * ## O elo do meio de uma cadeia que fechou nas duas pontas
  *
  * O `contactId` chega de `buscarContatoComHistorico`
- * (`core/contacts/queries.ts`), que faz `findUnique` pelo id da rota
- * `/contatos/[id]` e ainda **não** confere empresa — está na fila do lint
- * como o próximo bloco de conversão. Enquanto isso, o escopo aqui compõe em
- * AND: um `contactId` de outra empresa devolve lista VAZIA em vez das
- * conversas dela. Isto é o que este arquivo pode fazer sozinho, e é
- * exercitado em `tests/unit/whatsapp-isolamento.test.ts`; o cabeçalho e os
- * DADOS do contato continuam vazando por `contacts/` até aquele bloco rodar.
+ * (`core/contacts/queries.ts`), que também passou a conferir empresa no bloco
+ * seguinte do Ciclo 1d — hoje ela devolve `null` para id de fora e a página
+ * cai em `notFound()` antes de chegar aqui.
+ *
+ * A trava desta função continua valendo, e não é redundância: ela é o que
+ * este arquivo garante SOZINHO, sem depender de quem chama ter filtrado
+ * antes. O escopo compõe em AND, então um `contactId` de outra empresa devolve
+ * lista VAZIA — e um segundo chamador futuro herda isso de graça.
+ * `tests/unit/whatsapp-isolamento.test.ts` exercita esta metade;
+ * `tests/unit/contact-isolamento.test.ts` exercita a cadeia inteira.
  *
  * `nomeExibicao` pode ser nulo (a Evolution nem sempre manda o nome do
  * perfil); quem renderiza cai para o telefone ou o `waId`, mesma cadeia da

@@ -43,12 +43,14 @@ const PRISMA_CRU = {
 // entrega o mecanismo, não a migração dos chamadores.
 //
 // Eram 25 (17 em core, 5 em modules, 3 em src/app), medidos em 2026-08-20 com
-// `grep -rln "lib/prisma" src --include=*.ts --include=*.tsx`. Hoje são 17:
+// `grep -rln "lib/prisma" src --include=*.ts --include=*.tsx`. Hoje são 13:
 // a Task 4 do Ciclo 1a converteu `leads` inteiro — os 4 arquivos de
 // `src/core/leads/` e as 2 páginas de `src/app/(painel)/leads/` — e o Ciclo 1d
-// converteu `src/core/pipeline/` (`service.ts` e `stages.ts`). O tamanho desta
-// lista é o contador de quanto falta: quando ela esvaziar, os blocos somem
-// junto. Exceção nomeada conta; disciplina não conta nada.
+// converteu `src/core/pipeline/` (`service.ts` e `stages.ts`),
+// `src/modules/whatsapp/{agente,queries}.ts` e `src/core/contacts/`
+// (`queries.ts` e `service.ts`). O tamanho desta lista é o contador de quanto
+// falta: quando ela esvaziar, os blocos somem junto. Exceção nomeada conta;
+// disciplina não conta nada.
 //
 // **Esta lista é lida por um teste.** `tests/unit/catraca-prisma-cru.test.ts`
 // compara as quatro listas deste arquivo com a árvore de `src/` e reprova
@@ -56,7 +58,7 @@ const PRISMA_CRU = {
 // quem escrever um caminho com metacaractere de glob nu (a armadilha do `[id]`,
 // registrada mais abaixo). Diminuir a lista não reprova ninguém — a catraca
 // gira num sentido só —, mas quem diminuir deve baixar junto a
-// `LINHA_DE_BASE_DE_IMPORTADORES_TEMPORARIOS` de lá, que hoje é 17.
+// `LINHA_DE_BASE_DE_IMPORTADORES_TEMPORARIOS` de lá, que hoje é 13.
 //
 // Os 3 de `src/app` entraram numa segunda passada, e vale registrar por quê: a
 // regra nascera limitada a `core` + `modules`, enquanto `escopo.ts` dizia no
@@ -82,7 +84,9 @@ const PRISMA_CRU = {
 // vivos** — 32 neles (18 de severidade ALTA, 9 MÉDIA, 5 BAIXA) mais 1 no
 // arquivo que aquela tarefa corrigiu (`tasks/service.ts`, o `contactId`).
 //
-// **Hoje são 18** — 10 ALTA, 4 MÉDIA, 4 BAIXA. Dois foram fechados no reparo
+// **Hoje são 14** — 7 ALTA, 3 MÉDIA, 4 BAIXA. Os 4 mais recentes saíram com
+// `src/core/contacts/` (3 ALTA, 1 MÉDIA), no bloco registrado em
+// `.superpowers/sdd/ciclo-1d-contacts.md`. Dois foram fechados no reparo
 // registrado em `.superpowers/sdd/reparo-redefinir-senha.md`, os dois da
 // família descrita logo abaixo: `redefinirSenha` (`users/service.ts`, a tomada
 // de conta que encabeçava a ordem) e `exigirContatoDaEmpresa`
@@ -106,22 +110,24 @@ const PRISMA_CRU = {
 // (`Contact.telefone`, `Conversation.waId`, `PipelineStage.ordem`).
 //
 // **A ordem de conversão que estes números sugerem** não é a alfabética. O
-// item 1 de antes (`users/service.ts`) saiu por ter sido corrigido; o que
-// sobra é:
+// que sobra é:
 //
-//   1. `src/core/contacts/` (4)      — agenda global e `findUnique` por id de
-//      rota.
-//   2. `src/app/(painel)/page.tsx` (1) — o `auditLog` sem `where`.
-//   3. o resto (BAIXA), onde o escopo já vem por FK ou por dono.
+//   1. `src/app/(painel)/page.tsx` (1) — o `auditLog` sem `where`. É o único
+//      item ALTA restante que é uma LEITURA sem filtro nenhum, e o único
+//      arquivo de `src/app/**` ainda na fila.
+//   2. o resto (MÉDIA e BAIXA), onde o escopo já vem por FK, por dono, ou só
+//      se alcança com duas instâncias Evolution.
 //
-// Os dois itens que encabeçavam esta ordem saíram no Ciclo 1d:
-// `src/core/pipeline/` (13) e `src/modules/whatsapp/{queries,agente}.ts` (6).
-// `contacts/` ficou no topo por herança direta: era ele que alimentava
-// `listarConversasDoContato` com um `contactId` não validado, e essa metade
-// da cadeia (a que devolve CONVERSAS) fechou; a que devolve os DADOS do
-// contato continua aberta até aquele bloco rodar.
+// Os três itens que encabeçavam esta ordem saíram no Ciclo 1d:
+// `src/core/pipeline/` (13), `src/modules/whatsapp/{queries,agente}.ts` (6) e
+// `src/core/contacts/` (4). O último fechou a cadeia que os outros dois
+// deixaram pela metade: `listarConversasDoContato` já recusava um `contactId`
+// de fora, mas os DADOS do contato (nome, telefone, CPF/CNPJ, endereço,
+// observações e os leads) continuavam saindo por `buscarContatoComHistorico`
+// até este bloco rodar. Hoje `/contatos/<id de outra empresa>` cai em
+// `notFound()`.
 //
-// **Os 18 restantes NÃO foram corrigidos**, de propósito: a decisão de quantos
+// **Os 14 restantes NÃO foram corrigidos**, de propósito: a decisão de quantos
 // e em que ordem é do dono do projeto, e as tarefas até aqui tiveram escopo de
 // um reparo ou de um módulo. Corrigir 33 num commit seria a mesma pressa que
 // os criou.
@@ -145,22 +151,24 @@ const VIOLADORES_TEMPORARIOS_CORE = [
   // decisão registrada no schema. Converter este arquivo é trocar o import,
   // nada mais.
   "src/core/auth/credenciais.ts",
-  // 2 defeitos, os DOIS ALTA: `listarContatos` faz `findMany` sem
-  // `where: { companyId }` (a agenda é global), e `buscarContatoComHistorico`
-  // faz `findUnique` pelo id que vem da rota `/contatos/[id]`, sem conferir
-  // empresa — e daí desce para `listarConversasDoContato`
-  // (`whatsapp/queries.ts`), que confia no `contactId` recebido.
-  "src/core/contacts/queries.ts",
-  // 2 defeitos: `atualizarContato` (ALTA) valida `dados.id` da Server Action
-  // só por existência — a família de sempre; e `erroDeTelefoneOcupado`
-  // (MÉDIA) busca por `telefone`, que é `@unique` GLOBAL, e devolve na
-  // mensagem de erro o NOME do dono — que pode ser de outra empresa.
-  "src/core/contacts/service.ts",
-  // `src/core/leads/*` SAIU desta lista na Task 4 do Ciclo 1a — os quatro
-  // arquivos (`dedupe`, `notes`, `queries`, `service`) passaram a alcançar o
-  // banco só por `prismaDaEmpresa`. O lint passar com eles fora daqui é a
-  // prova de que o serviço não alcança mais o `prisma` cru; a prova de que o
-  // escopo FUNCIONA é outra, e mora em `tests/unit/lead-isolamento.test.ts`.
+  // `src/core/contacts/*` SAIU desta lista no Ciclo 1d — `queries.ts` e
+  // `service.ts` (os dois únicos que alcançavam o banco) passaram a alcançá-lo
+  // só por `prismaDaEmpresa`, e os 4 defeitos deles (3 ALTA, 1 MÉDIA) foram
+  // abatidos. As quatro funções públicas ganharam `companyId` como PRIMEIRO
+  // parâmetro, e com elas mudaram as 2 Server Actions (que passaram a tirar a
+  // empresa de `usuarioAtual().companyId`) e as 3 páginas que as consomem —
+  // `/contatos` perdeu o `Promise.all` que começava a busca antes da sessão,
+  // porque agora a empresa vem dela. O lint passar com eles fora daqui é a
+  // prova de que não alcançam mais o `prisma` cru; a prova de que o escopo
+  // FUNCIONA é outra, e mora em `tests/unit/contact-isolamento.test.ts`, que
+  // tem as duas metades para cada função.
+  //
+  // Os dois que a leitura aninhada obrigou a filtrar À MÃO ficam registrados
+  // aqui porque o escopo não os alcança: os `leads` do contato, nas duas
+  // consultas. `Lead.contactId` não carrega empresa, então "lead da B
+  // pendurado em contato da A" é estado expressável — o teste cria a linha e
+  // afirma que ela não aparece.
+  //
   // `src/core/leads/*` SAIU desta lista na Task 4 do Ciclo 1a — os quatro
   // arquivos (`dedupe`, `notes`, `queries`, `service`) passaram a alcançar o
   // banco só por `prismaDaEmpresa`. O lint passar com eles fora daqui é a

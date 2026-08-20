@@ -368,10 +368,12 @@ describe("buscarConversaComMensagens", () => {
 
 describe("listarConversasDoContato", () => {
   // O contato vem de `buscarContatoComHistorico` (`core/contacts/queries.ts`),
-  // que ainda NÃO valida empresa — é o próximo bloco da fila. Este caso prova
-  // que, mesmo recebendo um `contactId` de outra empresa, esta função não
-  // entrega conversa nenhuma: o elo do meio para de vazar antes de
-  // `contacts/` ser convertido.
+  // que desde o bloco seguinte deste ciclo também valida empresa — hoje ela
+  // devolve `null` e a página nem chega aqui. Este caso continua valendo, e é
+  // a razão de ele ter sido escrito antes daquela conversão: ele mede o que
+  // ESTA função faz sozinha, sem depender de quem a chama filtrar antes. Um
+  // segundo chamador futuro herda a garantia; a cadeia inteira é medida em
+  // `tests/unit/contact-isolamento.test.ts`.
   it("um contactId da B não devolve as conversas da B para a empresa A", async () => {
     expect(await listarConversasDoContato(EMPRESA_A, CONTATO_B)).toEqual([]);
   });

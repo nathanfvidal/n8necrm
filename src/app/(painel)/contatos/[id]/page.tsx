@@ -36,7 +36,14 @@ export default async function ContatoPage({ params }: { params: Promise<{ id: st
   const podeVerDocumento = hasPermission(usuario.papel, "ver_documento_contato");
 
   const { id } = await params;
-  const contato = await buscarContatoComHistorico(id, { incluirDocumento: podeVerDocumento });
+  // `usuario.companyId` e não o id da rota como única chave: `id` vem da URL e
+  // é forjável. As duas travas são INDEPENDENTES — `podeVerDocumento` decide
+  // se o CPF/CNPJ sai dentro da empresa, e `companyId` decide se o contato é
+  // alcançável. Contato de outra empresa devolve `null` mesmo para quem tem a
+  // permissão, e a página cai no mesmo `notFound()` de um id inexistente.
+  const contato = await buscarContatoComHistorico(usuario.companyId, id, {
+    incluirDocumento: podeVerDocumento,
+  });
   if (!contato) notFound();
 
   const mostrarConversas = moduloAtivo("whatsapp");

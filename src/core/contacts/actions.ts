@@ -93,7 +93,10 @@ export async function criarContatoAction(
 ): Promise<ResultadoAcao> {
   try {
     const autor = await usuarioAtual();
-    await criarContato(semDocumentoSeNaoPodeVer(dados, autor), autor.id);
+    // A empresa sai de `usuarioAtual().companyId`, nunca de `dados`: esta é
+    // uma Server Action, que é endpoint HTTP público, e tudo que vem em
+    // `dados` foi montado pelo cliente. Ver o cabeçalho de `service.ts`.
+    await criarContato(autor.companyId, semDocumentoSeNaoPodeVer(dados, autor), autor.id);
   } catch (erro) {
     return paraResultadoErro(erro, "Falha ao salvar o contato. Tente novamente.");
   }
@@ -111,7 +114,10 @@ export async function atualizarContatoAction(
 ): Promise<ResultadoAcao> {
   try {
     const autor = await usuarioAtual();
-    await atualizarContato(semDocumentoSeNaoPodeVer(dados, autor), autor.id);
+    // Mesma origem de empresa da ação de criar, e aqui ela vale ainda mais:
+    // `dados.id` é o id do contato a reescrever, e vem do cliente. É o escopo
+    // que decide se aquele id pertence a quem está agindo.
+    await atualizarContato(autor.companyId, semDocumentoSeNaoPodeVer(dados, autor), autor.id);
   } catch (erro) {
     return paraResultadoErro(erro, "Falha ao salvar o contato. Tente novamente.");
   }

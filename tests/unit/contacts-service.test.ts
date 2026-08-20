@@ -26,6 +26,14 @@ const TODOS_TELEFONES = Object.values(TELEFONES);
 
 describe("core/contacts", () => {
   let autorId: string;
+  // A empresa do autor, resolvida uma vez no `beforeAll` e passada explícita
+  // em toda chamada. Desde o Ciclo 1a as quatro funções deste módulo recebem
+  // `companyId` como PRIMEIRO parâmetro — antes disso `criarContato` o deduzia
+  // sozinho por `companyIdDoUsuario(autorId)` e as outras três não tinham
+  // noção de empresa nenhuma. O isolamento entre DUAS empresas é medido em
+  // `tests/unit/contact-isolamento.test.ts`; aqui a empresa é uma só, e o que
+  // se testa é o comportamento de sempre.
+  let companyId: string;
 
   beforeAll(async () => {
     // Resíduo de uma execução anterior que tenha morrido no meio — sem isto,
@@ -43,15 +51,17 @@ describe("core/contacts", () => {
     });
     autorId = autor.id;
 
-    // `criarContato` resolve `Contact.companyId` por
-    // `companyIdDoUsuario(autorId)` — sem `Membership`, a chamada lança antes
-    // de qualquer asserção deste arquivo rodar (achado rodando a suíte, não
-    // pego pelo `tsc`: `Membership` é tabela à parte, não campo obrigatório
-    // de `User`). Empresa única do Ciclo 1a (mesma suposição de
-    // `prisma/seed.ts`).
+    // O `Membership` continua necessário mesmo depois de `criarContato` parar
+    // de resolver a empresa sozinho: `registrarAuditoria` (`core/audit/log.ts`)
+    // ainda tira o `companyId` da linha de auditoria do vínculo do AUTOR, e sem
+    // ele toda chamada deste arquivo lança antes de qualquer asserção rodar
+    // (achado rodando a suíte, não pego pelo `tsc`: `Membership` é tabela à
+    // parte, não campo obrigatório de `User`). Empresa única do Ciclo 1a
+    // (mesma suposição de `prisma/seed.ts`).
     const empresa = await prisma.company.findFirstOrThrow();
+    companyId = empresa.id;
     await prisma.membership.create({
-      data: { userId: autorId, companyId: empresa.id, papel: "ADMIN" },
+      data: { userId: autorId, companyId, papel: "ADMIN" },
     });
   });
 
@@ -89,7 +99,7 @@ describe("core/contacts", () => {
 
   describe("criarContato", () => {
     it("normaliza o telefone antes de gravar", async () => {
-      const criado = await criarContato(
+      const criado = await criarContato(companyId,
         { nome: `Maria ${MARCA}`, telefone: "+55 (11) 98888-7001", email: "MARIA@Exemplo.com" },
         autorId
       );
@@ -102,7 +112,7 @@ describe("core/contacts", () => {
     });
 
     it("guarda null, não string vazia, quando não há e-mail", async () => {
-      const criado = await criarContato(
+      const criado = await criarContato(companyId,
         { nome: `Sem Email ${MARCA}`, telefone: TELEFONES.duplicado, email: "   " },
         autorId
       );
@@ -115,19 +125,19 @@ describe("core/contacts", () => {
       // A mensagem com o nome é o que faz a pessoa reconhecer na hora se é a
       // mesma pessoa ou se digitou o número errado.
       await expect(
-        criarContato({ nome: `Outro ${MARCA}`, telefone: TELEFONES.duplicado }, autorId)
+        criarContato(companyId, { nome: `Outro ${MARCA}`, telefone: TELEFONES.duplicado }, autorId)
       ).rejects.toThrow(new RegExp(`já está cadastrado para Sem Email ${MARCA}`));
     });
 
     it("recusa telefone que não é um número brasileiro reconhecível", async () => {
       await expect(
-        criarContato({ nome: `Ruim ${MARCA}`, telefone: "123" }, autorId)
+        criarContato(companyId, { nome: `Ruim ${MARCA}`, telefone: "123" }, autorId)
       ).rejects.toThrow(ContatoInvalidoError);
 
       // E a mensagem é de formulário, não o texto técnico de
       // `normalizarTelefone` (que é feito para log).
       await expect(
-        criarContato({ nome: `Ruim ${MARCA}`, telefone: "a definir" }, autorId)
+        criarContato(companyId, { nome: `Ruim ${MARCA}`, telefone: "a definir" }, autorId)
       ).rejects.toThrow(/Use DDD \+ número/);
     });
 
@@ -142,12 +152,12 @@ describe("core/contacts", () => {
 
   describe("atualizarContato", () => {
     it("edita e guarda antes/depois na auditoria", async () => {
-      const criado = await criarContato(
+      const criado = await criarContato(companyId,
         { nome: `Antes ${MARCA}`, telefone: TELEFONES.colisao },
         autorId
       );
 
-      const depois = await atualizarContato(
+      const depois = await atualizarContato(companyId,
         { id: criado.id, nome: `Depois ${MARCA}`, telefone: TELEFONES.colisao, email: "novo@exemplo.com" },
         autorId
       );
@@ -166,7 +176,7 @@ describe("core/contacts", () => {
       const contato = await prisma.contact.findUniqueOrThrow({ where: { telefone: TELEFONES.colisao } });
 
       await expect(
-        atualizarContato(
+        atualizarContato(companyId,
           { id: contato.id, nome: `Depois ${MARCA}`, telefone: TELEFONES.basico },
           autorId
         )
@@ -181,13 +191,13 @@ describe("core/contacts", () => {
 
   describe("listarContatos", () => {
     it("encontra por nome sem diferenciar maiúsculas", async () => {
-      const encontrados = (await listarContatos(MARCA.toLowerCase())).itens;
+      const encontrados = (await listarContatos(companyId, MARCA.toLowerCase())).itens;
       expect(encontrados.length).toBeGreaterThan(0);
       expect(encontrados.every((c) => c.nome.includes(MARCA))).toBe(true);
     });
 
     it("encontra por telefone mesmo digitado com formatação", async () => {
-      const encontrados = (await listarContatos("(11) 98888-7001")).itens;
+      const encontrados = (await listarContatos(companyId, "(11) 98888-7001")).itens;
       expect(encontrados.map((c) => c.telefone)).toContain(TELEFONES.basico);
     });
 
@@ -197,33 +207,34 @@ describe("core/contacts", () => {
       // casaria com TODOS os telefones e anularia o filtro. Uma busca por
       // "maria" devolveria o banco completo, e ninguém notaria até a agenda
       // crescer.
-      await criarContato({ nome: `Alvo Unico ${MARCA}`, telefone: TELEFONES.busca }, autorId);
+      await criarContato(companyId, { nome: `Alvo Unico ${MARCA}`, telefone: TELEFONES.busca }, autorId);
 
-      const encontrados = (await listarContatos(`Alvo Unico ${MARCA}`)).itens;
+      const encontrados = (await listarContatos(companyId, `Alvo Unico ${MARCA}`)).itens;
       expect(encontrados).toHaveLength(1);
       expect(encontrados[0].telefone).toBe(TELEFONES.busca);
     });
 
     it("conta os leads de cada contato", async () => {
-      const encontrados = (await listarContatos(`Alvo Unico ${MARCA}`)).itens;
+      const encontrados = (await listarContatos(companyId, `Alvo Unico ${MARCA}`)).itens;
       expect(encontrados[0].totalLeads).toBe(0);
     });
   });
 
   describe("buscarContatoComHistorico", () => {
     it("devolve null para id que não existe, em vez de lançar", async () => {
-      expect(await buscarContatoComHistorico("id-que-nao-existe")).toBeNull();
+      expect(await buscarContatoComHistorico(companyId, "id-que-nao-existe")).toBeNull();
     });
 
     it("traz os leads e nunca devolve o hash de senha do responsável", async () => {
-      const contato = await criarContato(
+      const contato = await criarContato(companyId,
         { nome: `Historico ${MARCA}`, telefone: TELEFONES.historico },
         autorId
       );
       const etapa = await prisma.pipelineStage.findFirstOrThrow({ orderBy: { ordem: "asc" } });
-      // Mesma empresa do contato (já resolvida por `criarContato` via
-      // `companyIdDoUsuario`, ver core/contacts/service.ts) — um Lead de outra
-      // empresa apontando para este Contact seria um estado impossível.
+      // Mesma empresa do contato, que é a do escopo passado acima. Um `Lead`
+      // de OUTRA empresa apontando para este `Contact` é estado expressável no
+      // schema (`Lead.contactId` não carrega empresa) e é medido em
+      // `tests/unit/contact-isolamento.test.ts`; aqui só existe uma empresa.
       const lead = await prisma.lead.create({
         data: {
           companyId: contato.companyId,
@@ -235,7 +246,7 @@ describe("core/contacts", () => {
       });
 
       try {
-        const comHistorico = await buscarContatoComHistorico(contato.id);
+        const comHistorico = await buscarContatoComHistorico(companyId, contato.id);
 
         expect(comHistorico?.leads).toHaveLength(1);
         expect(comHistorico?.leads[0].responsavelNome).toBe(`Autor ${MARCA}`);
@@ -274,7 +285,7 @@ describe("core/contacts", () => {
     const TELEFONE_CADASTRO = "11988887006";
 
     async function criarCompleto(observacoes?: string) {
-      return criarContato(
+      return criarContato(companyId,
         {
           nome: `Cadastro ${MARCA}`,
           telefone: TELEFONE_CADASTRO,
@@ -310,14 +321,14 @@ describe("core/contacts", () => {
       // tela. Sem essa ponte, a action cairia no ramo genérico e a pessoa leria
       // "Falha ao salvar o contato" no lugar do motivo.
       await expect(
-        criarContato(
+        criarContato(companyId,
           { nome: `Ruim ${MARCA}`, telefone: "11988887007", uf: "XX" },
           autorId
         )
       ).rejects.toThrow(ContatoInvalidoError);
 
       await expect(
-        criarContato(
+        criarContato(companyId,
           { nome: `Ruim ${MARCA}`, telefone: "11988887007", uf: "XX" },
           autorId
         )
@@ -363,7 +374,7 @@ describe("core/contacts", () => {
     it("a edição guarda antes e depois dos campos novos", async () => {
       const criado = await criarCompleto();
       try {
-        await atualizarContato(
+        await atualizarContato(companyId,
           {
             id: criado.id,
             nome: criado.nome,
@@ -407,7 +418,7 @@ describe("core/contacts", () => {
       // acontecido. Este é o caso que a comparação de tamanhos perde sozinha.
       const criado = await criarCompleto("Pedro");
       try {
-        await atualizarContato(
+        await atualizarContato(companyId,
           { id: criado.id, nome: criado.nome, telefone: TELEFONE_CADASTRO, observacoes: "Paulo" },
           autorId
         );
@@ -446,7 +457,7 @@ describe("core/contacts", () => {
     it("a consulta da tela de detalhe devolve TODOS os campos do cadastro", async () => {
       const criado = await criarCompleto("Uma observação qualquer.");
       try {
-        const lido = await buscarContatoComHistorico(criado.id, { incluirDocumento: true });
+        const lido = await buscarContatoComHistorico(companyId, criado.id, { incluirDocumento: true });
 
         expect(lido).toMatchObject({
           nome: `Cadastro ${MARCA}`,
@@ -488,7 +499,7 @@ describe("core/contacts", () => {
     it("a consulta NÃO devolve o documento quando ninguém pediu por ele", async () => {
       const criado = await criarCompleto();
       try {
-        const lido = await buscarContatoComHistorico(criado.id);
+        const lido = await buscarContatoComHistorico(companyId, criado.id);
 
         expect(lido?.documento).toBeNull();
         // A linha no banco continua intacta — o que mudou é o que sai da
@@ -509,7 +520,7 @@ describe("core/contacts", () => {
     it("atualizadoEm avança na edição, e criadoEm não", async () => {
       const criado = await criarCompleto();
       try {
-        const editado = await atualizarContato(
+        const editado = await atualizarContato(companyId,
           { id: criado.id, nome: `Editado ${MARCA}`, telefone: TELEFONE_CADASTRO },
           autorId
         );
