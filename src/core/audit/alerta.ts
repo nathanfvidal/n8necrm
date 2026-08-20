@@ -67,6 +67,23 @@ export type { AlertaAtividadePayload };
  * novo. Não é sem custo só porque é reversível "rodando de novo"; uma rajada
  * de reexecuções reais é exatamente o padrão que este detector existe para
  * pegar, e `execucoes-table.tsx` já exige confirmação por causa disso.
+ *
+ * As quatro de CONEXÃO (Ciclo 2a) entram pelo mesmo critério das de fluxo, e
+ * cada uma por um motivo próprio:
+ *
+ * - `apagar_conexao` e `desativar_conexao` derrubam o atendimento de WhatsApp
+ *   da empresa inteira — é o par de `apagar_fluxo`/`desativar_fluxo`.
+ * - `regenerar_webhook_conexao` corta a ENTRADA de mensagens até alguém
+ *   recolar a URL no painel da Evolution. O efeito é o de desativar, com o
+ *   agravante de a tela continuar dizendo "Ativa" — o que torna a detecção
+ *   mais valiosa aqui, não menos.
+ * - `substituir_segredo_conexao` é tomada de canal: quem troca a apikey passa
+ *   a responder os clientes daquela empresa pela instância que ele controlar.
+ *   Mesma família de `redefinir_senha`, e por isso está ao lado dela.
+ *
+ * `criar_conexao` e `editar_conexao` ficam de fora, junto com o trabalho
+ * normal. `ativar_conexao` fica de fora pelo mesmo motivo de `ativar_fluxo`:
+ * religar é reparo, não estrago.
  */
 export const ACOES_SENSIVEIS = [
   "excluir_task",
@@ -79,6 +96,10 @@ export const ACOES_SENSIVEIS = [
   "desativar_fluxo",
   "apagar_fluxo",
   "reexecutar_execucao",
+  "substituir_segredo_conexao",
+  "desativar_conexao",
+  "apagar_conexao",
+  "regenerar_webhook_conexao",
 ] as const;
 
 /**
