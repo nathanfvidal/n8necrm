@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { hasPermission } from "../../src/core/auth/permissions";
+import { hasPermission, type Acao } from "../../src/core/auth/permissions";
 
 describe("hygiene de configuração de teste", () => {
   it("este arquivo não toca banco, então não deve ter credenciais reais em process.env (guarda contra vazamento via vitest.config.ts)", () => {
@@ -61,5 +61,47 @@ describe("ver_fluxos", () => {
     expect(hasPermission("ADMIN", "ver_fluxos")).toBe(true);
     expect(hasPermission("GESTOR", "ver_fluxos")).toBe(true);
     expect(hasPermission("VENDEDOR", "ver_fluxos")).toBe(false);
+  });
+});
+
+describe("gerenciar_conexoes (Ciclo 2a)", () => {
+  it("ADMIN pode", () => {
+    expect(hasPermission("ADMIN", "gerenciar_conexoes")).toBe(true);
+  });
+
+  it("GESTOR não pode", () => {
+    // Mesmo argumento de `gerenciar_fluxos`: o erro aqui derruba o
+    // atendimento da empresa inteira, e credencial substituída em silêncio é
+    // tomada de canal.
+    expect(hasPermission("GESTOR", "gerenciar_conexoes")).toBe(false);
+  });
+
+  it("VENDEDOR não pode", () => {
+    expect(hasPermission("VENDEDOR", "gerenciar_conexoes")).toBe(false);
+  });
+
+  it("não existe `ver_conexoes` — a separação foi RECUSADA, não esquecida", () => {
+    // A matriz registra, no comentário de `ver_fluxos`, que separar sem motivo
+    // cria "uma permissão órfã de um lado e uma tela morta do outro". Aqui não
+    // há NADA para ver: o segredo não renderiza, e nome/domínio/instância só
+    // interessam a quem pode mudar.
+    //
+    // A trava de verdade é a de TIPO abaixo, e ela foi MEDIDA: o `as never`
+    // sozinho NÃO serve para isso. Acrescentar `| "ver_conexoes"` a `Acao` e
+    // rodar `npm run typecheck` deixa `"ver_conexoes" as never` verde —
+    // asserção para `never` não reclama de membro que passou a existir. O
+    // `as never` continua aqui só para atravessar o tipo do parâmetro.
+    //
+    // `[Extract<...>] extends [never]` com os colchetes é o que impede a
+    // distribuição do condicional sobre `never` (que devolveria `never` nos
+    // dois casos e não travaria nada). Ausente, o tipo é `true` e a linha
+    // compila; presente, vira `false` e `tsc` reprova — obrigando a revisitar
+    // a decisão em vez de deslizar para ela.
+    const semVerConexoes: [Extract<Acao, "ver_conexoes">] extends [never] ? true : false = true;
+    expect(semVerConexoes).toBe(true);
+
+    for (const papel of ["ADMIN", "GESTOR", "VENDEDOR"] as const) {
+      expect(hasPermission(papel, "ver_conexoes" as never)).toBe(false);
+    }
   });
 });

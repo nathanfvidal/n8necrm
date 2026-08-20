@@ -72,7 +72,47 @@ export type Acao =
    * ainda quebra?" sem ganhar segurança nenhuma em troca — GESTOR já lida
    * com o cliente no dia a dia e é quem primeiro ouve "parou de funcionar".
    */
-  | "ver_fluxos";
+  | "ver_fluxos"
+  /**
+   * Cadastrar, editar, substituir a credencial, ativar/desativar e apagar as
+   * conexões de canal de WhatsApp da empresa (`WhatsappConnection`), e gerar a
+   * URL de webhook delas.
+   *
+   * ADMIN apenas, pelo mesmo motivo de `gerenciar_fluxos` e com o mesmo custo
+   * de erro: desativar ou apagar a conexão derruba o atendimento da empresa
+   * inteira, e substituir a credencial é TOMADA DE CANAL — quem trocar a
+   * apikey passa a responder os clientes daquela empresa pela instância que
+   * ele controlar. É a mesma família de `redefinir_senha`, o defeito nº 6 da
+   * lista em `tests/unit/catraca-prisma-cru.test.ts`.
+   *
+   * Decidida na seção 4.5 do spec
+   * (`docs/superpowers/specs/2026-08-20-ciclo-2a-cofre-credenciais-design.md`).
+   *
+   * ## Por que NÃO reaproveita nenhuma permissão existente
+   *
+   * - `gerenciar_fluxos` é sobre a instância n8n. Fundir daria a quem religa
+   *   um workflow o poder de substituir a credencial do WhatsApp, e o inverso
+   *   — dois sistemas externos diferentes, com donos operacionais diferentes.
+   * - `configurar_agente` é o CONTEÚDO do bot (persona, regras, FAQ). Quem
+   *   ajusta o tom de voz não precisa poder trocar o número de onde a empresa
+   *   responde. E ela mora no módulo whatsapp, numa tela dentro de
+   *   `/conversas` (`src/app/(painel)/conversas/agente/page.tsx`); esta vive
+   *   em Configurações, que não é módulo.
+   * - `gerenciar_usuarios` é sobre pessoas.
+   *
+   * ## Por que UMA permissão, e não o par `ver_`/`gerenciar_`
+   *
+   * `ver_fluxos` (logo acima) existe porque a tela de fluxos responde uma
+   * pergunta — "isso ainda quebra?" — que um leitor resolve sem escrever nada.
+   * Aqui não há pergunta equivalente: o segredo NUNCA renderiza (decisão do
+   * dono), e o que sobra na tela — nome, domínio, instância, data da última
+   * troca — só interessa a quem pode mudar. Um `ver_conexoes` seria a
+   * permissão órfã com a tela morta do lado, exatamente o que o comentário de
+   * `ver_fluxos` registra como pior que não separar. Há caso de teste
+   * afirmando que `ver_conexoes` não existe, em
+   * `tests/unit/permissions.test.ts`.
+   */
+  | "gerenciar_conexoes";
 
 const matriz: Record<Role, Acao[]> = {
   ADMIN: [
@@ -86,6 +126,7 @@ const matriz: Record<Role, Acao[]> = {
     "gerenciar_funil",
     "gerenciar_fluxos",
     "ver_fluxos",
+    "gerenciar_conexoes",
   ],
   GESTOR: [
     "criar_lead",
