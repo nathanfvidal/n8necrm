@@ -212,6 +212,7 @@ export async function criarEtapa(input: {
   });
 
   await registrarAuditoria({
+    companyId: input.companyId,
     userId: input.autorId,
     acao: "criar_etapa",
     entidade: "PipelineStage",
@@ -245,6 +246,7 @@ export async function editarEtapa(input: {
   });
 
   await registrarAuditoria({
+    companyId: input.companyId,
     userId: input.autorId,
     acao: "editar_etapa",
     entidade: "PipelineStage",
@@ -345,6 +347,7 @@ export async function moverNaOrdem(input: {
   });
 
   await registrarAuditoria({
+    companyId: input.companyId,
     userId: input.autorId,
     acao: "reordenar_etapa",
     entidade: "PipelineStage",
@@ -410,6 +413,7 @@ export async function definirEtapaDeFechamento(input: {
   });
 
   await registrarAuditoria({
+    companyId: input.companyId,
     userId: input.autorId,
     acao: "definir_etapa_de_fechamento",
     entidade: "PipelineStage",
@@ -647,6 +651,7 @@ export async function excluirEtapa(input: {
     await tx.auditLog.create({
       data: dadosDeLinhaDeAuditoria(
         {
+          companyId: input.companyId,
           userId: input.autorId,
           acao: "excluir_etapa",
           entidade: "PipelineStage",
@@ -654,8 +659,7 @@ export async function excluirEtapa(input: {
           antes: { nome: etapa.nome, ordem: etapa.ordem, cor: etapa.cor },
           // O `count` da própria escrita, nunca uma leitura anterior.
           depois: { destinoId: destinoId ?? null, leadsMovidos: movidos },
-        },
-        input.companyId
+        }
       ),
     });
 
@@ -663,7 +667,11 @@ export async function excluirEtapa(input: {
   });
 
   try {
-    await avaliarAtividadeSuspeita({ userId: input.autorId, acao: "excluir_etapa" });
+    await avaliarAtividadeSuspeita({
+      companyId: input.companyId,
+      userId: input.autorId,
+      acao: "excluir_etapa",
+    });
   } catch (erro) {
     console.error("Falha ao avaliar atividade suspeita (auditoria já gravada):", erro);
   }

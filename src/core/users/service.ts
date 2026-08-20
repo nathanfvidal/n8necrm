@@ -249,6 +249,10 @@ export async function criarUsuario(
   // ao histórico. Gravar o hash ali o espalharia para fora da única coluna
   // que deveria contê-lo.
   await registrarAuditoria({
+    // A empresa de quem GERENCIA, que é a mesma do `Membership` recém-criado —
+    // `User` não tem `companyId` (schema), e é o vínculo que define de quem
+    // aquela conta é. Ver `ParamsDeAuditoria.companyId` em `core/audit/log.ts`.
+    companyId,
     userId: autorId,
     acao: "criar_usuario",
     entidade: "User",
@@ -326,6 +330,7 @@ export async function atualizarUsuario(
   const depois: UsuarioListado = { ...usuarioAtualizado, papel };
 
   await registrarAuditoria({
+    companyId,
     userId: autorId,
     acao: "editar_usuario",
     entidade: "User",
@@ -373,6 +378,7 @@ export async function definirAtivo(
   });
 
   await registrarAuditoria({
+    companyId,
     userId: autorId,
     acao: entrada.ativo ? "ativar_usuario" : "desativar_usuario",
     entidade: "User",
@@ -439,6 +445,7 @@ export async function redefinirSenha(
   await prisma.user.update({ where: { id: alvo.id }, data: { senhaHash } });
 
   await registrarAuditoria({
+    companyId,
     userId: autorId,
     acao: "redefinir_senha",
     entidade: "User",

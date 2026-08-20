@@ -137,20 +137,25 @@ const PRISMA_CRU = {
 // sobrevive ao defeito vira mentira, e mentira em comentário é pior que
 // silêncio.
 const VIOLADORES_TEMPORARIOS_CORE = [
-  // 1 defeito (BAIXA): `avaliarAtividadeSuspeita` conta `AuditLog` só por
-  // `userId`, sem `companyId`. O destinatário do alerta JÁ foi corrigido
-  // (3744e64) — o que sobra é a contagem, que só distorce se a mesma pessoa
-  // tiver vínculo em duas empresas.
-  "src/core/audit/alerta.ts",
-  // 1 defeito (MÉDIA): `companyId` do registro vem do primeiro `Membership` do
-  // AUTOR, não da empresa da entidade auditada. Divergem no dia em que alguém
-  // agir sobre entidade de uma empresa tendo vínculo em duas.
-  "src/core/audit/log.ts",
-  // 0 defeitos. Está na fila só pelo import: `user.findUnique({ email })` é
-  // login, `User` não tem `companyId` e `email` é `@unique` global por
-  // decisão registrada no schema. Converter este arquivo é trocar o import,
-  // nada mais.
-  "src/core/auth/credenciais.ts",
+  // `src/core/audit/*` SAIU desta lista no Ciclo 1d, e a conversão foi mais
+  // funda que um import: `ParamsDeAuditoria` ganhou `companyId` OBRIGATÓRIO, e
+  // com ele os 17 pontos de chamada de `registrarAuditoria` em 8 arquivos.
+  // Antes a empresa da linha era deduzida do AUTOR por `companyIdDoUsuario`
+  // (`findFirstOrThrow` sobre `Membership`, ou seja, um vínculo ARBITRÁRIO de
+  // quem tem dois), e `avaliarAtividadeSuspeita` contava a rajada só por
+  // `userId` — as ações das duas empresas somavam num contador único. Os dois
+  // defeitos (1 MÉDIA, 1 BAIXA) morreram na mesma mudança, e nenhum dos 17
+  // pontos precisou de consulta nova: a empresa da entidade já estava em mãos
+  // em todos eles (`companyId` do serviço, `task.companyId`, `antes.companyId`
+  // ou `usuarioAtual().companyId`).
+  //
+  // A leitura da home saiu junto, para `src/core/audit/queries.ts`
+  // (`listarAtividadeRecente`) — ver a nota de `VIOLADORES_TEMPORARIOS_APP`.
+  //
+  // O lint passar com eles fora daqui é a prova de que não alcançam mais o
+  // `prisma` cru; a prova de que o escopo FUNCIONA é outra, e mora em
+  // `tests/unit/audit-isolamento.test.ts`, que tem as duas metades para cada
+  // função e uma SONDA de cada consulta antiga afirmando o vazamento.
   // `src/core/contacts/*` SAIU desta lista no Ciclo 1d — `queries.ts` e
   // `service.ts` (os dois únicos que alcançavam o banco) passaram a alcançá-lo
   // só por `prismaDaEmpresa`, e os 4 defeitos deles (3 ALTA, 1 MÉDIA) foram
@@ -304,16 +309,19 @@ const VIOLADORES_TEMPORARIOS_MODULES = [
 //   outro cliente. Hoje chama `listarUsuarios(companyId)`, que parte de
 //   `Membership`.
 //
-// A que sobra é a mais exposta das três, e continua sendo o item 1 da fila:
+// A terceira — `(painel)/page.tsx`, o item 1 da fila e a última leitura
+// cross-tenant escrita DENTRO de uma página — saiu no Ciclo 1d. Ela fazia
+// `prisma.auditLog.findMany({ take: 10, orderBy })` SEM `where` NENHUM sobre um
+// modelo de tenant: a home mostrava as dez últimas ações de QUALQUER empresa do
+// banco. Virou `listarAtividadeRecente(usuario.companyId)`
+// (`src/core/audit/queries.ts`) — função de `core/`, e não um `where`
+// acrescentado ali mesmo, porque página não é onde se prova isolamento. O caso
+// que trava a regressão é o do TETO: doze linhas mais novas da outra empresa
+// deixariam esta empresa sem atividade nenhuma na tela, e o teste afirma que
+// não deixam (`tests/unit/audit-isolamento.test.ts`).
 //
-// 1. `(painel)/page.tsx` — `prisma.auditLog.findMany({ take, orderBy })`, SEM
-//    `where` NENHUM. `AuditLog` é modelo de tenant, e a home do painel mostra
-//    hoje os últimos registros de QUALQUER empresa.
-//
-// Confirmado em 2026-08-20 com
-// `grep -rln "lib/prisma" src/app --include=*.ts --include=*.tsx`: **é o único
-// arquivo de `src/app/**` que ainda alcança o banco direto**, e portanto a
-// última leitura cross-tenant escrita DENTRO de uma página.
+// **Esta lista está VAZIA**, e é a primeira das quatro a zerar. Nenhum arquivo
+// de `src/app/**` alcança mais o banco direto.
 //
 // Esta linha vinha com uma ressalva — "a página continua vazando por OUTRO
 // caminho depois que o `auditLog` for corrigido, porque `listarEtapas()` faz
@@ -333,7 +341,7 @@ const VIOLADORES_TEMPORARIOS_MODULES = [
 // de estar listado aqui — foi exatamente o que aconteceu na primeira execução.
 // Os parênteses de `(painel)` não têm esse problema: só viram grupo quando
 // precedidos de `?`/`*`/`+`/`@`/`!`.
-const VIOLADORES_TEMPORARIOS_APP = ["src/app/(painel)/page.tsx"];
+const VIOLADORES_TEMPORARIOS_APP = [];
 
 // A exceção PERMANENTE. Nada aqui vai para o cliente escopado, nunca:
 //
@@ -344,7 +352,19 @@ const VIOLADORES_TEMPORARIOS_APP = ["src/app/(painel)/page.tsx"];
 //   consultada antes de existir sessão e portanto antes de existir empresa.
 // - `core/tenancy/escopo.ts` É o cliente escopado. É o único arquivo cujo
 //   import do prisma cru é o ponto.
+// - `core/auth/credenciais.ts` autentica: ele roda ANTES de existir sessão e,
+//   portanto, antes de existir empresa. `prismaDaEmpresa(companyId)` exige um
+//   `companyId` que só passa a existir DEPOIS que esta função devolve quem a
+//   pessoa é — pedir escopo aqui é a mesma circularidade de `session.ts`. A
+//   consulta é `user.findUnique({ where: { email } })`: `User` não é modelo de
+//   tenant (não tem `companyId`, `prisma/schema.prisma` linha 50 diz por quê) e
+//   `email` é `@unique` GLOBAL por decisão registrada no mesmo schema — ou seja,
+//   nem o escopo teria onde morder: `escoparArgumentos` devolve os argumentos
+//   INTACTOS para modelo fora dos 11 (`core/tenancy/escopo.ts`). O arquivo
+//   entrou na lista TEMPORÁRIA em 2026-08-20 com a anotação "converter é trocar
+//   o import, nada mais"; ela estava errada — não há por o que trocar.
 const EXCECAO_PERMANENTE = [
+  "src/core/auth/credenciais.ts",
   "src/core/auth/session.ts",
   "src/core/rate-limit/limiter.ts",
   "src/core/tenancy/escopo.ts",

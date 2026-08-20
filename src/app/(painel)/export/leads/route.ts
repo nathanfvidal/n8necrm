@@ -270,6 +270,7 @@ export async function GET(request: Request) {
   // para um log de auditoria.
   try {
     await registrarAuditoria({
+      companyId: usuario.companyId,
       userId: usuario.id,
       acao: "exportar_leads",
       entidade: "Lead",

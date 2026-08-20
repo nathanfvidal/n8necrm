@@ -101,12 +101,12 @@ beforeAll(async () => {
       ativo: true,
     },
   });
-  // `avaliarAtividadeSuspeita` resolve a empresa do alerta por
-  // `companyIdDoUsuario(input.userId)` (o suspeito) — sem `Membership`, a
-  // função lança `PrismaClientKnownRequestError` (findFirstOrThrow) antes de
-  // qualquer asserção deste arquivo rodar. Descoberto rodando a suíte: erro
-  // real de runtime, não pego pelo `tsc` porque `Membership` é uma tabela à
-  // parte, não um campo obrigatório de `User`.
+  // O vínculo continua obrigatório aqui, mas por outro motivo desde o Ciclo 1d:
+  // `avaliarAtividadeSuspeita` já NÃO resolve a empresa do suspeito (ela chega
+  // por parâmetro, de `ParamsDeAuditoria.companyId`) — é a busca de
+  // DESTINATÁRIOS que parte de `Membership`, e é ela que define quem é ADMIN
+  // desta empresa. Sem o vínculo, o suspeito e os admins seriam invisíveis para
+  // aquela consulta e nenhum alerta sairia.
   await prisma.membership.create({
     data: { userId: suspeito.id, companyId, papel: "VENDEDOR" },
   });
@@ -196,7 +196,7 @@ describe("alerta de atividade destrutiva em rajada", () => {
   it("abaixo do limite, ninguem e incomodado", async () => {
     await registrarRajada(LIMITE_ALERTA - 1);
 
-    await avaliarAtividadeSuspeita({ userId: idSuspeito, acao: ACOES_SENSIVEIS[0] });
+    await avaliarAtividadeSuspeita({ companyId, userId: idSuspeito, acao: ACOES_SENSIVEIS[0] });
 
     expect(await alertasRecebidos()).toBe(0);
   });
@@ -204,7 +204,7 @@ describe("alerta de atividade destrutiva em rajada", () => {
   it("atingido o limite, TODO admin ativo DESTA EMPRESA recebe o alerta", async () => {
     await registrarRajada(LIMITE_ALERTA);
 
-    await avaliarAtividadeSuspeita({ userId: idSuspeito, acao: ACOES_SENSIVEIS[0] });
+    await avaliarAtividadeSuspeita({ companyId, userId: idSuspeito, acao: ACOES_SENSIVEIS[0] });
 
     const notificacoes = await prisma.notification.findMany({
       where: { userId: { in: [idAdminA, idAdminB] }, tipo: TIPO_ALERTA_ATIVIDADE },
@@ -230,7 +230,7 @@ describe("alerta de atividade destrutiva em rajada", () => {
     try {
       await registrarRajada(LIMITE_ALERTA);
 
-      await avaliarAtividadeSuspeita({ userId: idSuspeito, acao: ACOES_SENSIVEIS[0] });
+      await avaliarAtividadeSuspeita({ companyId, userId: idSuspeito, acao: ACOES_SENSIVEIS[0] });
 
       // Mesmo escopo por `autorNome` de `alertasRecebidos`, e pela mesma
       // razão: aqui o suspeito está temporariamente ADMIN e ATIVO, então ele
@@ -258,10 +258,10 @@ describe("alerta de atividade destrutiva em rajada", () => {
   it("nao repete o alerta a cada acao seguinte dentro da janela de silencio", async () => {
     await registrarRajada(LIMITE_ALERTA);
 
-    await avaliarAtividadeSuspeita({ userId: idSuspeito, acao: ACOES_SENSIVEIS[0] });
+    await avaliarAtividadeSuspeita({ companyId, userId: idSuspeito, acao: ACOES_SENSIVEIS[0] });
     await registrarRajada(3);
-    await avaliarAtividadeSuspeita({ userId: idSuspeito, acao: ACOES_SENSIVEIS[0] });
-    await avaliarAtividadeSuspeita({ userId: idSuspeito, acao: ACOES_SENSIVEIS[0] });
+    await avaliarAtividadeSuspeita({ companyId, userId: idSuspeito, acao: ACOES_SENSIVEIS[0] });
+    await avaliarAtividadeSuspeita({ companyId, userId: idSuspeito, acao: ACOES_SENSIVEIS[0] });
 
     expect(await alertasRecebidos()).toBe(2); // um por admin, nao seis
   });
@@ -271,7 +271,7 @@ describe("alerta de atividade destrutiva em rajada", () => {
   it("acao fora do conjunto vigiado nao conta e nao dispara", async () => {
     await registrarRajada(LIMITE_ALERTA * 2, "mover_etapa");
 
-    await avaliarAtividadeSuspeita({ userId: idSuspeito, acao: "mover_etapa" });
+    await avaliarAtividadeSuspeita({ companyId, userId: idSuspeito, acao: "mover_etapa" });
 
     expect(await alertasRecebidos()).toBe(0);
   });
@@ -289,7 +289,7 @@ describe("alerta de atividade destrutiva em rajada", () => {
     await registrarRajada(20, "mover_etapa");
     await registrarRajada(2, ACOES_SENSIVEIS[0]);
 
-    await avaliarAtividadeSuspeita({ userId: idSuspeito, acao: ACOES_SENSIVEIS[0] });
+    await avaliarAtividadeSuspeita({ companyId, userId: idSuspeito, acao: ACOES_SENSIVEIS[0] });
 
     expect(await alertasRecebidos()).toBe(0);
   });
@@ -310,7 +310,7 @@ describe("alerta de atividade destrutiva em rajada", () => {
       });
     }
 
-    await avaliarAtividadeSuspeita({ userId: idSuspeito, acao: ACOES_SENSIVEIS[0] });
+    await avaliarAtividadeSuspeita({ companyId, userId: idSuspeito, acao: ACOES_SENSIVEIS[0] });
 
     expect(await alertasRecebidos()).toBe(2);
   });
@@ -332,7 +332,7 @@ describe("alerta de atividade destrutiva em rajada", () => {
       });
     }
 
-    await avaliarAtividadeSuspeita({ userId: idSuspeito, acao: ACOES_SENSIVEIS[0] });
+    await avaliarAtividadeSuspeita({ companyId, userId: idSuspeito, acao: ACOES_SENSIVEIS[0] });
 
     expect(await alertasRecebidos()).toBe(0);
   });
@@ -363,7 +363,7 @@ describe("alerta de atividade destrutiva em rajada", () => {
     try {
       await registrarRajada(LIMITE_ALERTA);
 
-      await avaliarAtividadeSuspeita({ userId: idSuspeito, acao: ACOES_SENSIVEIS[0] });
+      await avaliarAtividadeSuspeita({ companyId, userId: idSuspeito, acao: ACOES_SENSIVEIS[0] });
 
       const doOutraEmpresa = await prisma.notification.findMany({
         where: { userId: adminOutraEmpresa.id, tipo: TIPO_ALERTA_ATIVIDADE },

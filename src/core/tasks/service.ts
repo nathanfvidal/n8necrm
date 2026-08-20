@@ -390,6 +390,9 @@ export async function excluirTask(input: { taskId: string; autorId: string }): P
   await prisma.task.delete({ where: { id: input.taskId } });
 
   await registrarAuditoria({
+    // A empresa da TAREFA, lida da linha já carregada — não o vínculo do autor.
+    // Ver `ParamsDeAuditoria.companyId` em `core/audit/log.ts`.
+    companyId: task.companyId,
     userId: input.autorId,
     acao: "excluir_task",
     entidade: "Task",

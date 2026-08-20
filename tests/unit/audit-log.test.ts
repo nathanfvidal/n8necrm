@@ -30,11 +30,11 @@ describe("registrarAuditoria", () => {
   let userId: string;
   let companyId: string;
 
-  // O vínculo é obrigatório desde o Ciclo 1a, e não é detalhe de fixture:
-  // `registrarAuditoria` resolve a empresa da linha por
-  // `companyIdDoUsuario(userId)`, que lê `Membership`. Um usuário sem vínculo
-  // faz a função LANÇAR — foi assim que estes dois testes quebraram quando a
-  // coluna `AuditLog.companyId` passou a existir.
+  // O vínculo continua na fixture, mas o que o exige mudou no Ciclo 1d:
+  // `registrarAuditoria` deixou de DEDUZIR a empresa de `companyIdDoUsuario(
+  // userId)` e passou a recebê-la em `ParamsDeAuditoria.companyId`. Quem lê
+  // `Membership` agora é só a busca de destinatários do alerta de rajada
+  // (`core/audit/alerta.ts`), que roda depois da gravação.
   //
   // A empresa é criada aqui, e não reaproveitada do seed, para o teste não
   // depender do que já está no banco de desenvolvimento compartilhado: o
@@ -75,6 +75,7 @@ describe("registrarAuditoria", () => {
 
   it("grava antes/depois e permite ler de volta os valores gravados", async () => {
     await registrarAuditoria({
+      companyId,
       userId,
       acao: "criar_lead",
       entidade: "Lead",
@@ -107,6 +108,7 @@ describe("registrarAuditoria", () => {
     };
 
     await registrarAuditoria({
+      companyId,
       userId,
       acao: "mover_estagio",
       entidade: "Lead",

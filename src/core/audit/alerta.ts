@@ -1,9 +1,8 @@
 import "server-only";
 
-import { prisma } from "@/lib/prisma";
+import { prismaDaEmpresa } from "@/core/tenancy/escopo";
 import { checarRateLimit } from "@/core/rate-limit/limiter";
 import { idsDeSistema } from "@/core/users/sistema";
-import { companyIdDoUsuario } from "@/core/users/empresa";
 import {
   TIPO_ALERTA_ATIVIDADE,
   type AlertaAtividadePayload,
@@ -119,8 +118,14 @@ function ehAcaoSensivel(acao: string): boolean {
  * sai barata e cedo para as que não interessam: a consulta ao banco só
  * acontece depois de `ehAcaoSensivel`, então o trabalho normal do CRM não
  * paga nada por este controle existir.
+ *
+ * `companyId` chega de `ParamsDeAuditoria` — é a empresa da ENTIDADE que
+ * acabou de ser mexida, a mesma que a linha de auditoria recebeu. Antes do
+ * Ciclo 1d ele era deduzido aqui dentro por `companyIdDoUsuario(input.userId)`,
+ * e a contagem logo abaixo nem o usava.
  */
 export async function avaliarAtividadeSuspeita(input: {
+  companyId: string;
   userId: string;
   acao: string;
 }): Promise<void> {
@@ -131,11 +136,22 @@ export async function avaliarAtividadeSuspeita(input: {
   // seria alarme garantido e falso.
   if (idsDeSistema().includes(input.userId)) return;
 
+  const db = prismaDaEmpresa(input.companyId);
+
   // Conjunto contado JUNTO, não por tipo: quem apaga 4 notas, arquiva 4 leads
   // e apaga 3 tarefas passaria por baixo de qualquer limite por tipo, estando
   // claramente destruindo coisa. É a mesma armadilha de "regra numa tela,
   // esquecida na outra", só que em forma de contador.
-  const total = await prisma.auditLog.count({
+  //
+  // Contado DENTRO da empresa desde o Ciclo 1d — o escopo põe o `companyId` no
+  // `where` sozinho. A versão anterior contava só por `userId`, e para quem tem
+  // vínculo em duas empresas as ações das duas somavam num contador único: cinco
+  // exclusões na A mais cinco na B fechavam a rajada e alertavam o ADMIN de uma
+  // delas sobre uma faxina que, naquela empresa, nunca aconteceu. O caso que
+  // trava isso é "metade em cada empresa NÃO fecha rajada em nenhuma das duas"
+  // (`tests/unit/audit-isolamento.test.ts`), com a sonda da contagem ANTIGA ao
+  // lado provando que ela somava mesmo.
+  const total = await db.auditLog.count({
     where: {
       userId: input.userId,
       acao: { in: [...ACOES_SENSIVEIS] },
@@ -150,15 +166,6 @@ export async function avaliarAtividadeSuspeita(input: {
     SILENCIO_ENTRE_ALERTAS_MS
   );
   if (!primeiroDaJanela) return;
-
-  // `Notification.companyId` é `NOT NULL` desde a Task 1 do Ciclo 1a. O
-  // alerta é sobre uma rajada de AÇÕES DE `input.userId` — a empresa dele é a
-  // origem certa (mesma lógica de `gravarLinhaDeAuditoria`, `core/audit/log.ts`,
-  // que resolve `AuditLog.companyId` da mesma forma para o mesmo autor).
-  //
-  // Resolvida ANTES da busca de destinatários porque agora ela também serve
-  // para ESCOPAR quem recebe — ver comentário abaixo.
-  const companyId = await companyIdDoUsuario(input.userId);
 
   // Destinatários: ADMIN ativo DA MESMA EMPRESA do suspeito, menos o autor e
   // menos as contas de sistema.
@@ -179,9 +186,8 @@ export async function avaliarAtividadeSuspeita(input: {
   // entrega que ele foi percebido. Se o autor for o ÚNICO ADMIN ativo desta
   // empresa, a lista fica vazia e nenhum alerta é enviado: é o limite honesto
   // deste controle, e o `AuditLog` continua guardando tudo para depois.
-  const destinatarios = await prisma.membership.findMany({
+  const destinatarios = await db.membership.findMany({
     where: {
-      companyId,
       papel: "ADMIN",
       userId: { notIn: [...idsDeSistema(), input.userId] },
       user: { ativo: true },
@@ -190,7 +196,12 @@ export async function avaliarAtividadeSuspeita(input: {
   });
   if (destinatarios.length === 0) return;
 
-  const autor = await prisma.user.findUnique({
+  // `User` NÃO é modelo de tenant (`core/tenancy/escopo.ts`, os 11), então esta
+  // operação atravessa o escopo INTACTA — inclusive o `findUnique`, que o escopo
+  // recusaria num modelo de tenant. É o comportamento correto e é medido lá:
+  // injetar `where.companyId` em `User` produziria erro de coluna inexistente,
+  // não proteção. Quem delimita a empresa aqui é o `Membership` acima.
+  const autor = await db.user.findUnique({
     where: { id: input.userId },
     select: { nome: true },
   });
@@ -206,9 +217,9 @@ export async function avaliarAtividadeSuspeita(input: {
     janelaMinutos: Math.round(JANELA_ALERTA_MS / 60_000),
   };
 
-  await prisma.notification.createMany({
+  await db.notification.createMany({
     data: destinatarios.map((destinatario) => ({
-      companyId,
+      companyId: input.companyId,
       userId: destinatario.userId,
       tipo: TIPO_ALERTA_ATIVIDADE,
       payload,

@@ -209,6 +209,9 @@ export async function editarNota(input: {
   }
 
   await registrarAuditoria({
+    // A empresa da NOTA, lida da linha que o escopo já filtrou — não o vínculo
+    // do autor. Ver `ParamsDeAuditoria.companyId` em `core/audit/log.ts`.
+    companyId: nota.companyId,
     userId: input.autorId,
     acao: "editar_nota",
     entidade: "LeadNote",
@@ -242,6 +245,7 @@ export async function excluirNota(input: { notaId: string; autorId: string }): P
   await db.leadNote.deleteMany({ where: { id: input.notaId } });
 
   await registrarAuditoria({
+    companyId: nota.companyId,
     userId: input.autorId,
     acao: "excluir_nota",
     entidade: "LeadNote",

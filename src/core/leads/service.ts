@@ -226,6 +226,7 @@ export async function criarLead(input: {
   });
 
   await registrarAuditoria({
+    companyId,
     userId: input.autorId,
     acao: "criar_lead",
     entidade: "Lead",
@@ -298,6 +299,9 @@ export async function moverEtapa(input: {
   });
 
   await registrarAuditoria({
+    // A empresa da ENTIDADE, lida da linha que o escopo já filtrou — não o
+    // vínculo do autor. Ver `ParamsDeAuditoria.companyId` em `core/audit/log.ts`.
+    companyId: antes.companyId,
     userId: input.autorId,
     acao: "mover_etapa",
     entidade: "Lead",
@@ -400,6 +404,7 @@ export async function atualizarLead(input: {
 
   if (Object.keys(mudancasDepois).length > 0) {
     await registrarAuditoria({
+      companyId: antes.companyId,
       userId: input.autorId,
       acao: "atualizar_lead",
       entidade: "Lead",
@@ -432,6 +437,7 @@ export async function arquivarLead(input: { leadId: string; autorId: string }): 
   const depois = await atualizarLeadEscopado(db, input.leadId, { arquivadoEm: new Date() });
 
   await registrarAuditoria({
+    companyId: antes.companyId,
     userId: input.autorId,
     acao: "arquivar_lead",
     entidade: "Lead",
@@ -458,6 +464,7 @@ export async function desarquivarLead(input: {
   const depois = await atualizarLeadEscopado(db, input.leadId, { arquivadoEm: null });
 
   await registrarAuditoria({
+    companyId: antes.companyId,
     userId: input.autorId,
     acao: "desarquivar_lead",
     entidade: "Lead",
@@ -535,6 +542,7 @@ export async function criarLeadDeWhatsapp(input: {
   });
 
   await registrarAuditoria({
+    companyId,
     userId: input.autorId,
     acao: "criar_lead",
     entidade: "Lead",

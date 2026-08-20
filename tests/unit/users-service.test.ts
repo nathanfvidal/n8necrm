@@ -363,6 +363,14 @@ describe("core/users — service", () => {
       } finally {
         // Limpa nesta ordem: User (cascade leva o Membership) antes da
         // Company, mesmo raciocínio do afterAll do arquivo inteiro.
+        // O `AuditLog` de `criarUsuario` nasce na empresa que a função RECEBEU
+        // — não mais na do autor. Foi o que mudou no Ciclo 1d, quando
+        // `ParamsDeAuditoria` ganhou `companyId` obrigatório: a linha ficava na
+        // empresa do vínculo de quem agiu, e agora fica na da entidade. O
+        // `delete` da empresa abaixo passa a esbarrar em
+        // `AuditLog_companyId_fkey` sem esta limpeza — foi assim que estes três
+        // testes acusaram a mudança.
+        await prisma.auditLog.deleteMany({ where: { companyId: outraEmpresa.id } });
         await prisma.user.deleteMany({ where: { email: email("outra-empresa") } });
         await prisma.company.delete({ where: { id: outraEmpresa.id } });
       }
@@ -412,6 +420,7 @@ describe("core/users — service", () => {
         });
         expect(log).toBeNull();
       } finally {
+        await prisma.auditLog.deleteMany({ where: { companyId: outraEmpresa.id } });
         await prisma.user.deleteMany({ where: { email: email("senha-outra") } });
         await prisma.company.delete({ where: { id: outraEmpresa.id } });
       }
@@ -488,6 +497,7 @@ describe("core/users — service", () => {
         expect(await buscarUsuario(criado.id, companyId)).toBeNull();
         expect(await buscarUsuario(criado.id, outraEmpresa.id)).not.toBeNull();
       } finally {
+        await prisma.auditLog.deleteMany({ where: { companyId: outraEmpresa.id } });
         await prisma.user.deleteMany({ where: { email: email("so-na-outra") } });
         await prisma.company.delete({ where: { id: outraEmpresa.id } });
       }

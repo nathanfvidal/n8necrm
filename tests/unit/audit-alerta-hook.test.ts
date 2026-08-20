@@ -10,19 +10,19 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("server-only", () => ({}));
 
-// `gravarLinhaDeAuditoria` resolve a empresa via `companyIdDoUsuario`
-// (Ciclo 1a, Task 1: `AuditLog.companyId` é NOT NULL) antes de gravar — o
-// mock do client precisa responder a `membership.findFirstOrThrow`, senão a
-// chamada quebra antes mesmo de chegar em `auditLog.create`.
+// O que é mockado aqui é o ESCOPO, não o `prisma` cru, e a troca é do Ciclo
+// 1d: `gravarLinhaDeAuditoria` deixou de resolver a empresa por
+// `companyIdDoUsuario` (que exigia um mock de `membership.findFirstOrThrow`) e
+// passou a escrever por `prismaDaEmpresa(params.companyId)`. Mockar `@/lib/prisma`
+// não bastaria mais — o escopo chama `$extends` nele —, e mockar o escopo tem
+// um ganho: `escoparMock` REGISTRA com que empresa a linha foi gravada, que é a
+// coisa nova que este arquivo passa a poder afirmar.
 const auditLogCreateMock = vi.fn();
-const membershipFindFirstOrThrowMock = vi.fn();
-vi.mock("@/lib/prisma", () => ({
-  prisma: {
-    auditLog: { create: (...args: unknown[]) => auditLogCreateMock(...args) },
-    membership: {
-      findFirstOrThrow: (...args: unknown[]) => membershipFindFirstOrThrowMock(...args),
-    },
-  },
+const escoparMock = vi.fn(() => ({
+  auditLog: { create: (...args: unknown[]) => auditLogCreateMock(...args) },
+}));
+vi.mock("@/core/tenancy/escopo", () => ({
+  prismaDaEmpresa: (...args: unknown[]) => escoparMock(...(args as [])),
 }));
 
 const avaliarMock = vi.fn();
@@ -34,13 +34,14 @@ const { registrarAuditoria } = await import("../../src/core/audit/log");
 
 beforeEach(() => {
   auditLogCreateMock.mockReset().mockResolvedValue(undefined);
-  membershipFindFirstOrThrowMock.mockReset().mockResolvedValue({ companyId: "empresa-1" });
+  escoparMock.mockClear();
   avaliarMock.mockReset().mockResolvedValue(undefined);
 });
 
 describe("registrarAuditoria — gancho da deteccao de rajada", () => {
   it("avalia toda acao auditada, passando autor e acao", async () => {
     await registrarAuditoria({
+      companyId: "empresa-1",
       userId: "user-1",
       acao: "excluir_task",
       entidade: "Task",
@@ -48,7 +49,29 @@ describe("registrarAuditoria — gancho da deteccao de rajada", () => {
     });
 
     expect(avaliarMock).toHaveBeenCalledTimes(1);
-    expect(avaliarMock).toHaveBeenCalledWith({ userId: "user-1", acao: "excluir_task" });
+    expect(avaliarMock).toHaveBeenCalledWith({
+      companyId: "empresa-1",
+      userId: "user-1",
+      acao: "excluir_task",
+    });
+  });
+
+  // A empresa da LINHA vem do parâmetro, e não de uma dedução a partir do
+  // autor. Sem este caso, trocar `params.companyId` de volta por uma consulta a
+  // `Membership` passaria despercebido aqui.
+  it("escopa a gravacao na empresa que veio nos params", async () => {
+    await registrarAuditoria({
+      companyId: "empresa-2",
+      userId: "user-1",
+      acao: "excluir_task",
+      entidade: "Task",
+      entidadeId: "task-1",
+    });
+
+    expect(escoparMock).toHaveBeenCalledWith("empresa-2");
+    expect(auditLogCreateMock.mock.calls[0]![0]).toMatchObject({
+      data: { companyId: "empresa-2" },
+    });
   });
 
   it("a avaliacao acontece DEPOIS da gravacao do log — o registro nunca depende do alerta", async () => {
@@ -61,6 +84,7 @@ describe("registrarAuditoria — gancho da deteccao de rajada", () => {
     });
 
     await registrarAuditoria({
+      companyId: "empresa-1",
       userId: "user-1",
       acao: "excluir_nota",
       entidade: "LeadNote",
@@ -79,6 +103,7 @@ describe("registrarAuditoria — gancho da deteccao de rajada", () => {
 
     await expect(
       registrarAuditoria({
+        companyId: "empresa-1",
         userId: "user-1",
         acao: "arquivar_lead",
         entidade: "Lead",
@@ -97,6 +122,7 @@ describe("registrarAuditoria — gancho da deteccao de rajada", () => {
 
     await expect(
       registrarAuditoria({
+        companyId: "empresa-1",
         userId: "user-1",
         acao: "excluir_task",
         entidade: "Task",

@@ -116,6 +116,11 @@ async function operar(
     const registro = await executar();
 
     await registrarAuditoria({
+      // O workflow do n8n não é entidade deste schema e não tem `companyId`
+      // próprio — a empresa aqui é a da SESSÃO que operou o fluxo, que é
+      // exatamente o recorte que o audit log precisa responder ("quem, desta
+      // empresa, mexeu na automação"). Ver `ParamsDeAuditoria.companyId`.
+      companyId: usuario.companyId,
       userId: usuario.id,
       acao,
       entidade: ENTIDADE,
@@ -206,6 +211,7 @@ export async function reexecutarExecucaoAction(
     await clienteN8n.reexecutarExecucao(execucaoId);
 
     await registrarAuditoria({
+      companyId: usuario.companyId,
       userId: usuario.id,
       acao: "reexecutar_execucao",
       entidade: "N8nExecucao",

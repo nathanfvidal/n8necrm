@@ -1,5 +1,5 @@
-import { prisma } from "@/lib/prisma";
 import { usuarioAtualOuLogin } from "@/core/auth/session";
+import { listarAtividadeRecente } from "@/core/audit/queries";
 import { listarEtapas } from "@/core/pipeline/stages";
 import { contarLeadsPorEtapa } from "@/core/leads/queries";
 import { listarTasksPendentes } from "@/core/tasks/service";
@@ -68,17 +68,20 @@ export default async function DashboardPage() {
   const [etapas, leadsPorEtapa, atividadeRecente] = await Promise.all([
     listarEtapas(usuario.companyId),
     contarLeadsPorEtapa(usuario.companyId),
-    // ATENÇÃO: esta consulta continua SEM `where` nenhum, e `AuditLog` é
-    // modelo de tenant. A home do painel mostra hoje os últimos registros de
-    // QUALQUER empresa — é o item 1 da fila de conversão anotada em
-    // `eslint.config.mjs`, e o motivo de este arquivo continuar na exceção
-    // temporária do lint. A Task 4 converte `leads`; esta página é da fila
-    // seguinte, e mexer nela aqui misturaria duas conversões num commit só.
-    prisma.auditLog.findMany({
-      take: 10,
-      orderBy: { criadoEm: "desc" },
-      include: { user: { select: { id: true, nome: true } } },
-    }),
+    // Era um `prisma.auditLog.findMany({ take: 10, orderBy })` escrito AQUI,
+    // sem `where` nenhum, sobre um modelo de tenant: a home mostrava as dez
+    // últimas ações de QUALQUER empresa do banco. Era o item 1 da fila de
+    // conversão de `eslint.config.mjs` e a última leitura cross-tenant escrita
+    // dentro de uma página — hoje a página não alcança mais o `prisma` cru, e o
+    // arquivo saiu da exceção temporária do lint.
+    //
+    // Virou função de `core/` (e não um `where` acrescentado no lugar) pelo
+    // mesmo motivo das outras conversões deste ciclo: página não é onde se
+    // prova isolamento. `tests/unit/audit-isolamento.test.ts` exercita
+    // `listarAtividadeRecente` com duas empresas — inclusive o caso em que as
+    // dez linhas mais novas do banco são todas da outra empresa, onde um
+    // `take` sem escopo deixaria esta empresa sem atividade nenhuma na tela.
+    listarAtividadeRecente(usuario.companyId),
   ]);
 
   const tasksPendentes = await listarTasksPendentes(usuario.id);

@@ -261,6 +261,7 @@ export async function criarContato(
   }
 
   await registrarAuditoria({
+    companyId,
     userId: autorId,
     acao: "criar_contato",
     entidade: "Contact",
@@ -327,6 +328,7 @@ export async function atualizarContato(
   if (!depois) throw new ContatoInvalidoError("Contato não encontrado.");
 
   await registrarAuditoria({
+    companyId,
     userId: autorId,
     acao: "editar_contato",
     entidade: "Contact",

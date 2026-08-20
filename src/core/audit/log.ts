@@ -1,7 +1,6 @@
 import type { Prisma } from "@prisma/client";
-import { prisma } from "@/lib/prisma";
+import { prismaDaEmpresa } from "@/core/tenancy/escopo";
 import { avaliarAtividadeSuspeita } from "./alerta";
-import { companyIdDoUsuario } from "@/core/users/empresa";
 
 /**
  * Registra uma entrada no audit log: quem fez o quê, em qual entidade, com
@@ -26,6 +25,32 @@ import { companyIdDoUsuario } from "@/core/users/empresa";
  */
 
 export type ParamsDeAuditoria = {
+  /**
+   * A empresa da ENTIDADE auditada, não a de quem agiu.
+   *
+   * ## Por que este campo passou a ser obrigatório (Ciclo 1d)
+   *
+   * Até aqui a empresa era DEDUZIDA de `userId` por `companyIdDoUsuario`
+   * (`core/users/empresa.ts`), que faz `membership.findFirstOrThrow({ where: {
+   * userId } })` — ou seja, pega um vínculo ARBITRÁRIO de quem tem mais de um.
+   * Enquanto ninguém tinha dois vínculos, isso não se via. `criarUsuario`
+   * (`core/users/service.ts`) já sabe criar `Membership`, então "a mesma pessoa
+   * em duas empresas" é estado expressável hoje — e no dia em que existir, quem
+   * agisse sobre entidade da empresa A poderia gravar o rastro na B. O rastro é
+   * exatamente o que se lê depois para reconstituir o estrago; gravá-lo na
+   * empresa errada o torna invisível para quem precisa dele e visível para quem
+   * não deveria vê-lo.
+   *
+   * O caso que trava isso é "grava na empresa que RECEBEU por parâmetro, não no
+   * vínculo arbitrário do autor" (`tests/unit/audit-isolamento.test.ts`), com um
+   * usuário de vínculo duplo.
+   *
+   * **A origem é sempre a entidade**, e nos 17 pontos que chamam esta função ela
+   * já estava em mãos: `companyId` que o serviço recebeu, `task.companyId`,
+   * `lead.companyId` ou `usuarioAtual().companyId`. Nenhum deles precisou de uma
+   * consulta nova — o que havia era a dedução no lugar do valor.
+   */
+  companyId: string;
   userId: string;
   acao: string;
   entidade: string;
@@ -56,18 +81,18 @@ export type ParamsDeAuditoria = {
  * de `antes`/`depois` para Json puro, com todos os efeitos colaterais listados
  * no topo deste arquivo — continua morando aqui.
  *
- * O `companyId` é PARÂMETRO, e é a diferença que importa: `gravarLinhaDeAuditoria`
- * o deduz de quem AGIU (`companyIdDoUsuario`, que pega um vínculo arbitrário de
- * quem tiver dois — o defeito MÉDIA que mantém este arquivo na fila de
- * conversão), enquanto `excluirEtapa` passa a empresa da ENTIDADE, que é a que
- * a linha deveria ter sempre.
+ * O `companyId` era um SEGUNDO parâmetro até o Ciclo 1d, porque
+ * `ParamsDeAuditoria` não tinha o campo e os dois chamadores resolviam a empresa
+ * de formas diferentes (`gravarLinhaDeAuditoria` deduzia do autor; `excluirEtapa`
+ * passava a da entidade). Com o campo obrigatório em `ParamsDeAuditoria`, os dois
+ * passaram a dizer a mesma coisa — e manter as duas portas abertas só criaria a
+ * chance de elas discordarem numa edição futura, sem erro de tipo nenhum.
  */
 export function dadosDeLinhaDeAuditoria(
-  params: ParamsDeAuditoria,
-  companyId: string
+  params: ParamsDeAuditoria
 ): Prisma.AuditLogUncheckedCreateInput {
   return {
-    companyId,
+    companyId: params.companyId,
     userId: params.userId,
     acao: params.acao,
     entidade: params.entidade,
@@ -92,35 +117,43 @@ export function dadosDeLinhaDeAuditoria(
  * quem for editar: desde a conversão de `pipeline` (Ciclo 1d) ela monta o
  * payload com `dadosDeLinhaDeAuditoria` e escreve pelo `tx` ESCOPADO, porque o
  * `tx` do cliente escopado não é assignável a `Prisma.TransactionClient` — o
- * porquê está no docstring daquele construtor, logo acima. O parâmetro
- * `cliente` continua aceitando um `tx` cru, e hoje ninguém o usa assim: o único
- * chamador é `registrarAuditoria`, que passa o `prisma` do módulo.
+ * porquê está no docstring daquele construtor, logo acima.
+ *
+ * ## O parâmetro `cliente` foi REMOVIDO no Ciclo 1d
+ *
+ * Ele existia para receber um `tx` cru, e nenhum chamador o usava assim desde
+ * que `excluirEtapa` passou a escrever pelo próprio `tx` escopado — o único
+ * chamador restante, `registrarAuditoria`, sempre omitia. Mantê-lo custava mais
+ * que a flexibilidade que oferecia: um parâmetro de tipo `PrismaClient` é
+ * exatamente a fuga que a Parte 2a de `tests/unit/catraca-prisma-cru.test.ts`
+ * existe para pegar — o arquivo não IMPORTA o cliente cru, ele o RECEBE, e com
+ * ele some a injeção de `companyId`. A catraca acusou este parâmetro no mesmo
+ * commit em que o arquivo saiu da fila de conversão, que é o instante em que
+ * ela passa a valer para ele.
+ *
+ * Quem precisar gravar a linha dentro de uma transação faz o que `excluirEtapa`
+ * faz: `tx.auditLog.create({ data: dadosDeLinhaDeAuditoria(params) })`, com o
+ * `tx` vindo de `prismaDaEmpresa(companyId).$transaction(...)`.
  *
  * O que NÃO entra na transação é `avaliarAtividadeSuspeita`: ela faz `count` no
  * `AuditLog`, `findMany` de ADMINs e `createMany` de notificações, e rodar isso
  * segurando lock em linhas de `Lead` alonga a transação por trabalho que não é
  * do domínio dela.
- *
- * `cliente` aceita tanto o `prisma` do módulo quanto o `tx` de um
- * `$transaction` interativo.
  */
-export async function gravarLinhaDeAuditoria(
-  params: ParamsDeAuditoria,
-  cliente: Prisma.TransactionClient = prisma
-): Promise<void> {
-  // `AuditLog.companyId` é `NOT NULL` desde a Task 1 do Ciclo 1a, e
-  // `ParamsDeAuditoria` NÃO ganhou um campo `companyId` — isso cascataria
-  // para os 25 pontos que chamam `registrarAuditoria`/`gravarLinhaDeAuditoria`
-  // hoje (8 arquivos, só 5 dentro do escopo desta tarefa de reparo), incluindo
-  // `core/users/service.ts` (audita `User`, que não tem `companyId` — só
-  // `Membership`) e `modules/automation/actions.ts` (audita workflow do n8n,
-  // que não é uma entidade deste schema). Resolver a empresa a partir de quem
-  // AGIU (`params.userId`, já obrigatório em todo `ParamsDeAuditoria`) via
-  // `companyIdDoUsuario` evita essa cascata inteira — ver o comentário do
-  // helper para por que isto não é "buscar a única empresa do banco".
-  const companyId = await companyIdDoUsuario(params.userId, cliente);
+export async function gravarLinhaDeAuditoria(params: ParamsDeAuditoria): Promise<void> {
+  // A cascata que a versão anterior deste comentário evitava — 17 pontos de
+  // chamada em 8 arquivos — foi PAGA no Ciclo 1d, e o que se ganhou foi a
+  // empresa da entidade no lugar de um vínculo arbitrário do autor (ver
+  // `ParamsDeAuditoria.companyId`). Os dois casos que pareciam não ter empresa
+  // própria têm: `core/users/service.ts` audita `User`, que não tem
+  // `companyId`, mas as quatro funções de lá já recebiam a empresa de quem
+  // gerencia — é ela que delimita QUEM é gerenciável; e
+  // `modules/automation/actions.ts` audita workflow do n8n, que não é entidade
+  // deste schema, e usa `usuarioAtual().companyId`, a empresa da sessão que
+  // operou o fluxo.
+  const db = prismaDaEmpresa(params.companyId);
 
-  await cliente.auditLog.create({ data: dadosDeLinhaDeAuditoria(params, companyId) });
+  await db.auditLog.create({ data: dadosDeLinhaDeAuditoria(params) });
 }
 
 export async function registrarAuditoria(params: ParamsDeAuditoria): Promise<void> {
@@ -141,7 +174,11 @@ export async function registrarAuditoria(params: ParamsDeAuditoria): Promise<voi
   // Derrubar a exclusão de uma tarefa porque um aviso não pôde ser enviado
   // transformaria um problema de notificação em perda de trabalho do usuário.
   try {
-    await avaliarAtividadeSuspeita({ userId: params.userId, acao: params.acao });
+    await avaliarAtividadeSuspeita({
+      companyId: params.companyId,
+      userId: params.userId,
+      acao: params.acao,
+    });
   } catch (erro) {
     console.error("Falha ao avaliar atividade suspeita (auditoria já gravada):", erro);
   }
