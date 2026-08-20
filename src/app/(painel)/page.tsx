@@ -66,7 +66,7 @@ export default async function DashboardPage() {
   const usuario = await usuarioAtualOuLogin();
 
   const [etapas, leadsPorEtapa, atividadeRecente] = await Promise.all([
-    listarEtapas(),
+    listarEtapas(usuario.companyId),
     contarLeadsPorEtapa(usuario.companyId),
     // ATENÇÃO: esta consulta continua SEM `where` nenhum, e `AuditLog` é
     // modelo de tenant. A home do painel mostra hoje os últimos registros de

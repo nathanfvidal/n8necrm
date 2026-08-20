@@ -26,7 +26,14 @@ import {
  * esconder o item do menu não protege nada, porque Server Action é endpoint HTTP
  * público e pode ser chamada direto.
  *
- * `autorId` sempre sai de `usuarioAtual()`, nunca de parâmetro.
+ * `autorId` e `companyId` saem SEMPRE de `usuarioAtual()`, nunca de parâmetro.
+ *
+ * O `companyId` entrou aqui na conversão de `pipeline` (Ciclo 1a): as cinco
+ * funções de `service.ts` passaram a exigi-lo, e este arquivo é a fronteira
+ * onde ele nasce. Ele NÃO pode vir do formulário — Server Action é endpoint
+ * HTTP público, e um `companyId` de parâmetro seria forjável por qualquer POST,
+ * o que transformaria o escopo numa sugestão. `usuarioAtual()`
+ * (`core/auth/session.ts`) o resolve a partir do `Membership` da sessão.
  */
 
 const MENSAGEM_SEM_PERMISSAO = "Você não tem permissão para gerenciar o funil.";
@@ -83,7 +90,12 @@ function invalidarCaminhosDeFunil() {
 export async function criarEtapaAction(dados: { nome: string; cor: string }): Promise<ResultadoAcao> {
   try {
     const autor = await exigirGestorDoFunil();
-    await criarEtapa({ nome: dados.nome, cor: dados.cor, autorId: autor.id });
+    await criarEtapa({
+      nome: dados.nome,
+      cor: dados.cor,
+      autorId: autor.id,
+      companyId: autor.companyId,
+    });
   } catch (erro) {
     return paraResultadoErro(erro, "Não foi possível criar a etapa. Tente novamente.");
   }
@@ -101,7 +113,7 @@ export async function editarEtapaAction(dados: {
 }): Promise<ResultadoAcao> {
   try {
     const autor = await exigirGestorDoFunil();
-    await editarEtapa({ ...dados, autorId: autor.id });
+    await editarEtapa({ ...dados, autorId: autor.id, companyId: autor.companyId });
   } catch (erro) {
     return paraResultadoErro(erro, "Não foi possível salvar a etapa. Tente novamente.");
   }
@@ -115,7 +127,7 @@ export async function moverEtapaNaOrdemAction(dados: {
 }): Promise<ResultadoAcao> {
   try {
     const autor = await exigirGestorDoFunil();
-    await moverNaOrdem({ ...dados, autorId: autor.id });
+    await moverNaOrdem({ ...dados, autorId: autor.id, companyId: autor.companyId });
   } catch (erro) {
     return paraResultadoErro(erro, "Não foi possível reordenar o funil. Tente novamente.");
   }
@@ -126,7 +138,7 @@ export async function moverEtapaNaOrdemAction(dados: {
 export async function definirEtapaDeFechamentoAction(etapaId: string): Promise<ResultadoAcao> {
   try {
     const autor = await exigirGestorDoFunil();
-    await definirEtapaDeFechamento({ etapaId, autorId: autor.id });
+    await definirEtapaDeFechamento({ etapaId, autorId: autor.id, companyId: autor.companyId });
   } catch (erro) {
     return paraResultadoErro(erro, "Não foi possível marcar a etapa de fechamento. Tente novamente.");
   }
@@ -140,7 +152,7 @@ export async function excluirEtapaAction(dados: {
 }): Promise<ResultadoAcao> {
   try {
     const autor = await exigirGestorDoFunil();
-    await excluirEtapa({ ...dados, autorId: autor.id });
+    await excluirEtapa({ ...dados, autorId: autor.id, companyId: autor.companyId });
   } catch (erro) {
     return paraResultadoErro(erro, "Não foi possível remover a etapa. Tente novamente.");
   }

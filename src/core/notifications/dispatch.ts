@@ -121,8 +121,11 @@ export async function notificarNovoLead(leadId: string): Promise<void> {
   // Medido em 2026-08-20: `Lead.responsavelId` só é escrito em
   // `src/core/leads/service.ts` (3 pontos) e nos dois seeds
   // (`prisma/seed.ts:187`, `prisma/seed-demo.ts:359`), que criam responsável e
-  // lead na mesma empresa. `src/core/pipeline/service.ts:394` toca `Lead` mas
-  // só o `stageId`.
+  // lead na mesma empresa. `excluirEtapa` (`src/core/pipeline/service.ts`) toca
+  // `Lead` mas só o `stageId` — e, desde a conversão daquele módulo (Ciclo 1d),
+  // por um `updateMany` escopado. A citação era por NÚMERO de linha e virou por
+  // NOME de função de propósito: número de linha envelhece na primeira edição
+  // do arquivo citado, e foi o que aconteceu.
   //
   // **Se um import em massa, um script ou um módulo novo passar a escrever
   // `Lead.responsavelId`, ele herda essa obrigação** — ou este ponto volta a

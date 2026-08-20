@@ -31,13 +31,37 @@ import {
 const PREFIXO = `ZZ Teste ${Date.now()}`;
 const criadas: string[] = [];
 
-async function novaEtapa(sufixo: string) {
+/**
+ * Quem age, e em qual empresa.
+ *
+ * O `companyId` entrou aqui na conversão de `pipeline` (Ciclo 1a): as cinco
+ * funções de `service.ts` passaram a exigi-lo. Ele sai do `Membership`, e não
+ * de `prisma.company.findFirst()` — é o VÍNCULO que define "pessoa desta
+ * empresa" (`prisma/schema.prisma`, linha 50), e a origem em produção é
+ * `usuarioAtual().companyId`, que resolve o mesmo vínculo.
+ *
+ * Este arquivo continua sendo sobre o COMPORTAMENTO do funil de uma empresa
+ * (ordem, nome repetido, auditoria, transação contra o Postgres real). Quem
+ * prova o isolamento entre duas empresas é `tests/unit/pipeline-isolamento.test.ts`.
+ */
+async function contextoDoAdmin() {
   const admin = await prisma.user.findFirstOrThrow({ where: { papel: "ADMIN" } });
+  const vinculo = await prisma.membership.findFirstOrThrow({ where: { userId: admin.id } });
+  return { admin, companyId: vinculo.companyId };
+}
+
+async function novaEtapa(sufixo: string) {
+  const { admin, companyId } = await contextoDoAdmin();
   // Maiúscula de propósito: é a única forma de "nasce ... com a cor
   // normalizada" (abaixo) provar alguma coisa. "#123456" já é minúscula em
   // todo caractere — passaria no teste mesmo se `etapaSchema.cor` parasse de
   // chamar `toLowerCase()`.
-  const etapa = await criarEtapa({ nome: `${PREFIXO} ${sufixo}`, cor: "#12AB56", autorId: admin.id });
+  const etapa = await criarEtapa({
+    nome: `${PREFIXO} ${sufixo}`,
+    cor: "#12AB56",
+    autorId: admin.id,
+    companyId,
+  });
   criadas.push(etapa.id);
   return etapa;
 }
@@ -50,7 +74,13 @@ afterAll(async () => {
 
 describe("criarEtapa", () => {
   it("nasce no fim do funil, sem ehGanho, com a cor normalizada", async () => {
-    const antes = await prisma.pipelineStage.aggregate({ _max: { ordem: true } });
+    const { companyId } = await contextoDoAdmin();
+    // `where: { companyId }` acrescentado na conversão: `criarEtapa` passou a
+    // usar o `max(ordem)` DA EMPRESA, e o `_max` global mediria outra coisa.
+    const antes = await prisma.pipelineStage.aggregate({
+      where: { companyId },
+      _max: { ordem: true },
+    });
     const etapa = await novaEtapa("nasce no fim");
 
     expect(etapa.ordem).toBe((antes._max.ordem ?? -1) + 1);
@@ -61,17 +91,17 @@ describe("criarEtapa", () => {
 
   it("recusa nome repetido, sem diferenciar maiúscula", async () => {
     const etapa = await novaEtapa("repetido");
-    const admin = await prisma.user.findFirstOrThrow({ where: { papel: "ADMIN" } });
+    const { admin, companyId } = await contextoDoAdmin();
 
     await expect(
-      criarEtapa({ nome: etapa.nome.toUpperCase(), cor: "#654321", autorId: admin.id })
+      criarEtapa({ nome: etapa.nome.toUpperCase(), cor: "#654321", autorId: admin.id, companyId })
     ).rejects.toBeInstanceOf(EtapaInvalidaError);
   });
 
   it("recusa cor fora do formato com erro de domínio, não erro do Prisma", async () => {
-    const admin = await prisma.user.findFirstOrThrow({ where: { papel: "ADMIN" } });
+    const { admin, companyId } = await contextoDoAdmin();
     await expect(
-      criarEtapa({ nome: `${PREFIXO} cor ruim`, cor: "red; background: url(x)", autorId: admin.id })
+      criarEtapa({ nome: `${PREFIXO} cor ruim`, cor: "red; background: url(x)", autorId: admin.id, companyId })
     ).rejects.toBeInstanceOf(EtapaInvalidaError);
   });
 
@@ -88,13 +118,14 @@ describe("criarEtapa", () => {
 describe("editarEtapa", () => {
   it("troca nome e cor sem mexer em ordem nem em ehGanho", async () => {
     const etapa = await novaEtapa("editar");
-    const admin = await prisma.user.findFirstOrThrow({ where: { papel: "ADMIN" } });
+    const { admin, companyId } = await contextoDoAdmin();
 
     const depois = await editarEtapa({
       etapaId: etapa.id,
       nome: `${PREFIXO} editada`,
       cor: "#ABCDEF",
       autorId: admin.id,
+      companyId,
     });
 
     expect(depois.nome).toBe(`${PREFIXO} editada`);
@@ -108,22 +139,23 @@ describe("editarEtapa", () => {
   it("recusa RENOMEAR para um nome que já existe", async () => {
     const primeira = await novaEtapa("alvo do conflito");
     const segunda = await novaEtapa("vai colidir");
-    const admin = await prisma.user.findFirstOrThrow({ where: { papel: "ADMIN" } });
+    const { admin, companyId } = await contextoDoAdmin();
 
     await expect(
-      editarEtapa({ etapaId: segunda.id, nome: primeira.nome, cor: "#123456", autorId: admin.id })
+      editarEtapa({ etapaId: segunda.id, nome: primeira.nome, cor: "#123456", autorId: admin.id, companyId })
     ).rejects.toBeInstanceOf(EtapaInvalidaError);
   });
 
   it("permite salvar a própria etapa sem mudar o nome (não colide consigo mesma)", async () => {
     const etapa = await novaEtapa("mesmo nome");
-    const admin = await prisma.user.findFirstOrThrow({ where: { papel: "ADMIN" } });
+    const { admin, companyId } = await contextoDoAdmin();
 
     const depois = await editarEtapa({
       etapaId: etapa.id,
       nome: etapa.nome,
       cor: "#000000",
       autorId: admin.id,
+      companyId,
     });
     expect(depois.cor).toBe("#000000");
   });
@@ -136,9 +168,9 @@ describe("moverNaOrdem — contra o banco real", () => {
   it("troca duas etapas de posição sem violar UNIQUE(ordem)", async () => {
     const primeira = await novaEtapa("troca A");
     const segunda = await novaEtapa("troca B");
-    const admin = await prisma.user.findFirstOrThrow({ where: { papel: "ADMIN" } });
+    const { admin, companyId } = await contextoDoAdmin();
 
-    await moverNaOrdem({ etapaId: segunda.id, direcao: "cima", autorId: admin.id });
+    await moverNaOrdem({ etapaId: segunda.id, direcao: "cima", autorId: admin.id, companyId });
 
     const depoisPrimeira = await prisma.pipelineStage.findUniqueOrThrow({ where: { id: primeira.id } });
     const depoisSegunda = await prisma.pipelineStage.findUniqueOrThrow({ where: { id: segunda.id } });
@@ -156,9 +188,9 @@ describe("moverNaOrdem — contra o banco real", () => {
 describe("excluirEtapa", () => {
   it("etapa vazia sai sem destino", async () => {
     const etapa = await novaEtapa("vazia");
-    const admin = await prisma.user.findFirstOrThrow({ where: { papel: "ADMIN" } });
+    const { admin, companyId } = await contextoDoAdmin();
 
-    const movidos = await excluirEtapa({ etapaId: etapa.id, destinoId: null, autorId: admin.id });
+    const movidos = await excluirEtapa({ etapaId: etapa.id, destinoId: null, autorId: admin.id, companyId });
 
     expect(movidos).toBe(0);
     expect(await prisma.pipelineStage.findUnique({ where: { id: etapa.id } })).toBeNull();
@@ -168,7 +200,7 @@ describe("excluirEtapa", () => {
   // existir: arquivar NÃO tira o lead da etapa, e a FK é ON DELETE RESTRICT.
   it("etapa com lead ARQUIVADO recusa sem destino — com erro de domínio, não P2003", async () => {
     const etapa = await novaEtapa("so arquivado");
-    const admin = await prisma.user.findFirstOrThrow({ where: { papel: "ADMIN" } });
+    const { admin, companyId } = await contextoDoAdmin();
     const contato = await prisma.contact.create({
       data: {
         companyId: etapa.companyId,
@@ -188,7 +220,7 @@ describe("excluirEtapa", () => {
 
     try {
       await expect(
-        excluirEtapa({ etapaId: etapa.id, destinoId: null, autorId: admin.id })
+        excluirEtapa({ etapaId: etapa.id, destinoId: null, autorId: admin.id, companyId })
       ).rejects.toBeInstanceOf(EtapaInvalidaError);
       // E a etapa continua lá — a recusa aconteceu ANTES de qualquer escrita.
       expect(await prisma.pipelineStage.findUnique({ where: { id: etapa.id } })).not.toBeNull();
@@ -201,7 +233,7 @@ describe("excluirEtapa", () => {
   it("com destino, move o arquivado junto e apaga a etapa", async () => {
     const origem = await novaEtapa("origem");
     const destino = await novaEtapa("destino");
-    const admin = await prisma.user.findFirstOrThrow({ where: { papel: "ADMIN" } });
+    const { admin, companyId } = await contextoDoAdmin();
     const contato = await prisma.contact.create({
       data: {
         companyId: origem.companyId,
@@ -224,6 +256,7 @@ describe("excluirEtapa", () => {
         etapaId: origem.id,
         destinoId: destino.id,
         autorId: admin.id,
+        companyId,
       });
 
       expect(movidos).toBe(1);
@@ -241,7 +274,7 @@ describe("excluirEtapa", () => {
   it("a auditoria registra o número REAL de leads movidos, e nasce junto com a exclusão", async () => {
     const origem = await novaEtapa("auditoria origem");
     const destino = await novaEtapa("auditoria destino");
-    const admin = await prisma.user.findFirstOrThrow({ where: { papel: "ADMIN" } });
+    const { admin, companyId } = await contextoDoAdmin();
     const contato = await prisma.contact.create({
       data: {
         companyId: origem.companyId,
@@ -260,7 +293,7 @@ describe("excluirEtapa", () => {
     });
 
     try {
-      await excluirEtapa({ etapaId: origem.id, destinoId: destino.id, autorId: admin.id });
+      await excluirEtapa({ etapaId: origem.id, destinoId: destino.id, autorId: admin.id, companyId });
 
       const linha = await prisma.auditLog.findFirstOrThrow({
         where: { entidadeId: origem.id, acao: "excluir_etapa" },
@@ -274,11 +307,13 @@ describe("excluirEtapa", () => {
   });
 
   it("recusa apagar a etapa de fechamento", async () => {
-    const admin = await prisma.user.findFirstOrThrow({ where: { papel: "ADMIN" } });
-    const fechamento = await prisma.pipelineStage.findFirstOrThrow({ where: { ehGanho: true } });
+    const { admin, companyId } = await contextoDoAdmin();
+    const fechamento = await prisma.pipelineStage.findFirstOrThrow({
+      where: { ehGanho: true, companyId },
+    });
 
     await expect(
-      excluirEtapa({ etapaId: fechamento.id, destinoId: null, autorId: admin.id })
+      excluirEtapa({ etapaId: fechamento.id, destinoId: null, autorId: admin.id, companyId })
     ).rejects.toThrow(/fechamento/i);
     // Não escreveu nada: a etapa de produção continua lá, com a flag intacta.
     const depois = await prisma.pipelineStage.findUniqueOrThrow({ where: { id: fechamento.id } });

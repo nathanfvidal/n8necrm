@@ -35,9 +35,17 @@ vi.mock("@/core/pipeline/service", () => ({
 
 const acoes = await import("../../src/core/pipeline/actions");
 
+/**
+ * A empresa que a SESSÃO diz. Nenhuma das cinco actions recebe `companyId` como
+ * parâmetro, e o bloco no fim deste arquivo é o que trava isso.
+ */
+const EMPRESA_DA_SESSAO = "empresa-da-sessao";
+
 beforeEach(() => {
   revalidatePathMock.mockReset();
-  usuarioAtualMock.mockReset().mockResolvedValue({ id: "admin-1", papel: "ADMIN" });
+  usuarioAtualMock
+    .mockReset()
+    .mockResolvedValue({ id: "admin-1", papel: "ADMIN", companyId: EMPRESA_DA_SESSAO });
   criarEtapaMock.mockReset().mockResolvedValue({ id: "etapa-1" });
   editarEtapaMock.mockReset().mockResolvedValue({ id: "etapa-1" });
   moverNaOrdemMock.mockReset().mockResolvedValue(undefined);
@@ -166,5 +174,72 @@ describe("invalidação de cache", () => {
   ])("%s invalida os cinco caminhos", async (_nome, chamar) => {
     await chamar();
     expect(revalidatePathMock.mock.calls).toEqual(CINCO_CAMINHOS);
+  });
+});
+
+/**
+ * A fronteira onde o `companyId` nasce.
+ *
+ * Desde a conversão de `pipeline` (Ciclo 1a) as cinco funções de `service.ts`
+ * exigem `companyId`, e a única origem legítima dele é `usuarioAtual()`. Este
+ * bloco existe para que um `companyId` de PARÂMETRO não possa ser introduzido
+ * depois sem quebrar teste: Server Action é endpoint HTTP público, e um
+ * `companyId` que viesse do formulário seria forjável por qualquer POST — o
+ * escopo inteiro viraria sugestão.
+ *
+ * Cada caso passa um `companyId` FORJADO no argumento da action, e afirma que o
+ * serviço recebeu o da sessão. Sem o valor forjado o teste passaria mesmo se a
+ * action fizesse `{ ...dados }` com um `companyId` vindo de fora — a armadilha
+ * do "espelhar o bug" registrada em 63cecd2, na outra forma.
+ */
+describe("a empresa vem da SESSÃO, nunca do parâmetro", () => {
+  const FORJADO = "empresa-de-outro-cliente";
+
+  it("criarEtapaAction", async () => {
+    await acoes.criarEtapaAction({ nome: "Nova", cor: "#0f62fe", companyId: FORJADO } as never);
+    expect(criarEtapaMock).toHaveBeenCalledWith(
+      expect.objectContaining({ autorId: "admin-1", companyId: EMPRESA_DA_SESSAO })
+    );
+  });
+
+  it("editarEtapaAction", async () => {
+    await acoes.editarEtapaAction({
+      etapaId: "e-1",
+      nome: "Nova",
+      cor: "#0f62fe",
+      companyId: FORJADO,
+    } as never);
+    expect(editarEtapaMock).toHaveBeenCalledWith(
+      expect.objectContaining({ etapaId: "e-1", companyId: EMPRESA_DA_SESSAO })
+    );
+  });
+
+  it("moverEtapaNaOrdemAction", async () => {
+    await acoes.moverEtapaNaOrdemAction({
+      etapaId: "e-1",
+      direcao: "cima",
+      companyId: FORJADO,
+    } as never);
+    expect(moverNaOrdemMock).toHaveBeenCalledWith(
+      expect.objectContaining({ etapaId: "e-1", companyId: EMPRESA_DA_SESSAO })
+    );
+  });
+
+  it("definirEtapaDeFechamentoAction", async () => {
+    await acoes.definirEtapaDeFechamentoAction("e-1");
+    expect(definirFechamentoMock).toHaveBeenCalledWith(
+      expect.objectContaining({ etapaId: "e-1", companyId: EMPRESA_DA_SESSAO })
+    );
+  });
+
+  it("excluirEtapaAction", async () => {
+    await acoes.excluirEtapaAction({
+      etapaId: "e-1",
+      destinoId: "e-2",
+      companyId: FORJADO,
+    } as never);
+    expect(excluirEtapaMock).toHaveBeenCalledWith(
+      expect.objectContaining({ etapaId: "e-1", companyId: EMPRESA_DA_SESSAO })
+    );
   });
 });

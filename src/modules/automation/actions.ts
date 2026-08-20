@@ -90,7 +90,7 @@ function mensagemDeErro(erro: unknown): string {
  * acontecido; (2) Server Action é endpoint HTTP público — quem chama escolhe
  * o `nome`, e essa é a ÚNICA linha do sistema que registra que aquele
  * workflow existiu. Ler antes de agir resolve os dois, no mesmo padrão que
- * todo irmão deste módulo já segue: `core/pipeline/service.ts:110` (`antes:
+ * todo irmão deste módulo já segue: `editarEtapa` em `core/pipeline/service.ts` (`antes:
  * { nome: atual.nome, cor: atual.cor }`), `core/users/service.ts:306`
  * (`antes: { ativo: antes.ativo }`), `core/leads/notes.ts:150` (`antes: {
  * texto: nota.texto }`).

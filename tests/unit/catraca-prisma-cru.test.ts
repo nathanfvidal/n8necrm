@@ -99,7 +99,7 @@ const SCHEMA = join(RAIZ_PROJETO, "prisma", "schema.prisma");
  * cada conversão): é a igualdade exata entre árvore e listas, no caso logo
  * abaixo, que nomeia o arquivo que entrou.
  */
-const LINHA_DE_BASE_DE_IMPORTADORES_TEMPORARIOS = 19;
+const LINHA_DE_BASE_DE_IMPORTADORES_TEMPORARIOS = 17;
 
 /**
  * Arquivos que podem nomear o tipo do cliente CRU sem estar na fila de
@@ -313,15 +313,25 @@ export function analisarClienteCru(arquivo: string, codigoBruto: string): Violac
 //
 // Ou seja: `prismaDaEmpresa(id).$queryRaw` compila, roda, e lê o banco INTEIRO.
 // Nem o lint nem a Parte 1 percebem, porque o arquivo pode estar perfeitamente
-// convertido. Os cinco usos de hoje estão TODOS em arquivos da fila
+// convertido. Em 2026-08-20 os cinco usos estavam TODOS em arquivos da fila
 // (`pipeline/service.ts`, `rate-limit/limiter.ts`, `whatsapp/ingest.ts`,
-// `whatsapp/turno.ts`) — medido em 2026-08-20 com
-// `grep -rn "queryRaw\|executeRaw" src`.
+// `whatsapp/turno.ts`) — medido com `grep -rn "queryRaw\|executeRaw" src`.
 //
-// A trava vale só fora da fila, e é isso que a faz apertar sozinha: no dia em
-// que `pipeline/service.ts` for convertido e sair da lista, o `$queryRaw` dele
-// (que hoje trava a tabela `PipelineStage` de TODAS as empresas de uma vez, um
-// dos 11 defeitos catalogados naquele arquivo) passa a ser cobrado aqui.
+// **Isso já mudou, e é a prova de que a trava aperta sozinha.** O Ciclo 1d
+// converteu `pipeline/service.ts` e o tirou da lista de exceção do lint; no
+// mesmo instante o `$queryRaw` de `travarEstruturaDoFunil` — que até então
+// travava a tabela `PipelineStage` de TODAS as empresas de uma vez, um dos 13
+// defeitos catalogados no módulo — passou a ser cobrado aqui, e hoje leva
+// `WHERE "companyId" = ${companyId}` escrito à mão. Ninguém precisou lembrar de
+// ligar nada: sair da fila foi o gatilho.
+//
+// A mesma execução mostrou o outro lado desta varredura, e vale registrar
+// porque parece um falso positivo e não é: uma ANOTAÇÃO DE TIPO que citasse a
+// operação (`Pick<Cliente, "$queryRaw">`) casa com o padrão abaixo, e então a
+// varredura não acha SQL nenhum depois dela e acusa. Está certa em acusar —
+// forma que ela não sabe ler é justamente o caso em que ela não pode afirmar
+// que o SQL é escopado. `pipeline/service.ts` derivou o tipo do `tx` por
+// `Parameters<...>` para não escrever o nome da operação em texto.
 
 const CHAMADAS_DE_SQL_CRU = /\$(?:queryRaw|queryRawUnsafe|executeRaw|executeRawUnsafe)\b/g;
 
@@ -701,7 +711,8 @@ describe("as travas mordem de verdade", () => {
   it("a trava do SQL cru pega a tabela de tenant e libera o resto", () => {
     const modelos = ["Lead", "PipelineStage", "AuditLog"];
 
-    // A forma de `core/pipeline/service.ts:267`, com genérico antes do template.
+    // A forma de `travarEstruturaDoFunil` (`core/pipeline/service.ts`) antes da
+    // conversão do Ciclo 1d, com genérico antes do template e sem `companyId`.
     const semEmpresa = 'const l = await tx.$queryRaw<Array<{ id: string }>>`SELECT "id" FROM "PipelineStage" FOR UPDATE`;';
     expect(analisarSqlCru("t.ts", semEmpresa, modelos)).toHaveLength(1);
     expect(analisarSqlCru("t.ts", semEmpresa, modelos)[0].detalhe).toContain("PipelineStage");

@@ -19,7 +19,7 @@ export default async function KanbanPage() {
   const usuario = await usuarioAtualOuLogin();
 
   const [etapas, { porEtapa, truncado }] = await Promise.all([
-    listarEtapas(),
+    listarEtapas(usuario.companyId),
     listarLeadsPorEtapa(usuario.companyId),
   ]);
 

@@ -43,11 +43,12 @@ const PRISMA_CRU = {
 // entrega o mecanismo, não a migração dos chamadores.
 //
 // Eram 25 (17 em core, 5 em modules, 3 em src/app), medidos em 2026-08-20 com
-// `grep -rln "lib/prisma" src --include=*.ts --include=*.tsx`. Hoje são 19:
+// `grep -rln "lib/prisma" src --include=*.ts --include=*.tsx`. Hoje são 17:
 // a Task 4 do Ciclo 1a converteu `leads` inteiro — os 4 arquivos de
-// `src/core/leads/` e as 2 páginas de `src/app/(painel)/leads/`. O tamanho
-// desta lista é o contador de quanto falta: quando ela esvaziar, os blocos
-// somem junto. Exceção nomeada conta; disciplina não conta nada.
+// `src/core/leads/` e as 2 páginas de `src/app/(painel)/leads/` — e o Ciclo 1d
+// converteu `src/core/pipeline/` (`service.ts` e `stages.ts`). O tamanho desta
+// lista é o contador de quanto falta: quando ela esvaziar, os blocos somem
+// junto. Exceção nomeada conta; disciplina não conta nada.
 //
 // **Esta lista é lida por um teste.** `tests/unit/catraca-prisma-cru.test.ts`
 // compara as quatro listas deste arquivo com a árvore de `src/` e reprova
@@ -55,7 +56,7 @@ const PRISMA_CRU = {
 // quem escrever um caminho com metacaractere de glob nu (a armadilha do `[id]`,
 // registrada mais abaixo). Diminuir a lista não reprova ninguém — a catraca
 // gira num sentido só —, mas quem diminuir deve baixar junto a
-// `LINHA_DE_BASE_DE_IMPORTADORES_TEMPORARIOS` de lá, que hoje é 19.
+// `LINHA_DE_BASE_DE_IMPORTADORES_TEMPORARIOS` de lá, que hoje é 17.
 //
 // Os 3 de `src/app` entraram numa segunda passada, e vale registrar por quê: a
 // regra nascera limitada a `core` + `modules`, enquanto `escopo.ts` dizia no
@@ -81,13 +82,21 @@ const PRISMA_CRU = {
 // vivos** — 32 neles (18 de severidade ALTA, 9 MÉDIA, 5 BAIXA) mais 1 no
 // arquivo que aquela tarefa corrigiu (`tasks/service.ts`, o `contactId`).
 //
-// **Hoje são 31** — 17 ALTA, 9 MÉDIA, 5 BAIXA. Dois foram fechados no reparo
+// **Hoje são 18** — 10 ALTA, 4 MÉDIA, 4 BAIXA. Dois foram fechados no reparo
 // registrado em `.superpowers/sdd/reparo-redefinir-senha.md`, os dois da
 // família descrita logo abaixo: `redefinirSenha` (`users/service.ts`, a tomada
 // de conta que encabeçava a ordem) e `exigirContatoDaEmpresa`
 // (`tasks/service.ts`, o `contactId` que sobrara do commit anterior). As duas
 // linhas continuam nesta lista — o que zerou foi a contagem de DEFEITOS, não o
 // import do prisma cru —, e as anotações delas dizem isso.
+//
+// Os outros 13 saíram no Ciclo 1d, com `src/core/pipeline/` inteiro
+// (`.superpowers/sdd/ciclo-1d-pipeline.md`). Ressalva sobre o SPLIT dessa
+// subtração, para não passar por medição o que é itemização: a varredura de
+// 2026-08-20 registrou o TOTAL por arquivo (11 e 2) e quantos eram ALTA (6 e
+// 1), nunca a separação MÉDIA/BAIXA item a item. A conversão itemizou os 13 e
+// chegou a 7 ALTA, 5 MÉDIA, 1 BAIXA — a lista está no relatório do ciclo. Os
+// números acima descem dessa itemização, e é dela que herdam a incerteza.
 //
 // **A família é sempre a mesma:** valida que o registro EXISTE, nunca que ele
 // é da MESMA EMPRESA. Já apareceu 6 vezes neste ciclo (3744e64, 63cecd2,
@@ -100,19 +109,19 @@ const PRISMA_CRU = {
 // item 1 de antes (`users/service.ts`) saiu por ter sido corrigido; o que
 // sobra é:
 //
-//   1. `src/core/pipeline/` (13)     — nenhuma assinatura de `service.ts` nem
-//      de `stages.ts` recebe `companyId`. É o módulo sem noção de empresa.
-//   2. `src/modules/whatsapp/queries.ts` + `agente.ts` (6) — a inbox inteira e
+//   1. `src/modules/whatsapp/queries.ts` + `agente.ts` (6) — a inbox inteira e
 //      todas as mutações de conversa aceitam `conversationId` cru do cliente.
-//   3. `src/core/contacts/` (4)      — agenda global e `findUnique` por id de
+//   2. `src/core/contacts/` (4)      — agenda global e `findUnique` por id de
 //      rota.
-//   4. `src/app/(painel)/page.tsx` (1) — o `auditLog` sem `where`.
-//   5. o resto (BAIXA), onde o escopo já vem por FK ou por dono.
+//   3. `src/app/(painel)/page.tsx` (1) — o `auditLog` sem `where`.
+//   4. o resto (BAIXA), onde o escopo já vem por FK ou por dono.
 //
-// **Os 31 restantes NÃO foram corrigidos**, de propósito: a decisão de quantos
-// e em que ordem é do dono do projeto, e as tarefas de reparo até aqui tiveram
-// escopo de um ou dois. Corrigir 33 num commit seria a mesma pressa que os
-// criou.
+// O item que encabeçava esta ordem (`src/core/pipeline/`, 13) saiu no Ciclo 1d.
+//
+// **Os 18 restantes NÃO foram corrigidos**, de propósito: a decisão de quantos
+// e em que ordem é do dono do projeto, e as tarefas até aqui tiveram escopo de
+// um reparo ou de um módulo. Corrigir 33 num commit seria a mesma pressa que
+// os criou.
 //
 // Cada linha abaixo carrega a contagem do arquivo e o pior caso dele. Quem
 // converter um arquivo APAGA a anotação junto com a linha — anotação que
@@ -162,22 +171,21 @@ const VIOLADORES_TEMPORARIOS_CORE = [
   // empresa) fechou por consequência do 6dfb325, e a invariante está escrita
   // no próprio `create` — inclusive QUEM a garante e ONDE.
   "src/core/notifications/dispatch.ts",
-  // **11 defeitos, o pior arquivo da fila** — 6 ALTA. Nenhuma função de
-  // `pipeline/` recebe `companyId` em assinatura nenhuma, então não é
-  // conversão, é redesenho de interface. Os que doem mais:
-  // `definirEtapaDeFechamento` faz `updateMany({ where: { ehGanho: true } })`
-  // sem empresa (desliga a etapa de ganho de TODAS as empresas de uma vez);
-  // `excluirEtapa` valida o `destinoId` contra o funil global e move leads
-  // para etapa de outra empresa; `editarEtapa`/`moverNaOrdem`/`excluirEtapa`
-  // validam `input.etapaId` só por existência (a família de sempre); e o
-  // `SELECT FOR UPDATE` de `travarEstruturaDoFunil` trava a tabela inteira,
-  // serializando empresas que não têm nada a ver uma com a outra.
-  "src/core/pipeline/service.ts",
-  // 2 defeitos: `listarEtapas` (ALTA) faz `findMany` sem `companyId` — é ela
-  // que alimenta o funil de `/`, `/etapas` e o kanban, e é por ela que a
-  // última página da fila continua vazando mesmo depois do `auditLog`; e
-  // `contarLeadsQueSeguramEtapa` (MÉDIA) faz `groupBy` em `Lead` sem empresa.
-  "src/core/pipeline/stages.ts",
+  // `src/core/pipeline/*` SAIU desta lista no Ciclo 1d — os dois arquivos que
+  // alcançavam o banco (`service.ts` e `stages.ts`) passaram a alcançá-lo só
+  // por `prismaDaEmpresa`. Era a maior concentração da fila, 13 defeitos, e a
+  // única que não era conversão e sim REDESENHO: nenhuma das 7 funções
+  // públicas recebia `companyId`, então as 5 assinaturas de `service.ts` e as
+  // 2 de `stages.ts` mudaram, e com elas as 5 Server Actions (que passaram a
+  // tirar a empresa de `usuarioAtual().companyId`) e as 4 páginas que as
+  // consomem. O lint passar com eles fora daqui é a prova de que o módulo não
+  // alcança mais o `prisma` cru; a prova de que o escopo FUNCIONA é outra, e
+  // mora em `tests/unit/pipeline-isolamento.test.ts`.
+  //
+  // O único ponto do módulo que o escopo NÃO alcança é o `$queryRaw` de
+  // `travarEstruturaDoFunil` — lá o `WHERE "companyId"` é escrito à mão, e
+  // quem cobra é a Parte 2b de `tests/unit/catraca-prisma-cru.test.ts`, que
+  // passou a valer para aquele arquivo no instante em que ele saiu daqui.
   // 2 defeitos, os dois BAIXA: `listarMinhasTasks` filtra por `responsavelId`
   // e `listarTasksPendentesDoLead` por `leadId` — escopo por dono e por FK,
   // que seguram hoje. `listarTasksPendentesDoLead` deixa de segurar no dia em
@@ -290,13 +298,15 @@ const VIOLADORES_TEMPORARIOS_MODULES = [
 // arquivo de `src/app/**` que ainda alcança o banco direto**, e portanto a
 // última leitura cross-tenant escrita DENTRO de uma página.
 //
-// O que essa frase NÃO quer dizer, e vale escrever antes que alguém a leia
-// como quer: esta página continua vazando por OUTRO caminho depois que o
-// `auditLog` for corrigido. Ela chama `listarEtapas()`
-// (`core/pipeline/stages.ts:14`), que faz `findMany` em `PipelineStage` sem
-// `companyId` nenhum. "Última leitura cross-tenant da PÁGINA" e "última
-// leitura cross-tenant que a página produz" são coisas diferentes, e é a
-// segunda que interessa a quem usa o sistema.
+// Esta linha vinha com uma ressalva — "a página continua vazando por OUTRO
+// caminho depois que o `auditLog` for corrigido, porque `listarEtapas()` faz
+// `findMany` em `PipelineStage` sem `companyId`". Ela deixou de valer no Ciclo
+// 1d: `listarEtapas` passou a EXIGIR `companyId`, e a página passa
+// `usuario.companyId`. A distinção que a ressalva registrava continua valendo
+// como método — "última leitura cross-tenant da PÁGINA" e "última leitura
+// cross-tenant que a página PRODUZ" são coisas diferentes, e é a segunda que
+// interessa a quem usa o sistema —, e é por isso que fica escrita aqui: hoje as
+// duas coincidem, e o que sobra é o `auditLog`.
 //
 // O `\\[id\\]` que estava na linha do detalhe de lead NÃO era enfeite, e o
 // registro fica aqui porque a próxima rota dinâmica a entrar nesta lista vai
@@ -390,7 +400,7 @@ const eslintConfig = defineConfig([
   },
   // A exceção de core RE-DECLARA o que continua valendo para aqueles arquivos,
   // porque o flat config substitui a configuração da regra inteira em vez de
-  // mesclá-la — sem esta re-declaração, os 20 arquivos listados perderiam a
+  // mesclá-la — sem esta re-declaração, os arquivos listados perderiam a
   // proteção de core↛modules sem ninguém perceber.
   {
     files: [...VIOLADORES_TEMPORARIOS_CORE, ...EXCECAO_PERMANENTE],

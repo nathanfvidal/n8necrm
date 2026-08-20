@@ -171,7 +171,7 @@ export default async function LeadDetalhePage({
   // NÃO substitui a checagem de vínculo no serviço: Server Action é endpoint
   // HTTP público e não passa por este `<select>`.
   const [etapas, equipe] = await Promise.all([
-    listarEtapas(),
+    listarEtapas(usuario.companyId),
     listarUsuarios(usuario.companyId),
   ]);
 
