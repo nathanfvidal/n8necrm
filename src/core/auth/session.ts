@@ -3,7 +3,7 @@ import { redirect } from "next/navigation";
 
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import type { User } from "@prisma/client";
+import { EmpresaAmbiguaError, type UsuarioAtivo } from "./usuario-ativo";
 
 /**
  * Deriva o usuário autenticado a partir da sessão Auth.js do request atual.
@@ -56,16 +56,55 @@ import type { User } from "@prisma/client";
  * um chamador futuro tratar só "sem sessão" e deixar "desativado" cair num
  * caminho não previsto — a task 13-21 inteira depende deste helper.
  */
-export const usuarioAtual = cache(async function usuarioAtual(): Promise<User> {
+export const usuarioAtual = cache(async function usuarioAtual(): Promise<UsuarioAtivo> {
   const session = await auth();
   if (!session?.user?.email) {
     throw new Error("Não autenticado");
   }
-  const usuario = await prisma.user.findUniqueOrThrow({ where: { email: session.user.email } });
+
+  // `include` e não duas queries: o vínculo é obrigatório para montar o
+  // resultado, então buscá-lo depois seria uma segunda ida ao banco em TODA
+  // requisição autenticada do sistema.
+  const usuario = await prisma.user.findUniqueOrThrow({
+    where: { email: session.user.email },
+    include: { memberships: true },
+  });
+
   if (!usuario.ativo) {
     throw new Error("Não autenticado");
   }
-  return usuario;
+
+  // Zero vínculo é tratado como sessão inválida, e não como erro próprio: uma
+  // conta sem empresa não tem nada que possa ser servido a ela, e deixá-la
+  // entrar num estado sem escopo é exatamente como vazamento entre tenants
+  // começa.
+  if (usuario.memberships.length === 0) {
+    throw new Error("Não autenticado");
+  }
+
+  // Mais de um vínculo LANÇA em vez de escolher.
+  //
+  // A alternativa considerada e descartada era "o vínculo mais antigo". Isso é
+  // um chute com cara de regra: nada no domínio diz que o mais antigo é o que
+  // a pessoa quer, e o modo de falha é servir dado da EMPRESA ERRADA. Falhar
+  // aqui custa zero hoje — a migração cria um vínculo por pessoa, então a
+  // situação é inalcançável — e o dia em que alguém criar o segundo por SQL, o
+  // erro aponta a causa em vez de a aplicação seguir servindo dado de uma
+  // empresa que ninguém escolheu.
+  if (usuario.memberships.length > 1) {
+    throw new EmpresaAmbiguaError(usuario.memberships.length);
+  }
+
+  const vinculo = usuario.memberships[0]!;
+
+  return {
+    id: usuario.id,
+    nome: usuario.nome,
+    email: usuario.email,
+    ativo: usuario.ativo,
+    companyId: vinculo.companyId,
+    papel: vinculo.papel,
+  };
 });
 
 /**
@@ -96,8 +135,8 @@ export const usuarioAtual = cache(async function usuarioAtual(): Promise<User> {
  * redirecionamento — por isso ele fica fora, depois do bloco, e o `try` só
  * envolve a chamada que pode rejeitar.
  */
-export async function usuarioAtualOuLogin(): Promise<User> {
-  let usuario: User;
+export async function usuarioAtualOuLogin(): Promise<UsuarioAtivo> {
+  let usuario: UsuarioAtivo;
   try {
     usuario = await usuarioAtual();
   } catch {

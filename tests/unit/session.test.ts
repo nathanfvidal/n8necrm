@@ -35,17 +35,37 @@ describe("usuarioAtual — fix round 1/5 (CRITICAL): usuário desativado não po
   const EMAIL_DESATIVADO = "teste-fix1-usuario-desativado@teste.local";
   let idAtivo: string;
   let idDesativado: string;
+  let idEmpresa: string;
 
   beforeAll(async () => {
+    // A partir da Task 2 do Ciclo 1a, `usuarioAtual()` exige um `Membership`
+    // (lança "Não autenticado" com zero vínculo — mesmo raciocínio de
+    // usuário sem empresa não ter nada que possa ser servido a ela). Uma
+    // `Company` própria para este arquivo, e não `company-migracao-1a`
+    // (a empresa real de produção): este teste roda contra o Postgres real
+    // e não deve depender do id de uma linha que outra migração criou —
+    // criar a própria mantém o arquivo isolado, mesmo raciocínio do prefixo
+    // "teste-fix1-" abaixo.
+    const empresa = await prisma.company.create({
+      data: { nome: "Teste Fix1 Empresa" },
+    });
+    idEmpresa = empresa.id;
+
     // Prefixo "teste-fix1-" isola estas linhas do seed (admin@exemplo.com /
     // vendedor@exemplo.com) e de qualquer outro teste — limpo no afterAll.
+    // `papel` na coluna do `User` fica ADMIN, deliberadamente DIFERENTE do
+    // papel do vínculo (VENDEDOR) abaixo — se `usuarioAtual()` algum dia
+    // voltasse a ler `User.papel` em vez de `Membership.papel`, o teste
+    // "retorna o usuário..." pegaria isso (papel devolvido seria ADMIN, não
+    // VENDEDOR), mesmo com a coluna ainda existindo neste ponto da suíte.
     const ativo = await prisma.user.create({
       data: {
         nome: "Teste Fix1 Ativo",
         email: EMAIL_ATIVO,
         senhaHash: "hash-fake-nao-usado-em-login",
-        papel: "VENDEDOR",
+        papel: "ADMIN",
         ativo: true,
+        memberships: { create: { companyId: idEmpresa, papel: "VENDEDOR" } },
       },
     });
     idAtivo = ativo.id;
@@ -57,22 +77,32 @@ describe("usuarioAtual — fix round 1/5 (CRITICAL): usuário desativado não po
         senhaHash: "hash-fake-nao-usado-em-login",
         papel: "VENDEDOR",
         ativo: false,
+        memberships: { create: { companyId: idEmpresa, papel: "VENDEDOR" } },
       },
     });
     idDesativado = desativado.id;
   });
 
   afterAll(async () => {
+    // Apagar os `User` primeiro: `Membership.userId` é `ON DELETE CASCADE`
+    // (schema.prisma), então os vínculos somem junto. Só depois a `Company`
+    // — apagá-la antes falharia na FK `Membership_companyId_fkey` enquanto
+    // algum vínculo ainda existisse.
     await prisma.user.deleteMany({ where: { id: { in: [idAtivo, idDesativado] } } });
+    await prisma.company.delete({ where: { id: idEmpresa } });
   });
 
-  it("retorna o usuário quando a sessão existe e o usuário está ativo", async () => {
+  it("retorna o usuário quando a sessão existe e o usuário está ativo, com o papel DO VÍNCULO", async () => {
     authMock.mockResolvedValueOnce({ user: { email: EMAIL_ATIVO } });
 
     const usuario = await usuarioAtual();
 
     expect(usuario.id).toBe(idAtivo);
     expect(usuario.ativo).toBe(true);
+    expect(usuario.companyId).toBe(idEmpresa);
+    // VENDEDOR é o papel do Membership; a coluna User.papel deste usuário é
+    // ADMIN (ver comentário no beforeAll) — só passa se a origem for o vínculo.
+    expect(usuario.papel).toBe("VENDEDOR");
   });
 
   it("lança 'Não autenticado' quando não há sessão", async () => {
