@@ -79,17 +79,26 @@ depois como surpresa.
 
 ## 4. Arquitetura do programa
 
-### Os cinco ciclos
+### Os ciclos
 
 | Ciclo | Entrega | Depende de |
 | --- | --- | --- |
 | **0 — Fundação** | Repo copiado, Supabase migrado, app subindo, testes verdes, fila neutra | — |
 | **4 — Fluxos n8n** | Painel via API + editor em iframe | 0 |
-| **1 — Multi-empresa por baixo** | `Company`, `companyId`, escopo de query, RLS, emissão de JWT | 0 |
+| **1a — Tenancy** | `Company`, `Membership`, `companyId`, papel no vínculo, escopo obrigatório de query | 0 |
+| **1b — JWT e isolamento** | Emissão do JWT do Supabase pelo Auth.js, testes de isolamento entre empresas | 1a |
+| **1c — Config no banco** | Entidade, funil e marca saem de `config/client.ts` para tabela por empresa | 1a |
 | **2 — Conexões** | Tela de Conexões: Evolution (QR) **e WhatsApp oficial (Meta Cloud API)**, ciclo de vida, webhook por conexão | 1 |
 | **3 — Chat ao vivo** | Realtime na thread e na inbox | 1, melhor depois de 2 |
 
-### Ordem de execução: 0 → 4 → 1 → 2 → 3
+### Ordem de execução: 0 → 4 → 1a → 1b → 1c → 2 → 3
+
+O Ciclo 1 foi decomposto em 2026-08-19, depois de medir o tamanho real do
+que as decisões dele implicavam: 26 chamadas a `hasPermission`, 25 arquivos
+tocando `.papel`, 14 importando `config/client`. Três subsistemas
+independentes num ciclo só, e o mais arriscado deles — mover o papel é
+refatoração de autorização, e errar não dá erro de compilação, dá permissão
+errada em silêncio — merece revisão própria.
 
 O Ciclo 4 é o único totalmente independente dos outros e o mais visível, então
 sobe cedo sem custar dívida a ninguém.
