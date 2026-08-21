@@ -811,8 +811,8 @@ E, com a ferramenta MCP do Supabase, `list_tables` no projeto `uzumzfxjcxrbxaucv
 
 ```bash
 cd "d:/Projetos Programação/N8n + Crm"
-grep -oE '^[A-Z_]+=' .env | sort > /tmp/env-real.txt
-grep -oE '^[A-Z_]+=' .env.example | sort > /tmp/env-exemplo.txt
+grep -oE '^[A-Z0-9_]+=' .env | sort > /tmp/env-real.txt
+grep -oE '^[A-Z0-9_]+=' .env.example | sort > /tmp/env-exemplo.txt
 diff /tmp/env-exemplo.txt /tmp/env-real.txt
 ```
 
@@ -840,7 +840,7 @@ npm run typecheck
 
 Esperado: `tsc --noEmit` sem erro.
 
-- [ ] **Step 2: Suíte unitária completa**
+- [ ] **Step 2: Suíte unitária completa — agora com `.env` presente**
 
 ```bash
 cd "d:/Projetos Programação/N8n + Crm"
@@ -848,6 +848,16 @@ npm test
 ```
 
 Esperado: todos os arquivos de teste passando, incluindo os 4 de fila/turno/webhook que não foram editados na Task 3.
+
+**Este passo é diferente do que rodou na Task 2, e é o motivo de ele existir aqui.** Naquele momento não havia `.env`, e **28 arquivos de teste não coletavam nenhum teste** — `src/lib/env.ts` roda `envSchema.parse` em escopo de módulo e é importado por `src/lib/prisma.ts`, também em escopo de módulo, então qualquer arquivo que alcance o Prisma explode na importação sem as variáveis. A Task 2 rodou 677 testes em 94 arquivos com esse buraco, e foi provado (via `git stash`) que o buraco é pré-existente, não causado por ela.
+
+Com o `.env` da Task 4 no lugar, esses 28 arquivos precisam **coletar e passar**. Registre no relatório:
+
+- quantos arquivos coletaram agora, contra os 94 da Task 2
+- quantos testes rodaram agora, contra os 677 da Task 2
+- confirmação explícita de que os testes que exercitam `client.entidade.campos` (formulário de lead, export de leads, filtros de listagem) rodaram de verdade — eles estavam entre os bloqueados, então a troca de entidade da Task 2 **nunca foi exercitada pelos consumidores reais** até aqui
+
+Se algum dos 28 ainda não coletar com `.env` presente, isso é um achado: reporte qual arquivo e qual variável falta.
 
 - [ ] **Step 3: Build de produção**
 

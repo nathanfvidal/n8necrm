@@ -44,7 +44,14 @@ const evolutionDataSchema = z
     key: evolutionMessageKeySchema,
     message: evolutionMessageContentSchema,
     messageType: z.string().optional(),
-    pushName: z.string().optional(),
+    // `.max()` acrescentado na Fase 2 da auditoria de 2026-08-21 (achado menor
+    // do mesmo levantamento do SSRF). O webhook e um endpoint PUBLICO, e
+    // `pushName` e o nome de perfil que o REMETENTE escolhe: sem teto, ele
+    // decide o tamanho de `Conversation.nomeExibicao` e, por ele, de toda
+    // tela que lista conversa. 120 e folgado para nome de perfil de WhatsApp
+    // (o app limita bem abaixo disso) e fecha o campo como entrada de
+    // tamanho controlado por terceiro.
+    pushName: z.string().max(120).optional(),
     messageTimestamp: z.union([z.number(), z.string()]).optional(),
   })
   .passthrough();
@@ -71,6 +78,120 @@ const MAPA_TIPO: Record<string, TipoMensagemWhatsapp> = {
   documentWithCaptionMessage: "DOCUMENTO",
   stickerMessage: "STICKER",
 };
+
+/**
+ * Chaves de invólucro do Baileys — o conteúdo de verdade fica em
+ * `mensagem[chave].message`.
+ *
+ * Esta lista é cópia literal do `getFutureProofMessage` de
+ * `normalizeMessageContent`, em baileys 7.0.0-rc.9,
+ * `lib/Utils/messages.js:611-618` (o pacote foi baixado do npm e lido; é a
+ * versão exata que a Evolution 2.3.7 declara em `package.json:80`).
+ * A própria Evolution tem uma lista equivalente e MENOR em
+ * `src/api/types/wa.types.ts:146-151` (`MessageSubtype`: sem
+ * `viewOnceMessageV2Extension` e sem `editedMessage`) — seguimos a do Baileys,
+ * que é quem monta o objeto, não a da Evolution, que só o repassa.
+ *
+ * `documentWithCaptionMessage` aparece aqui E em `MAPA_TIPO`: a Evolution
+ * achata esse invólucro no NÍVEL RAIZ dentro de `prepareMessage`
+ * (`whatsapp.baileys.service.ts:4685-4689`), mas não dentro de outro invólucro
+ * — a entrada em `MAPA_TIPO` cobre o caso achatado e o desembrulho cobre o
+ * aninhado, inclusive extraindo a legenda, que hoje se perdia.
+ */
+const CHAVES_INVOLUCRO = [
+  "ephemeralMessage",
+  "viewOnceMessage",
+  "documentWithCaptionMessage",
+  "viewOnceMessageV2",
+  "viewOnceMessageV2Extension",
+  "editedMessage",
+] as const;
+
+/**
+ * Teto de desembrulho. Mesmo número do `normalizeMessageContent`
+ * (baileys 7.0.0-rc.9, `lib/Utils/messages.js:603`, cujo próprio comentário
+ * diz "set max iterations to prevent an infinite loop").
+ *
+ * Aqui o teto não é zelo estético: o corpo do webhook é dado de fora, e
+ * `evolutionMessageContentSchema` é um `z.record` — nada impede um POST
+ * forjado com mil invólucros aninhados. Laço com teto, nunca recursão sem
+ * limite. Caso 6 níveis: o payload sai como "OUTRO"/texto nulo, que é
+ * exatamente o comportamento de conteúdo que não sabemos ler.
+ */
+const TETO_INVOLUCRO = 5;
+
+/**
+ * Réplica do `getContentType` do Baileys (7.0.0-rc.9,
+ * `lib/Utils/messages.js:585-591`): primeira chave que seja `conversation` ou
+ * contenha `Message`, excluída `senderKeyDistributionMessage`.
+ *
+ * Só é chamada quando houve desembrulho, porque nesse caso o `messageType` que
+ * a Evolution mandou descreve o INVÓLUCRO, não o miolo — `prepareMessage`
+ * (`whatsapp.baileys.service.ts:4653`) calcula `contentType` sobre
+ * `message.message` cru, sem normalizar.
+ */
+function tipoDeConteudo(mensagem: Record<string, unknown>): string | undefined {
+  return Object.keys(mensagem).find(
+    (chave) =>
+      (chave === "conversation" || chave.includes("Message")) &&
+      chave !== "senderKeyDistributionMessage"
+  );
+}
+
+/**
+ * Devolve o miolo de uma mensagem embrulhada em `ephemeralMessage`,
+ * `viewOnceMessage*`, `documentWithCaptionMessage` ou `editedMessage`.
+ *
+ * ## Por que precisamos disto — o que foi MEDIDO e o que foi DEDUZIDO
+ *
+ * MEDIDO, lendo o fonte da tag `2.3.7` do repositório da Evolution API:
+ * `prepareMessage` (`src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts:4652`)
+ * monta o payload do webhook chamando `getContentType(message.message)` e
+ * copiando `{ ...message.message }` inteiro. `normalizeMessageContent` — a
+ * função do Baileys que existe exatamente para desfazer esses invólucros —
+ * tem ZERO ocorrências em todo o `src/` dessa tag (`grep -rn` sobre o
+ * tarball do tag, 0 linhas). Corroborando por outro caminho: a integração
+ * Chatwoot da própria Evolution desembrulha `ephemeralMessage` À MÃO antes de
+ * consumir a mensagem
+ * (`src/api/integrations/chatbot/chatwoot/services/chatwoot.service.ts:2002-2005`)
+ * — o que só faz sentido se o invólucro chega intacto no payload.
+ *
+ * DEDUZIDO daí, não reproduzido ao vivo (não há instância Evolution acessível
+ * neste ambiente — mesma limitação registrada no cabeçalho deste arquivo):
+ * num chat com mensagens temporárias ligadas, o `messageType` que chega a nós
+ * deve ser `"ephemeralMessage"` e o texto deve estar em
+ * `message.ephemeralMessage.message.conversation` (ou `.extendedTextMessage.text`).
+ * Sem desembrulhar, `MAPA_TIPO` cai em "OUTRO" e `extrairTexto` devolve null:
+ * o atendente veria mensagem vazia e `turno.ts` responderia com o fallback de
+ * mídia fora de escopo. A validação definitiva é um webhook real de um chat
+ * com mensagens temporárias — segue pendente.
+ *
+ * Invólucro sem `.message`, com `.message` não-objeto ou nulo: paramos e
+ * devolvemos o que temos, para o tipo cair em "OUTRO" em vez de lançar. O
+ * webhook não pode derrubar a rota por causa de um corpo estranho.
+ */
+function desembrulharMensagem(
+  message: Record<string, unknown> | undefined
+): Record<string, unknown> | undefined {
+  let atual = message;
+
+  for (let i = 0; i < TETO_INVOLUCRO; i += 1) {
+    if (!atual) return atual;
+
+    const chave = CHAVES_INVOLUCRO.find((candidata) => {
+      const valor = atual?.[candidata];
+      return typeof valor === "object" && valor !== null && !Array.isArray(valor);
+    });
+    if (!chave) return atual;
+
+    const interno = (atual[chave] as { message?: unknown }).message;
+    if (typeof interno !== "object" || interno === null || Array.isArray(interno)) return atual;
+
+    atual = interno as Record<string, unknown>;
+  }
+
+  return atual;
+}
 
 function extrairTexto(message: Record<string, unknown> | undefined): string | null {
   if (!message) return null;
@@ -115,11 +236,32 @@ export interface EvolutionGatewayConfig {
 }
 
 /**
- * Adapter da Evolution API (self-hosted). Não lê `process.env` diretamente —
- * recebe a configuração já validada pelo construtor, lida e validada em
- * `gateway/index.ts` (mesmo raciocínio de isolar a validação de env num só
- * lugar, mas aqui separado em dois arquivos: este contém só a lógica do
- * protocolo Evolution, testável sem nenhuma variável de ambiente definida).
+ * Substitui a apikey por `[apikey]` num texto vindo da Evolution.
+ *
+ * `split`/`join` em vez de `replace` com expressão regular: a apikey é dado de
+ * configuração e pode conter `.`, `+`, `$` ou barra invertida — caracteres que
+ * uma regex montada a partir dela interpretaria, produzindo uma redação que
+ * falha justamente nas chaves mais incomuns. Substituição literal não tem esse
+ * problema.
+ *
+ * `apiKey` vazia devolve o texto intacto: sem isso, `split("")` estilhaçaria
+ * a string caractere a caractere e o corpo do erro sairia como uma fileira de
+ * `[apikey]`. Há caso de teste para as três metades — a apikey ecoada, a chave
+ * com caractere de regex dentro, e a apikey vazia — em
+ * `tests/unit/whatsapp-evolution-gateway.test.ts`.
+ */
+function redigirApiKey(texto: string, apiKey: string): string {
+  if (apiKey.length === 0) return texto;
+  return texto.split(apiKey).join("[apikey]");
+}
+
+/**
+ * Adapter da Evolution API (self-hosted). Não lê `process.env` — nunca leu, e
+ * desde o Ciclo 2a não há o que ler: recebe `{ domain, instance, apiKey }`
+ * pelo construtor, e quem os resolve é `gateway/fabrica.ts`, a partir da linha
+ * de `WhatsappConnection` daquela empresa. Este arquivo contém só a lógica do
+ * protocolo Evolution, testável sem nenhuma variável de ambiente definida
+ * (`tests/unit/whatsapp-evolution-gateway.test.ts` constrói a classe direto).
  */
 export class EvolutionGateway implements WhatsappGateway {
   constructor(private readonly config: EvolutionGatewayConfig) {}
@@ -157,7 +299,28 @@ export class EvolutionGateway implements WhatsappGateway {
     // por grupo e responde publicamente dentro dele.
     if (key.remoteJid.endsWith("@g.us")) return [];
 
-    const tipo = MAPA_TIPO[messageType ?? "conversation"] ?? "OUTRO";
+    // Desembrulha ANTES de mapear o tipo e antes de extrair o texto: depois
+    // deste passo o miolo tem a mesma forma de uma mensagem sem invólucro, e
+    // o mapeamento e a extração que já existiam servem sem duplicação. Ver
+    // `desembrulharMensagem` para a evidência no fonte da Evolution 2.3.7.
+    const mensagem = desembrulharMensagem(message);
+
+    // Sem desembrulho (referência inalterada), o `messageType` da Evolution
+    // continua valendo e este caminho é o mesmo de antes desta correção — o
+    // describe "mensagens SEM invólucro seguem idênticas", em
+    // `tests/unit/whatsapp-evolution-gateway.test.ts`, é o que prende isso.
+    // Com desembrulho, aquele campo descreve o invólucro e precisa ser
+    // recalculado sobre o miolo; a chave vazia cai em "OUTRO" pelo `??`
+    // abaixo, que é o que queremos para miolo sem conteúdo reconhecível.
+    const chaveTipo =
+      mensagem === message
+        ? (messageType ?? "conversation")
+        : (tipoDeConteudo(mensagem ?? {}) ?? "");
+
+    // `?? "OUTRO"` é política deliberada e inalterada: tipo que não está no
+    // MAPA_TIPO vira "OUTRO", dentro ou fora de invólucro. O desembrulho é um
+    // passo A MAIS antes daqui, não uma mudança nessa regra.
+    const tipo = MAPA_TIPO[chaveTipo] ?? "OUTRO";
 
     return [
       {
@@ -165,7 +328,7 @@ export class EvolutionGateway implements WhatsappGateway {
         waId: waIdDoRemoteJid(key.remoteJid),
         nomeExibicao: pushName ?? null,
         tipo,
-        texto: extrairTexto(message),
+        texto: extrairTexto(mensagem),
         timestamp: extrairTimestamp(messageTimestamp),
       },
     ];
@@ -176,6 +339,21 @@ export class EvolutionGateway implements WhatsappGateway {
 
     const resposta = await fetch(url, {
       method: "POST",
+      // A OUTRA METADE da defesa de SSRF de `core/conexoes/destino.ts`.
+      //
+      // Lá, o destino gravado e conferido: HTTPS, host publico, nada de faixa
+      // interna. Aqui, a fuga classica que aquela conferencia nao alcanca — o
+      // host publico responde `302 Location: http://169.254.169.254/...` e o
+      // `fetch`, que segue redirecionamento por PADRAO, entrega a requisicao
+      // (e a apikey no header) ao endereco de metadados da nuvem. A validacao
+      // do que foi digitado nao tem como prever para onde o servidor do outro
+      // lado vai mandar depois.
+      //
+      // `"error"` e nao `"manual"`: a Evolution API v2 nao redireciona neste
+      // endpoint, entao um `302` aqui e anomalia — falhar alto e o
+      // comportamento certo, e nao seguir em silencio um destino que ninguem
+      // conferiu.
+      redirect: "error",
       headers: {
         "Content-Type": "application/json",
         apikey: this.config.apiKey,
@@ -188,8 +366,21 @@ export class EvolutionGateway implements WhatsappGateway {
 
     if (!resposta.ok) {
       const corpo = await resposta.text().catch(() => "");
+      // A apikey sai do corpo ANTES de virar mensagem. Uma API que recusa
+      // autenticação costuma devolver a credencial recebida, e esta mensagem
+      // vai para `console.error` e para o Sentry — onde fica fora do controle
+      // de quem opera o CRM, para sempre.
+      //
+      // A redação é aqui e não em `src/lib/sentry-scrub.ts` porque só ESTE
+      // objeto sabe qual é a apikey: o formato dela não é fixo, então nenhuma
+      // expressão regular a reconheceria sem redigir meio mundo junto. Isto é
+      // substituição exata; aquele arquivo cuida do que dá para reconhecer por
+      // forma (blob do cofre, chave base64, bcrypt, e-mail, telefone).
       throw new Error(
-        `Falha ao enviar mensagem via Evolution (HTTP ${resposta.status}): ${corpo.slice(0, 500)}`
+        `Falha ao enviar mensagem via Evolution (HTTP ${resposta.status}): ${redigirApiKey(
+          corpo.slice(0, 500),
+          this.config.apiKey
+        )}`
       );
     }
 

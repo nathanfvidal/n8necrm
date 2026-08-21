@@ -7,21 +7,191 @@
 // tropeçando em módulos do Node que `pg` puxa por baixo), não uma garantia.
 import "server-only";
 
-import { prisma } from "@/lib/prisma";
+import { prismaDaEmpresa } from "@/core/tenancy/escopo";
 import { registrarAuditoria } from "@/core/audit/log";
 import { validarCamposNovosDaTarefa } from "./schema";
-import type { Task } from "@prisma/client";
+import type { Prisma, Task } from "@prisma/client";
+
+/** O cliente já amarrado a uma empresa — o único caminho deste módulo ao banco. */
+type ClienteDaEmpresa = ReturnType<typeof prismaDaEmpresa>;
 
 /**
- * Confere que o contato existe antes de gravar — mesmo raciocínio da checagem
- * de `leadId` logo abaixo: sem isto, um id que não corresponde a contato
- * nenhum faria o Prisma estourar violação de FK crua (P2003), sem mensagem
- * acionável, e a pessoa leria "Falha ao salvar a tarefa".
+ * Carrega a tarefa DENTRO da empresa e aplica a regra de dono, num lugar só.
+ *
+ * As quatro funções de escrita por id (`concluir`, `editar`, `reabrir`,
+ * `excluir`) abriam com as mesmas três linhas — `findUnique` por id, `if (!task
+ * || task.responsavelId !== autorId) throw` — e a repetição era o risco: bastava
+ * uma quinta função futura copiar duas das três. Agora são duas travas
+ * INDEPENDENTES num ponto só:
+ *
+ * - o ESCOPO recusa tarefa de outra empresa (o `companyId` entra pelo cliente,
+ *   ninguém o escreve);
+ * - a regra de DONO recusa tarefa de outra pessoa.
+ *
+ * A segunda escondia a falta da primeira no caso comum, porque quase toda
+ * tarefa de outra empresa também é de outra pessoa. O caso que as separa —
+ * tarefa da empresa B cujo dono tem vínculo TAMBÉM na A — está em
+ * `tests/unit/task-isolamento.test.ts`, fabricado de propósito.
+ *
+ * `findFirst` e não `findUnique`: o escopo recusa `findUnique` em modelo de
+ * tenant (ver "Recusa, lançando" em `core/tenancy/escopo.ts`).
+ *
+ * A mensagem é a MESMA para os três desfechos — não existe, não é sua, não é
+ * desta empresa — pelo motivo de sempre: distinguir confirmaria, a quem sonda
+ * ids, que aquele cuid pertence a alguém.
  */
-async function exigirContatoExistente(contactId: string): Promise<void> {
-  const contato = await prisma.contact.findUnique({ where: { id: contactId } });
+async function tarefaMinhaNestaEmpresa(
+  db: ClienteDaEmpresa,
+  taskId: string,
+  autorId: string
+): Promise<Task> {
+  const task = await db.task.findFirst({ where: { id: taskId } });
+  if (!task || task.responsavelId !== autorId) {
+    throw new Error("Tarefa não encontrada");
+  }
+  return task;
+}
+
+/**
+ * Grava numa tarefa que a checagem acima já validou, e devolve a linha nova.
+ *
+ * `updateManyAndReturn` e não `update`: o escopo recusa `update` em modelo de
+ * tenant, porque o `where` dela só aceita campo único e não há onde pendurar o
+ * `companyId` (ver "Recusa, lançando" em `core/tenancy/escopo.ts`). Mesmo
+ * padrão de `atualizarLeadEscopado` (`core/leads/service.ts`) e
+ * `atualizarEtapaEscopada` (`core/pipeline/service.ts`).
+ *
+ * O `if (!depois)` não é zelo: `updateManyAndReturn` devolve lista vazia quando
+ * nada casa, em vez de lançar como `update` fazia. Sem ele, uma tarefa apagada
+ * entre a leitura e a escrita viraria `undefined` devolvido como `Task` — o
+ * erro apareceria três camadas adiante, sem dizer o que aconteceu.
+ */
+async function gravarNaTarefa(
+  db: ClienteDaEmpresa,
+  taskId: string,
+  data: Prisma.TaskUncheckedUpdateManyInput
+): Promise<Task> {
+  const [depois] = await db.task.updateManyAndReturn({ where: { id: taskId }, data });
+
+  if (!depois) {
+    throw new Error(
+      `Tarefa não encontrada ao gravar: "${taskId}" não está mais no escopo desta empresa.`
+    );
+  }
+
+  return depois;
+}
+
+/**
+ * Confere que o contato existe **E é da empresa da tarefa** antes de gravar o
+ * vínculo. Irmã de `exigirLeadDaEmpresa` (logo abaixo) em tudo — inclusive em
+ * por que ela existe.
+ *
+ * Sem a checagem de EXISTÊNCIA, um id que não corresponde a contato nenhum
+ * faria o Prisma estourar violação de FK crua (P2003), sem mensagem acionável,
+ * e a pessoa leria "Falha ao salvar a tarefa".
+ *
+ * Sem a checagem de EMPRESA — que é como esta função nasceu, sob o nome
+ * `exigirContatoExistente` —, `Task.contactId` da empresa A podia apontar para
+ * `Contact` da B. `contactId` chega de `criarMinhaTaskAction`/`editarTaskAction`
+ * (`actions.ts`), que são Server Actions, e Server Action é endpoint HTTP
+ * público: o id é forjável e o seletor da tela não é a fronteira. O efeito
+ * visível era a lista de `/tasks` mostrando o NOME de um contato de outro
+ * cliente (`listarTasksComLead`, `queries.ts`, traz o contato junto).
+ *
+ * Ficou aberta de propósito quando `exigirLeadDaEmpresa` foi fechada
+ * (`da2a402`): o dono do projeto pediu a contagem completa dos defeitos de
+ * tenancy antes de decidir quantos corrigir. A decisão veio em 2026-08-20, e a
+ * cura é a mesma linha — `companyId` no `where`, com a empresa vindo das
+ * mesmas duas origens já medidas para o lead (`companyIdDoUsuario(
+ * responsavelId)` ao criar, `task.companyId` ao editar).
+ *
+ * A mensagem é a MESMA de "não existe", palavra por palavra, pelos dois
+ * motivos de sempre: não confirmar a quem sonda ids que aquele cuid pertence a
+ * alguém, e porque `actions.ts` a reconhece por prefixo
+ * (`MENSAGENS_MELHORADAS`, `/^Contato não encontrado/`) para trocá-la por
+ * "Esse contato não existe mais. Atualize a página."
+ *
+ * O `companyId` explícito no `where` sumiu no Ciclo 1d, e a garantia NÃO sumiu
+ * com ele: quem o injeta agora é `prismaDaEmpresa`. A diferença é quem responde
+ * por ela — antes, quem escrevesse a linha lembrar; hoje, o cliente. Foi
+ * justamente esquecer de escrevê-la que abriu este defeito e os cinco irmãos.
+ */
+async function exigirContatoDaEmpresa(db: ClienteDaEmpresa, contactId: string): Promise<void> {
+  const contato = await db.contact.findFirst({
+    where: { id: contactId },
+    select: { id: true },
+  });
   if (!contato) {
     throw new Error(`Contato não encontrado: "${contactId}" não corresponde a nenhum contato.`);
+  }
+}
+
+/**
+ * Confere que o lead existe **E é da empresa da tarefa** antes de gravar o
+ * vínculo.
+ *
+ * ## O vazamento que criou esta função
+ *
+ * `criarTask` e `editarTask` faziam
+ * `prisma.lead.findUnique({ where: { id: input.leadId } })` com um
+ * `if (!lead) throw` — só EXISTÊNCIA, nunca empresa. `leadId` chega de
+ * `criarMinhaTaskAction`/`editarTaskAction` (`actions.ts`), que são Server
+ * Actions, e Server Action é endpoint HTTP público: o id é forjável e o
+ * `<select>` da tela não é a fronteira. Uma Task da empresa A nascia (ou era
+ * reapontada) para um Lead da B, e daí em diante `/leads/[id]` da B passava a
+ * listar tarefa de fora (`listarTasksPendentesDoLead`, `queries.ts`) e o
+ * título dela — escrito por alguém de outra empresa — aparecia na tela.
+ *
+ * É a QUARTA vez que esta família aparece no Ciclo 1a, sempre com a mesma
+ * forma — "valida que EXISTE, nunca que é da mesma empresa":
+ *
+ * 1. `core/audit/alerta.ts`, destinatários do alerta de rajada (3744e64)
+ * 2. `src/modules/whatsapp/notificacoes.ts`, fan-out do aviso (63cecd2)
+ * 3. `core/leads/service.ts`, responsável do lead, três pontos (6dfb325)
+ * 4. este arquivo
+ *
+ * ## Por que `where` com `companyId` à mão, e não o cliente escopado
+ *
+ * Porque `tasks/` ainda está na exceção do lint (`eslint.config.mjs`) e a
+ * conversão para `prismaDaEmpresa` é do próximo ciclo — converter só esta
+ * função deixaria o arquivo com dois caminhos de acesso ao banco, que é pior
+ * que um caminho consistente e anotado. É exatamente a forma que
+ * `core/audit/alerta.ts` e `src/modules/whatsapp/notificacoes.ts` já usam:
+ * `prisma` cru com `companyId` explícito no `where`, vindo de uma origem sã.
+ * Quando `tasks/` for convertido, isto vira `db.lead.findFirst({ where: { id } })`
+ * e o filtro passa a ser injetado.
+ *
+ * ## De onde vem `companyId` (medido, não presumido)
+ *
+ * - `criarTask`: `companyIdDoUsuario(input.responsavelId)` — o MESMO valor que
+ *   já era gravado em `Task.companyId` logo abaixo. Não há origem nova aqui: a
+ *   chamada só subiu de lugar. `responsavelId` nunca vem do cliente, é sempre
+ *   `usuarioAtual().id` (ver `criarMinhaTaskAction`).
+ * - `editarTask`: `task.companyId` — a linha já está em mãos e já passou pela
+ *   regra de dono (`task.responsavelId === input.autorId`), então é a origem
+ *   mais precisa E a mais barata (nenhuma consulta extra). Não é "a empresa do
+ *   primeiro vínculo de quem age": é a empresa da PRÓPRIA tarefa que está
+ *   sendo editada, que é a invariante que interessa — `Task.leadId` só pode
+ *   apontar para Lead da mesma empresa da Task.
+ *
+ * ## A mensagem é a MESMA de "não existe"
+ *
+ * De propósito, e preservada palavra por palavra. Distinguir "não existe" de
+ * "existe, mas é de outra empresa" confirmaria, a quem sonda ids, que aquele
+ * cuid pertence a alguém. Mesmo raciocínio de `concluirTask` (abaixo) e de
+ * `responsavelDaEmpresa` (`core/leads/service.ts`). O texto importa também
+ * porque `actions.ts` o reconhece por prefixo (`MENSAGENS_MELHORADAS`,
+ * `/^Lead não encontrado/`) para trocá-lo por "Esse lead não existe mais.
+ * Atualize a página."
+ */
+async function exigirLeadDaEmpresa(db: ClienteDaEmpresa, leadId: string): Promise<void> {
+  const lead = await db.lead.findFirst({
+    where: { id: leadId },
+    select: { id: true },
+  });
+  if (!lead) {
+    throw new Error(`Lead não encontrado: "${leadId}" não corresponde a nenhum lead.`);
   }
 }
 
@@ -47,13 +217,16 @@ async function exigirContatoExistente(contactId: string): Promise<void> {
  * linha de defesa contra um `Date` inválido chegando por qualquer outro
  * caminho (um teste, uma chamada direta fora do formulário).
  *
- * `leadId`, quando informado, é conferido contra `Lead` antes de gravar:
- * sem isso, um id que não corresponde a nenhum lead faria o
+ * `leadId`, quando informado, é conferido contra `Lead` **da mesma empresa**
+ * antes de gravar (ver `exigirLeadDaEmpresa` acima): sem a checagem de
+ * existência, um id que não corresponde a nenhum lead faria o
  * `prisma.task.create` abaixo estourar uma violação de FK crua (P2003), sem
  * mensagem acionável — mesmo raciocínio de `moverEtapa`
- * (`leads/service.ts`) ao validar `novaStageId` antes de escrever.
+ * (`leads/service.ts`) ao validar `novaStageId` antes de escrever; sem a
+ * checagem de EMPRESA, a tarefa nascia pendurada no lead de outro cliente.
  */
 export async function criarTask(input: {
+  companyId: string;
   titulo: string;
   descricao?: string;
   vencimento: Date;
@@ -70,11 +243,20 @@ export async function criarTask(input: {
     throw new Error("Vencimento inválido: informe uma data válida.");
   }
 
+  // `Task.companyId` é `NOT NULL` desde a Task 1 do Ciclo 1a, e desde o Ciclo
+  // 1d a empresa CHEGA por parâmetro em vez de ser deduzida aqui dentro.
+  //
+  // A dedução era `companyIdDoUsuario(input.responsavelId)`, um
+  // `findFirstOrThrow` sobre `Membership` que pega um vínculo ARBITRÁRIO de
+  // quem tem mais de um. `criarMinhaTaskAction` (`actions.ts`) já tem a
+  // resposta certa e sem ambiguidade — `usuarioAtual().companyId`, a empresa da
+  // SESSÃO —, e passá-la troca uma consulta extra por conhecimento que já
+  // existia. É a mesma correção que `leads`, `pipeline`, `contacts` e
+  // `whatsapp` já receberam neste ciclo.
+  const db = prismaDaEmpresa(input.companyId);
+
   if (input.leadId) {
-    const lead = await prisma.lead.findUnique({ where: { id: input.leadId } });
-    if (!lead) {
-      throw new Error(`Lead não encontrado: "${input.leadId}" não corresponde a nenhum lead.`);
-    }
+    await exigirLeadDaEmpresa(db, input.leadId);
   }
 
   // Apara ANTES de validar: senão um texto no limite exato reprovaria por
@@ -85,11 +267,14 @@ export async function criarTask(input: {
   });
 
   if (contactId) {
-    await exigirContatoExistente(contactId);
+    // Mesmo cliente escopado que já conferiu o `leadId` acima — nenhuma origem
+    // nova de empresa, e nenhuma chance de as duas checagens divergirem.
+    await exigirContatoDaEmpresa(db, contactId);
   }
 
-  return prisma.task.create({
+  return db.task.create({
     data: {
+      companyId: input.companyId,
       titulo,
       descricao: descricao || undefined,
       vencimento: input.vencimento,
@@ -131,16 +316,15 @@ export async function criarTask(input: {
  * a quem está adivinhando ids, que aquele id específico pertence a
  * alguém — mesmo sem revelar a quem.
  */
-export async function concluirTask(input: { taskId: string; autorId: string }): Promise<Task> {
-  const task = await prisma.task.findUnique({ where: { id: input.taskId } });
-  if (!task || task.responsavelId !== input.autorId) {
-    throw new Error("Tarefa não encontrada");
-  }
+export async function concluirTask(input: {
+  companyId: string;
+  taskId: string;
+  autorId: string;
+}): Promise<Task> {
+  const db = prismaDaEmpresa(input.companyId);
+  await tarefaMinhaNestaEmpresa(db, input.taskId, input.autorId);
 
-  return prisma.task.update({
-    where: { id: input.taskId },
-    data: { concluidaEm: new Date() },
-  });
+  return gravarNaTarefa(db, input.taskId, { concluidaEm: new Date() });
 }
 
 /**
@@ -156,6 +340,7 @@ export async function concluirTask(input: { taskId: string; autorId: string }): 
  * coisas diferentes aqui.
  */
 export async function editarTask(input: {
+  companyId: string;
   taskId: string;
   titulo: string;
   descricao?: string;
@@ -164,10 +349,8 @@ export async function editarTask(input: {
   contactId?: string | null;
   autorId: string;
 }): Promise<Task> {
-  const task = await prisma.task.findUnique({ where: { id: input.taskId } });
-  if (!task || task.responsavelId !== input.autorId) {
-    throw new Error("Tarefa não encontrada");
-  }
+  const db = prismaDaEmpresa(input.companyId);
+  await tarefaMinhaNestaEmpresa(db, input.taskId, input.autorId);
 
   const titulo = input.titulo.trim();
   if (!titulo) {
@@ -177,10 +360,13 @@ export async function editarTask(input: {
     throw new Error("Vencimento inválido: informe uma data válida.");
   }
   if (input.leadId) {
-    const lead = await prisma.lead.findUnique({ where: { id: input.leadId } });
-    if (!lead) {
-      throw new Error(`Lead não encontrado: "${input.leadId}" não corresponde a nenhum lead.`);
-    }
+    // A invariante continua sendo "`Task.leadId` aponta para Lead da MESMA
+    // empresa da Task", e ela continua garantida — por outro caminho. Antes era
+    // `task.companyId`, lido da linha; agora é o cliente escopado, e a tarefa só
+    // chegou até aqui porque ESTÁ nessa empresa (`tarefaMinhaNestaEmpresa`
+    // acima recusaria qualquer outra). As duas checagens não têm mais como
+    // divergir, porque não há mais duas origens.
+    await exigirLeadDaEmpresa(db, input.leadId);
   }
 
   const { descricao, contactId } = validarCamposNovosDaTarefa({
@@ -189,12 +375,11 @@ export async function editarTask(input: {
   });
 
   if (contactId) {
-    await exigirContatoExistente(contactId);
+    // Mesmo raciocínio do `leadId` acima.
+    await exigirContatoDaEmpresa(db, contactId);
   }
 
-  return prisma.task.update({
-    where: { id: input.taskId },
-    data: {
+  return gravarNaTarefa(db, input.taskId, {
       titulo,
       // `null` e não `undefined`: apagar a descrição precisa GRAVAR a
       // ausência. `undefined` faria o Prisma omitir o campo do UPDATE e a
@@ -207,7 +392,6 @@ export async function editarTask(input: {
       // `null` quer dizer "tire o vínculo". Colapsar os dois faria toda
       // edição de título apagar o contato da tarefa sem ninguém pedir.
       ...(input.contactId === undefined ? {} : { contactId: input.contactId }),
-    },
   });
 }
 
@@ -228,16 +412,15 @@ export async function editarTask(input: {
  * abertas, dois cliques — o segundo não pode virar mensagem de falha para uma
  * ação cujo efeito desejado já está no lugar.
  */
-export async function reabrirTask(input: { taskId: string; autorId: string }): Promise<Task> {
-  const task = await prisma.task.findUnique({ where: { id: input.taskId } });
-  if (!task || task.responsavelId !== input.autorId) {
-    throw new Error("Tarefa não encontrada");
-  }
+export async function reabrirTask(input: {
+  companyId: string;
+  taskId: string;
+  autorId: string;
+}): Promise<Task> {
+  const db = prismaDaEmpresa(input.companyId);
+  await tarefaMinhaNestaEmpresa(db, input.taskId, input.autorId);
 
-  return prisma.task.update({
-    where: { id: input.taskId },
-    data: { concluidaEm: null },
-  });
+  return gravarNaTarefa(db, input.taskId, { concluidaEm: null });
 }
 
 /**
@@ -257,15 +440,23 @@ export async function reabrirTask(input: { taskId: string; autorId: string }): P
  * A auditoria vem DEPOIS do delete, de propósito: se o DELETE falhar, não
  * fica registro de uma exclusão que não aconteceu.
  */
-export async function excluirTask(input: { taskId: string; autorId: string }): Promise<void> {
-  const task = await prisma.task.findUnique({ where: { id: input.taskId } });
-  if (!task || task.responsavelId !== input.autorId) {
-    throw new Error("Tarefa não encontrada");
-  }
+export async function excluirTask(input: {
+  companyId: string;
+  taskId: string;
+  autorId: string;
+}): Promise<void> {
+  const db = prismaDaEmpresa(input.companyId);
+  const task = await tarefaMinhaNestaEmpresa(db, input.taskId, input.autorId);
 
-  await prisma.task.delete({ where: { id: input.taskId } });
+  // `deleteMany` e não `delete`: o escopo recusa `delete` em modelo de tenant,
+  // e a recusa é o ponto — o `where` de `delete` só aceita campo único, então
+  // o id sozinho alcançaria a linha de qualquer empresa.
+  await db.task.deleteMany({ where: { id: input.taskId } });
 
   await registrarAuditoria({
+    // A empresa da TAREFA, lida da linha já carregada — não o vínculo do autor.
+    // Ver `ParamsDeAuditoria.companyId` em `core/audit/log.ts`.
+    companyId: task.companyId,
     userId: input.autorId,
     acao: "excluir_task",
     entidade: "Task",
@@ -289,8 +480,11 @@ export async function excluirTask(input: { taskId: string; autorId: string }): P
  * `listarTasksPendentesDoLade` (`queries.ts`), que são sempre escopadas ao
  * usuário da sessão — mesmo raciocínio de dono de `concluirTask` acima.
  */
-export async function listarTasksPendentes(responsavelId?: string): Promise<Task[]> {
-  return prisma.task.findMany({
+export async function listarTasksPendentes(
+  companyId: string,
+  responsavelId?: string
+): Promise<Task[]> {
+  return prismaDaEmpresa(companyId).task.findMany({
     where: {
       concluidaEm: null,
       ...(responsavelId ? { responsavelId } : {}),

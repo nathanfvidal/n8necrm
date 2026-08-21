@@ -1,118 +1,122 @@
-// Fix round 1/5, achado CRÍTICO do revisor (C2): "Your own test at
-// whatsapp-turno.test.ts:198 only shows this working because publicarTurno
-// is mocked there." Este arquivo testa `publicarTurno` DE VERDADE (não
-// mockado) — só o limite externo real (`send` de `@vercel/queue`) é
-// mockado, com uma simulação FIEL do comportamento de deduplicação por
-// idempotencyKey documentado pela Vercel (mesma chave dentro da janela de
-// dedupe → rejeitada com DuplicateMessageError) — não um mock "burro" que
-// simplesmente nunca lança.
+// Este arquivo testa `publicarTurno` DE VERDADE (não mockado) — só o limite
+// externo é simulado. Ele nasceu do achado CRÍTICO do revisor (C2, fix round
+// 1/5): "Your own test at whatsapp-turno.test.ts:198 only shows this working
+// because publicarTurno is mocked there."
+//
+// Até o Ciclo 2d o limite externo era `send` de `@vercel/queue`, e a simulação
+// era FIEL à dedupe por `idempotencyKey` documentada pela Vercel: mesma chave
+// dentro da janela → `DuplicateMessageError`. Hoje o limite é o adaptador de
+// Postgres, e a dedupe virou `@@unique([companyId, chaveIdempotencia])` +
+// `createMany({ skipDuplicates: true })` — que **não lança**.
+//
+// O que se testa aqui e o que NÃO se testa mais aqui, dito em voz alta: a FORMA
+// da chave de idempotência deixou de ser responsabilidade deste arquivo, porque
+// deixou de ser responsabilidade de `fila/index.ts` — ela mora em
+// `fila/postgres.ts#chaveIdempotencia` e tem cobertura contra o Postgres real em
+// `tests/unit/fila-postgres.test.ts` (bloco da dedupe). O que sobra aqui, e é o
+// motivo do arquivo existir, é a COSTURA: que `publicarTurno` de verdade
+// entrega ao adaptador o job e as opções intactos, sem mexer no caminho, e que
+// republicar não lança.
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("server-only", () => ({}));
 
-// Simulação do serviço real: mantém um Set de idempotencyKeys já vistas
-// (mesmo espírito da "janela de dedupe" documentada pela Vercel — aqui sem
-// expiração, o bastante para o escopo deste teste) e rejeita repetição
-// exatamente como o serviço real faria.
-class DuplicateMessageErrorFake extends Error {
-  constructor(
-    message: string,
-    public readonly idempotencyKey?: string
-  ) {
-    super(message);
-    this.name = "DuplicateMessageError";
-  }
-}
+import type { OpcoesPublicacao, TurnoJob } from "../../src/modules/whatsapp/fila/tipos";
 
-interface OpcoesSendFake {
-  idempotencyKey?: string;
-  delaySeconds?: number;
-}
-
-const chavesVistas = new Set<string>();
-const sendMock = vi.fn(async (_topico: string, _payload: unknown, opcoes?: OpcoesSendFake) => {
-  const chave = opcoes?.idempotencyKey;
-  if (chave) {
-    if (chavesVistas.has(chave)) {
-      throw new DuplicateMessageErrorFake(`Duplicate message: ${chave}`, chave);
-    }
-    chavesVistas.add(chave);
-  }
-  return { messageId: `msg-${chavesVistas.size}` };
-});
-
-vi.mock("@vercel/queue", () => ({
-  send: (...args: [string, unknown, OpcoesSendFake?]) => sendMock(...args),
-  DuplicateMessageError: DuplicateMessageErrorFake,
+const publicarMock = vi.fn(async (_job: TurnoJob, _opcoes?: OpcoesPublicacao) => {});
+vi.mock("@/modules/whatsapp/fila/postgres", () => ({
+  FilaPostgres: class {
+    publicar = publicarMock;
+  },
 }));
-
-process.env.WHATSAPP_QUEUE_SECRET = "segredo-teste-fila";
 
 const { publicarTurno } = await import("../../src/modules/whatsapp/fila");
 
-describe("publicarTurno — idempotencyKey por tentativa de reagendamento (fix round 1/5, C2)", () => {
+describe("publicarTurno — a costura entre o módulo e o adaptador", () => {
   beforeEach(() => {
-    sendMock.mockClear();
-    chavesVistas.clear();
+    publicarMock.mockClear();
   });
 
-  it("a publicação original (sem tentativaReagendamento) usa a chave ${conversationId}:${seq}", async () => {
-    await publicarTurno({ conversationId: "conv-1", seq: 3 });
+  it("a publicação original chega ao adaptador com o job intacto e SEM opções", async () => {
+    // Sem opções, e não `{ delaySeconds: undefined }`: o padrão de 8s é do
+    // adaptador (`DELAY_PADRAO_SEGUNDOS`), e `publicarTurno` não pode inventar
+    // um valor no meio do caminho. O Vitest IGNORA chave de valor `undefined`
+    // mesmo em `toHaveBeenCalledWith` exato, então a asserção precisa olhar o
+    // argumento em si para acusar a diferença.
+    await publicarTurno({ companyId: "empresa-1", conversationId: "conv-1", seq: 3 });
 
-    expect(sendMock).toHaveBeenCalledTimes(1);
-    const opcoes = sendMock.mock.calls[0]?.[2];
-    expect(opcoes?.idempotencyKey).toBe("conv-1:3");
-    expect(opcoes?.delaySeconds).toBe(8);
+    expect(publicarMock).toHaveBeenCalledTimes(1);
+    const [job, opcoes] = publicarMock.mock.calls[0]!;
+    expect(job).toEqual({ companyId: "empresa-1", conversationId: "conv-1", seq: 3 });
+    expect(opcoes).toBeUndefined();
   });
 
-  it("cada reagendamento usa uma chave DIFERENTE, sufixada pelo número da tentativa", async () => {
-    await publicarTurno({ conversationId: "conv-2", seq: 5, tentativaReagendamento: 1 }, { delaySeconds: 5 });
-    await publicarTurno({ conversationId: "conv-2", seq: 5, tentativaReagendamento: 2 }, { delaySeconds: 5 });
-    await publicarTurno({ conversationId: "conv-2", seq: 5, tentativaReagendamento: 3 }, { delaySeconds: 5 });
+  it("cada reagendamento chega com a própria tentativa e o delay de 5s", async () => {
+    // O que a chave por tentativa protegia (achado C2) começa AQUI: se
+    // `tentativaReagendamento` não chegasse ao adaptador, a chave dele seria a
+    // da publicação original em toda tentativa, e o reagendamento por lease
+    // ocupado voltaria a ser no-op.
+    for (const tentativa of [1, 2, 3]) {
+      await publicarTurno(
+        { companyId: "empresa-1", conversationId: "conv-2", seq: 5, tentativaReagendamento: tentativa },
+        { delaySeconds: 5 }
+      );
+    }
 
-    expect(sendMock).toHaveBeenCalledTimes(3);
-    const chaves = sendMock.mock.calls.map((chamada) => chamada[2]?.idempotencyKey);
-    expect(chaves).toEqual(["conv-2:5:r1", "conv-2:5:r2", "conv-2:5:r3"]);
-    // As três são de fato distintas -- nenhuma colisão.
-    expect(new Set(chaves).size).toBe(3);
+    expect(publicarMock).toHaveBeenCalledTimes(3);
+    expect(publicarMock.mock.calls.map(([job]) => job.tentativaReagendamento)).toEqual([1, 2, 3]);
+    expect(publicarMock.mock.calls.map(([, opcoes]) => opcoes?.delaySeconds)).toEqual([5, 5, 5]);
   });
 
   it(
-    "reproduz e prova o fix do achado CRÍTICO do revisor (C2): publicar a mesma mensagem original " +
-      "seguida por reagendamentos sucessivos (simulando o loop real de turno.ts quando o lease fica " +
-      "ocupado repetidas vezes) NÃO lança — cada tentativa usa uma chave própria",
+    "o loop real de turno.ts (original + 5 reagendamentos por lease ocupado) NÃO lança, " +
+      "e cada volta vira uma publicação distinta",
     async () => {
-      const job = { conversationId: "conv-3", seq: 7 };
+      const job = { companyId: "empresa-1", conversationId: "conv-3", seq: 7 };
 
       // Publicação original (ingest.ts).
       await expect(publicarTurno(job)).resolves.toBeUndefined();
 
-      // Sucessivos reagendamentos por lease ocupado -- exatamente o que
-      // processarTurno faz a cada vez que claimLease falha.
+      // Sucessivos reagendamentos por lease ocupado — exatamente o que
+      // `processarTurno` faz a cada vez que `claimLease` falha.
       for (let tentativa = 1; tentativa <= 5; tentativa++) {
         await expect(
           publicarTurno({ ...job, tentativaReagendamento: tentativa }, { delaySeconds: 5 })
         ).resolves.toBeUndefined();
       }
 
-      expect(sendMock).toHaveBeenCalledTimes(6); // original + 5 reagendamentos, nenhum rejeitado
+      expect(publicarMock).toHaveBeenCalledTimes(6);
     }
   );
 
   it(
-    "CONTRASTE — prova de que o bug era real: reusar a MESMA idempotencyKey da publicação original " +
-      "para um reagendamento (o comportamento ANTES deste fix) É rejeitado pelo serviço, confirmando que " +
-      "a mudança para uma chave por tentativa era necessária, não cosmética",
+    "CONTRASTE — o desfecho da duplicata MUDOU de provedor, e o chamador não vê a mudança: " +
+      "republicar o MESMO job (o que o código antigo fazia ao reagendar sem sufixo) resolve, " +
+      "em vez de rejeitar com DuplicateMessageError",
     async () => {
-      const job = { conversationId: "conv-4", seq: 9 };
-      await publicarTurno(job); // registra a chave "conv-4:9"
+      const job = { companyId: "empresa-1", conversationId: "conv-4", seq: 9 };
 
-      // Simula literalmente o que o código ANTIGO fazia: reenviar com a
-      // MESMA chave (sem tentativaReagendamento, como o reagendamento
-      // antigo reusava o job original intacto).
-      await expect(sendMock("whatsapp-turn", job, { idempotencyKey: "conv-4:9" })).rejects.toThrow(
-        /Duplicate message/
-      );
+      await expect(publicarTurno(job)).resolves.toBeUndefined();
+      await expect(publicarTurno(job)).resolves.toBeUndefined();
+
+      // As duas chegaram ao adaptador: quem decide que a segunda é no-op é o
+      // `skipDuplicates` dele, não este módulo. É a diferença de desenho contra
+      // a Vercel — lá a rejeição subia até aqui e os dois chamadores de
+      // `publicarTurno` precisavam traduzi-la para "tudo bem".
+      expect(publicarMock).toHaveBeenCalledTimes(2);
     }
   );
+
+  it("a instância do adaptador é construída UMA vez, e só na primeira publicação", async () => {
+    // A construção preguiçosa é o que impede `next build` de instanciar o
+    // adaptador só por alcançar o módulo (`gateway/index.ts` derrubou o build
+    // deste projeto exatamente assim). O contrário — memoizar errado e
+    // construir um adaptador por publicação — abriria uma conexão por job.
+    const { publicarTurno: publicar } = await import("../../src/modules/whatsapp/fila");
+    await publicar({ companyId: "empresa-1", conversationId: "conv-5", seq: 1 });
+    await publicar({ companyId: "empresa-1", conversationId: "conv-5", seq: 2 });
+
+    const instancias = new Set(publicarMock.mock.instances);
+    expect(instancias.size).toBe(1);
+  });
 });

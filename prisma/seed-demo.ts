@@ -27,13 +27,12 @@
 // funções produzem, para que os dados de demo sejam indistinguíveis de dados
 // criados por um usuário real através da UI.
 //
-// NB (achado, fora do escopo desta task): este mesmo problema já afeta
-// `prisma/seed.ts` hoje — `npx prisma db seed` falha na importação de
-// `@/lib/prisma` pelo motivo acima (reproduzido durante este trabalho). Os
-// testes de `seed.ts` nunca pegam isso porque rodam sob Vitest, que mocka
-// "server-only" globalmente por arquivo. Não mexo em `seed.ts` nem em
-// `prisma.config.ts` aqui — está fora do pedido desta task ("não mude o que
-// `npx prisma db seed` faz") — mas registro o achado no relatório.
+// `prisma/seed.ts` tinha o mesmo problema (`npx prisma db seed` falhava na
+// importação de `@/lib/prisma` pelo motivo acima) — já corrigido, sem tocar
+// neste arquivo: `prisma.config.ts` roda o seed com
+// `tsx --conditions=react-server`, que faz `"server-only"` resolver para o
+// no-op da condição "react-server" em vez de lançar. Ver o comentário em
+// `prisma.config.ts` para o detalhe completo.
 import "dotenv/config";
 
 import { PrismaClient, Prisma } from "@prisma/client";
@@ -64,8 +63,11 @@ export const prisma = new PrismaClient({ adapter });
 // `119555*`, `119666*`, `119444*`, `119222*`, além do prefixo `1199999000{0-3}`
 // do próprio seed base) e limpa por `startsWith`/`in` sobre esse valor. Uma
 // coluna `isDemo` seria mais uma forma de fazer a mesma coisa, divergindo da
-// convenção já estabelecida sem ganhar precisão nenhuma — `Contact.telefone`
-// já é único e já é a chave de dedupe natural do domínio (spec §2.3), então
+// convenção já estabelecida sem ganhar precisão nenhuma — o telefone já é
+// único DENTRO da empresa (`@@unique([companyId, telefone])`, Ciclo 1e; era
+// `@unique` global quando esta convenção nasceu, e a mudança não a afeta
+// porque seed e testes gravam na mesma empresa) e já é a chave de dedupe
+// natural do domínio (spec §2.3), então
 // reservar uma faixa dela é, literalmente, o mesmo mecanismo que todo o resto
 // da suíte usa, aplicado a dados de demo em vez de dados de teste.
 //
@@ -207,13 +209,22 @@ const TAREFAS_DEMO: Array<{ leadIndex: number; titulo: string; diasVencimento: n
 // (ver comentário no topo do arquivo sobre por que não importamos
 // src/core/**/*.ts diretamente aqui)
 
-async function encontrarOuCriarContactDemo(nome: string, telefone: string): Promise<Contact> {
-  const existente = await prisma.contact.findUnique({ where: { telefone } });
+async function encontrarOuCriarContactDemo(
+  companyId: string,
+  nome: string,
+  telefone: string
+): Promise<Contact> {
+  // `findFirst` com as duas colunas, e não `findUnique({ where: { telefone } })`:
+  // desde o Ciclo 1e a unicidade é `[companyId, telefone]`, e buscar só pelo
+  // telefone devolveria o contato de outra empresa se um dia existir uma
+  // segunda — que é exatamente o estado que aquele ciclo tornou possível.
+  const existente = await prisma.contact.findFirst({ where: { companyId, telefone } });
   if (existente) return existente;
-  return prisma.contact.create({ data: { nome, telefone } });
+  return prisma.contact.create({ data: { companyId, nome, telefone } });
 }
 
 async function registrarAuditoriaDemo(params: {
+  companyId: string;
   userId: string;
   acao: string;
   entidadeId: string;
@@ -223,6 +234,7 @@ async function registrarAuditoriaDemo(params: {
 }): Promise<void> {
   await prisma.auditLog.create({
     data: {
+      companyId: params.companyId,
       userId: params.userId,
       acao: params.acao,
       entidade: "Lead",
@@ -235,6 +247,7 @@ async function registrarAuditoriaDemo(params: {
 }
 
 async function notificarNovoLeadDemo(
+  companyId: string,
   leadId: string,
   responsavelId: string,
   contatoNome: string,
@@ -242,7 +255,7 @@ async function notificarNovoLeadDemo(
 ): Promise<void> {
   const payload: NovoLeadPayload = { leadId, contatoNome };
   await prisma.notification.create({
-    data: { userId: responsavelId, tipo: "NOVO_LEAD", payload, criadoEm },
+    data: { companyId, userId: responsavelId, tipo: "NOVO_LEAD", payload, criadoEm },
   });
 }
 
@@ -265,7 +278,25 @@ function arredondarPara(valor: number, multiplo: number): number {
  * "retorno". Rodar duas vezes seguidas não duplica nada.
  */
 export async function seedDemo(): Promise<void> {
-  const etapas = await prisma.pipelineStage.findMany({ orderBy: { ordem: "asc" } });
+  // Mesma empresa única que `prisma/seed.ts` cria/encontra ("empresaExistente
+  // ?? create" — ver o comentário lá). Este script sempre roda DEPOIS do seed
+  // base (linha 279-280 abaixo já assume `admin@exemplo.com`/
+  // `vendedor@exemplo.com` existentes, que só o seed base cria), então a
+  // Company já existe a esta altura — `findFirstOrThrow` em vez de
+  // `findFirst() ?? create()` porque criar uma segunda empresa aqui seria
+  // exatamente o vazamento que `seed.ts` evita: "duas empresas por rodar o
+  // seed duas vezes" viraria "duas empresas por rodar o seed DE DEMO depois
+  // do base".
+  const empresa = await prisma.company.findFirstOrThrow();
+
+  // `where: { companyId }` pelo mesmo motivo de `seed.ts` (Ciclo 1e): sem ele,
+  // a checagem `etapas.length !== 5` abaixo contaria o funil de todas as
+  // empresas e lançaria uma mensagem que culpa a tela `/etapas` por um problema
+  // que ela não causou.
+  const etapas = await prisma.pipelineStage.findMany({
+    where: { companyId: empresa.id },
+    orderBy: { ordem: "asc" },
+  });
   if (etapas.length !== 5) {
     throw new Error(
       `seed-demo.ts assume um funil de 5 etapas — encontrei ${etapas.length} PipelineStage no banco. ` +
@@ -301,7 +332,7 @@ export async function seedDemo(): Promise<void> {
     const nome = nomeParaLead(leadIndex, indiceContato);
     const responsavel = usuarios[leadIndex % 2];
 
-    const contact = await encontrarOuCriarContactDemo(nome, telefone);
+    const contact = await encontrarOuCriarContactDemo(empresa.id, nome, telefone);
     const leadsExistentesDoContato = await prisma.lead.count({ where: { contactId: contact.id } });
 
     if (leadsExistentesDoContato >= totalEsperadoDeLeadsDoContato(indiceContato)) {
@@ -336,6 +367,7 @@ export async function seedDemo(): Promise<void> {
 
     const lead = await prisma.lead.create({
       data: {
+        companyId: empresa.id,
         contactId: contact.id,
         stageId: etapas[0].id,
         responsavelId: responsavel.id,
@@ -347,13 +379,14 @@ export async function seedDemo(): Promise<void> {
     });
 
     await registrarAuditoriaDemo({
+      companyId: empresa.id,
       userId: responsavel.id,
       acao: "criar_lead",
       entidadeId: lead.id,
       depois: lead,
       criadoEm,
     });
-    await notificarNovoLeadDemo(lead.id, responsavel.id, contact.nome, criadoEm);
+    await notificarNovoLeadDemo(empresa.id, lead.id, responsavel.id, contact.nome, criadoEm);
 
     // Move o lead pelas etapas intermediárias até a etapa final sorteada,
     // espaçando os timestamps de forma monotônica entre criadoEm e agora —
@@ -372,6 +405,7 @@ export async function seedDemo(): Promise<void> {
         data: { stageId: etapaAtualId, ultimaInteracaoEm: dataMovimento },
       });
       await registrarAuditoriaDemo({
+        companyId: empresa.id,
         userId: responsavel.id,
         acao: "mover_etapa",
         entidadeId: lead.id,
@@ -394,7 +428,7 @@ export async function seedDemo(): Promise<void> {
       const texto = NOTAS_POSSIVEIS[randInt(rng, 0, NOTAS_POSSIVEIS.length - 1)];
       const dataNota = new Date(criadoEm.getTime() + rng() * (ultimaData.getTime() - criadoEm.getTime()));
       await prisma.leadNote.create({
-        data: { leadId: lead.id, autorId: responsavel.id, texto, criadoEm: dataNota },
+        data: { companyId: empresa.id, leadId: lead.id, autorId: responsavel.id, texto, criadoEm: dataNota },
       });
       totalNotasCriadas++;
     }
@@ -423,6 +457,7 @@ export async function seedDemo(): Promise<void> {
 
     await prisma.task.create({
       data: {
+        companyId: empresa.id,
         titulo: tarefa.titulo,
         vencimento,
         responsavelId,

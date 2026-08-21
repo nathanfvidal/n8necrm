@@ -91,11 +91,15 @@ test.beforeAll(async () => {
   // desenha. Qualquer etapa serve, e `ordem: asc` é a que existe sempre.
   const etapa = await prisma.pipelineStage.findFirstOrThrow({ orderBy: { ordem: "asc" } });
   nomeDaPrimeiraEtapa = etapa.nome;
+  // Empresa única do Ciclo 1a (mesma suposição de `prisma/seed.ts`) — não há
+  // seletor de empresa nas sessões e2e deste arquivo.
+  const empresa = await prisma.company.findFirstOrThrow();
   const contato = await prisma.contact.create({
-    data: { nome: NOME_CONTATO, telefone: TELEFONE, email: EMAIL_SECRETO },
+    data: { companyId: empresa.id, nome: NOME_CONTATO, telefone: TELEFONE, email: EMAIL_SECRETO },
   });
   await prisma.lead.create({
     data: {
+      companyId: empresa.id,
       contactId: contato.id,
       stageId: etapa.id,
       canal: "MANUAL",
@@ -244,8 +248,11 @@ async function limparContatoComCpf(): Promise<void> {
 test.describe("documento do contato na fronteira", () => {
   test.beforeAll(async () => {
     await limparContatoComCpf();
+    // Empresa única do Ciclo 1a (mesma suposição de `prisma/seed.ts`).
+    const empresa = await prisma.company.findFirstOrThrow();
     const criado = await prisma.contact.create({
       data: {
+        companyId: empresa.id,
         nome: NOME_CPF,
         telefone: TELEFONE_CPF,
         documento: CPF_SECRETO,
@@ -255,7 +262,7 @@ test.describe("documento do contato na fronteira", () => {
     contatoComCpfId = criado.id;
     const etapa = await prisma.pipelineStage.findFirstOrThrow({ orderBy: { ordem: "asc" } });
     const lead = await prisma.lead.create({
-      data: { contactId: criado.id, stageId: etapa.id, canal: "MANUAL" },
+      data: { companyId: empresa.id, contactId: criado.id, stageId: etapa.id, canal: "MANUAL" },
     });
     leadDoContatoComCpfId = lead.id;
   });

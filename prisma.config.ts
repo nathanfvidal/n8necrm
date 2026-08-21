@@ -10,7 +10,29 @@ export default defineConfig({
     // (`npx prisma db seed` avisa "No seed command configured" se só o
     // package.json tiver esse campo). Ver node_modules/@prisma/config/dist/index.d.ts
     // (MigrationsConfigShape.seed).
-    seed: "tsx prisma/seed.ts",
+    //
+    // `--conditions=react-server`: sem isto, `npx prisma db seed` (e o
+    // README, que documenta esse comando) QUEBRA sempre, incondicionalmente.
+    // `npm run dev` (`next dev`) e o deploy (`prisma migrate deploy`) não
+    // rodam seed em momento nenhum, então esta flag não afeta nenhum dos
+    // dois -- só quem invoca `npx prisma db seed` diretamente passa por
+    // aqui. `prisma/seed.ts` importa
+    // `src/lib/prisma.ts`, que começa com `import "server-only"` — esse
+    // pacote lança na hora da resolução do módulo (não em runtime) sempre que
+    // é carregado fora da condição de exportação "react-server" que o
+    // bundler do Next.js aplica durante o build. Fora desse pipeline — que é
+    // exatamente o caso de `tsx` rodando este script como processo Node
+    // comum — o import lança antes de qualquer linha do seed rodar.
+    // Confirmado isolando o problema num arquivo mínimo (só `import
+    // "server-only"; console.log("ok")`): `npx tsx` puro lança, `npx tsx
+    // --conditions=react-server` importa normalmente.
+    //
+    // A flag vai direto no comando do `tsx`, não em `NODE_OPTIONS`, porque
+    // `NODE_OPTIONS=--conditions=react-server npx tsx ...` depende de
+    // sintaxe de shell (`VAR=valor comando`) que não existe no `cmd` do
+    // Windows — e este comando roda em qualquer máquina que clonar o repo,
+    // não só na deste ambiente de desenvolvimento.
+    seed: "tsx --conditions=react-server prisma/seed.ts",
   },
   datasource: {
     // Este arquivo é lido SÓ pelo CLI do Prisma (migrate, db push, studio,

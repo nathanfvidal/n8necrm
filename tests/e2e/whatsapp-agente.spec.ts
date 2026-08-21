@@ -30,9 +30,16 @@ const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL! });
 const prisma = new PrismaClient({ adapter });
 
 // Prefixo exclusivo deste arquivo (não colide com "teste-ingest-"/"teste-turno-"
-// dos testes unitários nem com nenhum outro spec e2e). `Conversation.waId` é
-// único, então cada conversa criada abaixo ainda soma um `randomUUID()` ao
-// prefixo — o prefixo sozinho é só o que a limpeza usa para encontrá-las.
+// dos testes unitários nem com nenhum outro spec e2e). Cada conversa criada
+// abaixo ainda soma um `randomUUID()` ao prefixo — o prefixo sozinho é só o que
+// a limpeza usa para encontrá-las.
+//
+// O sufixo aleatório continua NECESSÁRIO depois do Ciclo 1e, e o motivo mudou:
+// `Conversation.waId` deixou de ser `@unique` global e passou a
+// `@@unique([companyId, waId])`, mas TODAS as conversas deste arquivo nascem na
+// mesma empresa do seed — a composição não separa uma linha da outra aqui. Dois
+// `waId` literais iguais colidiriam exatamente como antes. Mesmo raciocínio que
+// `tests/e2e/seguranca-headers.spec.ts` registra para o telefone.
 const PREFIXO_WAID = "e2e-agente-";
 
 // Usuário descartável do teste 4 (sessão inválida) — e-mail fixo, não
@@ -54,7 +61,24 @@ const SENHA_USUARIO_TESTE = "senha-teste-e2e-123";
  */
 async function limparDadosDeTeste(): Promise<void> {
   await prisma.conversation.deleteMany({ where: { waId: { startsWith: PREFIXO_WAID } } });
-  await prisma.user.deleteMany({ where: { email: EMAIL_USUARIO_TESTE } });
+
+  // Ordem de chave estrangeira, e não um `user.deleteMany` solto:
+  // `Notification.userId` e `AuditLog.userId` são `RESTRICT` (padrão do Prisma
+  // para relação obrigatória). O usuário descartável tem `Membership` desde
+  // esta correção, então é membro ativo da empresa enquanto existe — e
+  // `marcarAguardandoHumano` (`src/modules/whatsapp/notificacoes.ts`) grava
+  // uma `Notification` por membro ativo da empresa da conversa. Uma linha
+  // dessas sobrando trava o `delete` e a fixture deixa a conta para trás: foi
+  // exatamente o quadro que `63cecd2` desmontou nas fixtures de unidade.
+  // `Membership` é `Cascade` e some junto, sem linha própria aqui.
+  const usuario = await prisma.user.findUnique({
+    where: { email: EMAIL_USUARIO_TESTE },
+    select: { id: true },
+  });
+  if (!usuario) return;
+  await prisma.notification.deleteMany({ where: { userId: usuario.id } });
+  await prisma.auditLog.deleteMany({ where: { userId: usuario.id } });
+  await prisma.user.delete({ where: { id: usuario.id } });
 }
 
 // MODO SERIAL DE PROPÓSITO — não é excesso de cautela, é o que evita uma
@@ -94,8 +118,15 @@ async function limparDadosDeTeste(): Promise<void> {
 // NÃO prova que o problema não existe — só que não se manifestou desta vez.
 test.describe.configure({ mode: "serial" });
 
+// Empresa única do Ciclo 1a (mesma suposição de `prisma/seed.ts`) — lida uma
+// vez no `beforeAll` porque `Conversation`/`WhatsappMessage` agora exigem
+// `companyId`, e não há seletor de empresa nas sessões e2e deste arquivo.
+let empresaId = "";
+
 test.beforeAll(async () => {
   await limparDadosDeTeste();
+  const empresa = await prisma.company.findFirstOrThrow();
+  empresaId = empresa.id;
 });
 
 test.afterAll(async () => {
@@ -177,10 +208,16 @@ test.describe(() => {
     // compartilhado, aquela é uma cópia transitória dentro de `hidden`.)
     const nomeExibicao = `E2E Ciclo IA ${randomUUID().slice(0, 8)}`;
     const conversa = await prisma.conversation.create({
-      data: { waId: `${PREFIXO_WAID}${randomUUID()}`, telefone: "5511999990000", nomeExibicao },
+      data: {
+        companyId: empresaId,
+        waId: `${PREFIXO_WAID}${randomUUID()}`,
+        telefone: "5511999990000",
+        nomeExibicao,
+      },
     });
     await prisma.whatsappMessage.create({
       data: {
+        companyId: empresaId,
         conversationId: conversa.id,
         idExterno: `${PREFIXO_WAID}msg-${randomUUID()}`,
         direcao: "ENTRADA",
@@ -231,7 +268,26 @@ test.describe(() => {
   test("editar a persona muda a prévia do prompt", async ({ page }) => {
     await page.goto("/conversas/agente");
     await page.getByLabel("Nome da persona").fill("Beatriz");
-    await expect(page.getByTestId("previa-prompt")).toContainText("Você é Beatriz");
+    // `visible: true` pela MESMA razão de `seloVisivel`, e este caso é a prova
+    // mais nítida dela: medido em 2026-08-20, uma execução focada em cada
+    // quatro morria com
+    //
+    //     strict mode violation: getByTestId('previa-prompt') resolved to 2
+    //     elements
+    //
+    // e os dois textos eram DIFERENTES — "Você é Ana" (a cópia de streaming
+    // ainda dentro do `<div hidden>`, com a persona que veio do servidor) e
+    // "Você é Beatriz" (a de verdade, já com o estado local do formulário).
+    // Sem o filtro, o teste não escolhia entre as duas: morria por existirem
+    // duas.
+    //
+    // Este era o `:244` que o relatório da Task 7 do Ciclo 1c reportou como
+    // determinístico. Não é — e a impressão de determinismo tinha causa: o
+    // `mode: "serial"` deste arquivo faz o primeiro vermelho PULAR os casos
+    // seguintes, então cada execução mostrava um defeito de cada vez.
+    await expect(page.getByTestId("previa-prompt").filter({ visible: true })).toContainText(
+      "Você é Beatriz",
+    );
     // Nenhum clique em "Salvar" — a prévia é estado local (`AgenteForm` monta o
     // texto no cliente com a mesma `montarPromptSistema` que o servidor usa,
     // sobre o `useState` do formulário), então este teste nunca escreve na
@@ -274,11 +330,22 @@ test("erro de sessão inválida chega à tela ao tentar pausar a IA", async ({ p
       nome: "E2E Sessão Inválida",
       email: EMAIL_USUARIO_TESTE,
       senhaHash,
-      papel: "VENDEDOR",
+      // O VÍNCULO. Sem ele esta conta LOGA e não entra em lugar nenhum:
+      // desde o Ciclo 1a `usuarioAtual()` resolve `companyId`/`papel` pelo
+      // `Membership` e LANÇA sem vínculo, e `(painel)/layout.tsx` manda para
+      // `/login`. O sintoma era este caso falhando ao esperar o selo "IA
+      // respondendo" numa tela que nunca chegou a abrir — terceira ocorrência
+      // da mesma família de `e67e1e6` (fixtures de unidade) e `c06b1fe`
+      // (`global-setup.ts`).
+      //
+      // `VENDEDOR` na empresa das conversas deste arquivo, que é a mesma
+      // `empresaId` lida no `beforeAll`: `/conversas/[id]` só encontra a
+      // conversa se o leitor for da empresa dela.
+      memberships: { create: { companyId: empresaId, papel: "VENDEDOR" } },
     },
   });
   const conversa = await prisma.conversation.create({
-    data: { waId: `${PREFIXO_WAID}${randomUUID()}`, telefone: "5511999990002" },
+    data: { companyId: empresaId, waId: `${PREFIXO_WAID}${randomUUID()}`, telefone: "5511999990002" },
   });
 
   await login(page, EMAIL_USUARIO_TESTE, SENHA_USUARIO_TESTE);
@@ -324,6 +391,7 @@ test("conversa aguardando humano aparece com o selo na lista", async ({ page }) 
   const nomeExibicao = `E2E Aguardando ${randomUUID().slice(0, 8)}`;
   await prisma.conversation.create({
     data: {
+      companyId: empresaId,
       waId: `${PREFIXO_WAID}${randomUUID()}`,
       telefone: "5511999990001",
       nomeExibicao,
@@ -383,6 +451,7 @@ test("conversa aguardando aparece antes de uma conversa comum na lista", async (
 
   await prisma.conversation.create({
     data: {
+      companyId: empresaId,
       waId: `${PREFIXO_WAID}${randomUUID()}`,
       telefone: "5511999990003",
       nomeExibicao: nomeAguardando,
@@ -391,6 +460,7 @@ test("conversa aguardando aparece antes de uma conversa comum na lista", async (
   });
   await prisma.conversation.create({
     data: {
+      companyId: empresaId,
       waId: `${PREFIXO_WAID}${randomUUID()}`,
       telefone: "5511999990004",
       nomeExibicao: nomeComum,

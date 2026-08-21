@@ -3,7 +3,7 @@
 // deveria) ser alcançável de um Client Component.
 import "server-only";
 
-import { prisma } from "@/lib/prisma";
+import { prismaDaEmpresa } from "@/core/tenancy/escopo";
 import { aplicarTeto, LIMITE_LISTAGEM, type Listagem } from "@/core/listagem";
 import type { Task, User } from "@prisma/client";
 
@@ -59,6 +59,7 @@ export type TaskDoLead = Task & { responsavel: ResponsavelResumido };
  * de outra, que ela nem consegue concluir.
  */
 export async function listarMinhasTasks(
+  companyId: string,
   responsavelId: string,
   opcoes?: {
     /**
@@ -74,7 +75,22 @@ export async function listarMinhasTasks(
   const limite = opcoes?.limite ?? LIMITE_LISTAGEM;
   const concluidas = opcoes?.concluidas ?? false;
 
-  const linhas = await prisma.task.findMany({
+  // `companyId` além de `responsavelId`, e o "além" é o ponto: escopo por
+  // DONO não é escopo por EMPRESA. Enquanto ninguém tem vínculo em duas
+  // empresas os dois coincidem — toda tarefa de que eu sou dono é da minha
+  // empresa — e é por isso que este filtro parecia suficiente. `criarUsuario`
+  // (`core/users/service.ts`) já sabe criar `Membership`, então dois vínculos é
+  // estado expressável hoje, e nele a lista de `/tasks` misturaria os lembretes
+  // das duas empresas numa tela só. O caso está em
+  // `tests/unit/task-isolamento.test.ts`, com a sonda da consulta antiga ao
+  // lado.
+  //
+  // As relações trazidas no `select` (`lead.contact`, `contact`) NÃO são
+  // filtradas pelo escopo — leitura aninhada nunca é (ver a seção em
+  // `core/tenancy/escopo.ts`). Elas são seguras aqui por outro motivo: as duas
+  // ficam DENTRO de `Company` a partir de uma `Task` que o escopo já filtrou, e
+  // nenhuma atravessa `User`, que é onde a fronteira de empresa se perde.
+  const linhas = await prismaDaEmpresa(companyId).task.findMany({
     where: {
       responsavelId,
       concluidaEm: concluidas ? { not: null } : null,
@@ -147,8 +163,17 @@ export async function listarMinhasTasks(
  * intacta e é a barreira real; isto aqui é só a UI não mentir sobre o que
  * cada pessoa pode fazer.
  */
-export async function listarTasksPendentesDoLead(leadId: string): Promise<TaskDoLead[]> {
-  return prisma.task.findMany({
+export async function listarTasksPendentesDoLead(
+  companyId: string,
+  leadId: string
+): Promise<TaskDoLead[]> {
+  // `Task.leadId` é FK para `Lead` e não carrega empresa: "tarefa da empresa A
+  // pendurada no Lead da empresa B" é estado EXPRESSÁVEL no schema, e era
+  // exatamente o que esta consulta mostraria a quem abrisse o detalhe do lead
+  // da B. A fixture de `tests/unit/task-isolamento.test.ts` fabrica essa linha
+  // de propósito (`TASK_CRUZADA`) — a pergunta "a FK basta?" é respondida com
+  // dado, não com raciocínio, e a resposta é não.
+  return prismaDaEmpresa(companyId).task.findMany({
     where: { leadId, concluidaEm: null },
     include: { responsavel: { select: { id: true, nome: true } } },
     orderBy: { vencimento: "asc" },

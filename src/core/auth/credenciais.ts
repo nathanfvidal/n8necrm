@@ -11,6 +11,7 @@ import { CredentialsSignin } from "@auth/core/errors";
 import { prisma } from "@/lib/prisma";
 import { obterIpDaRequisicao } from "@/lib/ip";
 import { checarLimiteLogin } from "@/core/rate-limit/login";
+import { auditarLogin, registrarTentativaRecusada } from "./auditoria-login";
 
 /**
  * Hash bcrypt inerte, usado só para gastar tempo quando o e-mail não existe.
@@ -90,10 +91,45 @@ export async function autorizarCredenciais(
   // (`new Request(url, { headers, method, body })` em
   // lib/actions/callback/index.js), então `x-vercel-forwarded-for` chega
   // intacto aqui.
-  const limite = await checarLimiteLogin(obterIpDaRequisicao(request), email);
-  if (!limite.permitido) throw new MuitasTentativasDeLoginError();
+  const ip = obterIpDaRequisicao(request);
+  const limite = await checarLimiteLogin(ip, email);
+  if (!limite.permitido) {
+    // Recusa por limite tambem e tentativa recusada, e e a que mais interessa
+    // numa investigacao: e o formato de forca bruta. `conta: "inexistente"` NAO
+    // e afirmacao de que a conta nao existe -- e a verdade do que se sabe neste
+    // ponto, porque o banco ainda nao foi consultado (e nao pode ser: a ordem
+    // "limite antes de tudo" e o que torna a forca bruta cara, ver
+    // `core/rate-limit/login.ts`). Registrar "desconhecido" aqui seria mais
+    // preciso; usar o mesmo rotulo dos dois lados e o que mantem as duas
+    // metades indistinguiveis de fora.
+    registrarTentativaRecusada({ email, ip, conta: "inexistente", motivo: "limite" });
+    throw new MuitasTentativasDeLoginError();
+  }
 
-  const user = await prisma.user.findUnique({ where: { email } });
+  // `select` explicito, e `memberships` junto: o vinculo e a UNICA origem sa do
+  // `companyId` da linha de auditoria de login (`AuditLog.companyId` e NOT
+  // NULL), e traze-lo aqui custa zero consulta a mais -- a alternativa,
+  // `companyIdDoUsuario`, seria uma segunda ida ao banco DENTRO do caminho de
+  // login. `prisma.company.findFirst()` esta fora de questao: ignora quem esta
+  // pedindo e vaza no dia da segunda empresa (proibicao escrita em
+  // `core/users/empresa.ts`).
+  //
+  // Relacao carregada por `select` e nao `include`, pela regra de
+  // `tests/unit/consultas-estreitas.test.ts`: `Membership` nao esta na lista de
+  // relacoes sensiveis, mas `include` traria a coluna nova do dia em que
+  // alguem acrescentar uma -- foi assim que `Contact.documento` (CPF) passou a
+  // ser lido sem nenhuma linha mudar.
+  const user = await prisma.user.findUnique({
+    where: { email },
+    select: {
+      id: true,
+      nome: true,
+      email: true,
+      senhaHash: true,
+      ativo: true,
+      memberships: { select: { companyId: true } },
+    },
+  });
 
   // Compara SEMPRE, mesmo sem usuário e mesmo com usuário desativado, para
   // que os quatro desfechos (e-mail inexistente, conta desativada, senha
@@ -105,7 +141,46 @@ export async function autorizarCredenciais(
   // genérico. `user.ativo` continua sendo barreira real de login — o que
   // mudou é só QUANDO ela é avaliada, não SE ela é avaliada. (A revogação de
   // sessão em andamento é outra camada, em `usuarioAtual()`.)
-  if (!user || !user.ativo || !senhaValida) return null;
+  if (!user || !user.ativo || !senhaValida) {
+    // A MESMA chamada, no MESMO ponto, para conta existente e inexistente. E o
+    // que impede esta auditoria de virar o oraculo de enumeracao que
+    // `HASH_INERTE` existe para fechar -- ver o bloco longo em
+    // `auditoria-login.ts` sobre por que a tentativa recusada NAO vira linha de
+    // `AuditLog`. Trabalho identico nos dois ramos: nenhuma ida ao banco aqui.
+    registrarTentativaRecusada({
+      email,
+      ip,
+      conta: user ? "existente" : "inexistente",
+      motivo: !user ? "credenciais" : !user.ativo ? "desativada" : "credenciais",
+    });
+    return null;
+  }
 
-  return { id: user.id, name: user.nome, email: user.email, role: user.papel };
+  // Login aceito -- a linha permanente que faltava. `await` de proposito: um
+  // login bem-sucedido nao e uma sonda de enumeracao (quem chega aqui ja sabia
+  // a senha), entao o custo da escrita nao vaza nada, e nao esperar por ela
+  // arriscaria a funcao serverless congelar antes de o INSERT sair.
+  //
+  // Vinculo != 1 nao lanca e nao inventa empresa: e a mesma postura de
+  // `usuarioAtual()` (zero vinculo e sessao invalida; mais de um LANCA em vez
+  // de escolher). Aqui a autorizacao ja terminou, e derrubar o login por causa
+  // do rastro seria negar servico -- entao a anomalia vai para o log e o login
+  // segue. A pessoa nao passa do `(painel)/layout.tsx` de qualquer forma.
+  if (user.memberships.length === 1) {
+    await auditarLogin({ userId: user.id, companyId: user.memberships[0]!.companyId, ip });
+  } else {
+    console.warn(
+      `[auditoria] login sem vinculo unico (${user.memberships.length}) -- ` +
+        `linha de AuditLog nao gravada para userId=${user.id}`
+    );
+  }
+
+  // Sem `role`: o campo já foi devolvido aqui, mas nada em `src/` autoriza
+  // com `session.user.role`/`token.role` (medido — só a augmentation de tipos
+  // em `types/next-auth.d.ts` os mencionava). Depois que o papel passou a
+  // morar em `Membership` (Ciclo 1a), o JWT continuaria carregando um valor
+  // OBSOLETO — o de `User.papel`, que já não é mais a fonte de verdade — e
+  // que ninguém precisa ler: toda autorização usa `usuarioAtual().papel`,
+  // resolvido do vínculo a cada requisição (`core/auth/session.ts`).
+  return { id: user.id, name: user.nome, email: user.email };
 }

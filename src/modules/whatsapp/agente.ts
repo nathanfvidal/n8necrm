@@ -1,51 +1,138 @@
 import "server-only";
 
-import { prisma } from "@/lib/prisma";
+import { prismaDaEmpresa } from "@/core/tenancy/escopo";
 
-import { BOT_CONFIG_ID, botConfig } from "../../../config/bot";
-import { whatsappGateway } from "./gateway";
+import { botConfig } from "../../../config/bot";
+import { gatewayDaConversa } from "./gateway/fabrica";
 import { limparAguardandoHumano } from "./notificacoes";
 
 /**
- * Pausa a IA numa conversa. Idempotente e NÃO reescreve a autoria: se a
- * conversa já está pausada, quem pausou primeiro continua registrado.
+ * ## Por que `companyId` entra na assinatura das seis (Ciclo 1d)
+ *
+ * `Conversation` e `BotConfig` são modelos de tenant
+ * (`core/tenancy/escopo.ts`). A anotação da fila em `eslint.config.mjs`
+ * contava três defeitos ALTA neste arquivo — `pausarIa`, `religarIa` e
+ * `responderComoHumano` recebiam `conversationId` cru da Server Action e
+ * escolhiam a linha só pelo id. As três funções de config não estavam nessa
+ * conta porque já derivavam a empresa do usuário, mas derivavam pela PONTE
+ * `companyIdDoUsuario` (`core/users/empresa.ts`), que faz uma consulta a
+ * `Membership` por chamada e pega um vínculo ARBITRÁRIO de quem tem mais de
+ * um. Desde a Task 2 do Ciclo 1a, `usuarioAtual()` devolve `companyId` — a
+ * empresa DA REQUISIÇÃO —, então a ponte aqui virou desvio: as três passaram
+ * a receber o `companyId` direto de quem já o tem em mãos, e o import de
+ * `companyIdDoUsuario` saiu deste arquivo.
+ *
+ * `companyId` é o PRIMEIRO parâmetro posicional em todas — mesmo padrão de
+ * `queries.ts` neste diretório e de `core/leads/queries.ts`. Obrigatório e
+ * posicional: toda chamada existente parou de compilar e precisou ser
+ * revisitada. Nada de `AsyncLocalStorage` — este módulo roda em webhook, fila
+ * e consumidor, fora do ciclo de requisição, que é onde estado global deixa
+ * de valer sem ninguém perceber.
+ *
+ * A origem do valor é `usuarioAtual().companyId` nas Server Actions e
+ * `usuarioAtualOuLogin().companyId` nas páginas — nunca parâmetro de
+ * formulário (Server Action é endpoint HTTP público, e um `companyId` de
+ * formulário seria forjável), nunca `prisma.company.findFirst()`.
+ */
+
+/**
+ * Pausa a IA numa conversa DA EMPRESA. Idempotente e NÃO reescreve a autoria:
+ * se a conversa já está pausada, quem pausou primeiro continua registrado.
  *
  * O `updateMany` com `iaAtiva: true` no filtro é o que garante isso em uma
  * única instrução — dois humanos abrindo a mesma conversa ao mesmo tempo não
  * disputam a autoria, e o segundo simplesmente afeta 0 linhas. Mesmo idioma
  * de UPDATE condicional usado no lease (`turno.ts`) e no rate limit.
+ *
+ * O escopo acrescenta `companyId` a esse mesmo `where` (ver
+ * `OPERACOES_COM_WHERE` em `core/tenancy/escopo.ts`), então uma conversa de
+ * outra empresa cai no mesmo caminho de "0 linhas afetadas" que uma conversa
+ * já pausada. Silêncio, e não erro, porque a função já era idempotente por
+ * desenho: o chamador nunca soube distinguir "não precisou" de "não achou", e
+ * inventar essa distinção agora só para o caso cross-tenant contaria a quem
+ * tentar que a conversa existe em algum lugar.
+ *
+ * `usuarioId` e `companyId` chegam do MESMO `UsuarioAtivo` nos dois
+ * chamadores (`actions.ts`), então `iaPausadaPorId` não pode apontar para
+ * gente de fora da empresa por esse caminho.
  */
-export async function pausarIa(conversationId: string, usuarioId: string): Promise<void> {
-  await prisma.conversation.updateMany({
+export async function pausarIa(
+  companyId: string,
+  conversationId: string,
+  usuarioId: string
+): Promise<void> {
+  await prismaDaEmpresa(companyId).conversation.updateMany({
     where: { id: conversationId, iaAtiva: true },
     data: { iaAtiva: false, iaPausadaEm: new Date(), iaPausadaPorId: usuarioId },
   });
 }
 
-/** Religa a IA e limpa o estado da pausa. Idempotente. */
-export async function religarIa(conversationId: string): Promise<void> {
-  await prisma.conversation.update({
+/**
+ * Religa a IA de uma conversa DA EMPRESA e limpa o estado da pausa.
+ * Idempotente.
+ *
+ * Era `update` por id, que o escopo recusa (o `where` de `update` só aceita
+ * campo único). Virou `updateMany`, e com isso trocou de contrato num ponto:
+ * um id inexistente deixou de lançar `P2025` e passa a afetar 0 linhas. Os
+ * dois chamadores (`religarIaAction` e o teste) não distinguiam os casos — a
+ * action já devolvia `ResultadoAcao` genérico — e a conversa de outra empresa
+ * passa a cair no mesmo silêncio, pelo mesmo motivo descrito em `pausarIa`.
+ */
+export async function religarIa(companyId: string, conversationId: string): Promise<void> {
+  await prismaDaEmpresa(companyId).conversation.updateMany({
     where: { id: conversationId },
     data: { iaAtiva: true, iaPausadaEm: null, iaPausadaPorId: null },
   });
 }
 
-export async function lerConfigBot() {
-  return prisma.botConfig.findUniqueOrThrow({ where: { id: BOT_CONFIG_ID } });
-}
+/**
+ * Lançado quando a empresa não tem linha de `BotConfig`.
+ *
+ * `BotConfig` tem `@@unique([companyId])` e o seed cria uma linha por empresa
+ * (`prisma/seed.ts#semearBotConfig`), então isto é estado que não deveria
+ * existir. Existe como erro NOMEADO porque a conversão para `updateMany`
+ * (o escopo recusa `update`) trocou um `P2025` do Prisma por "0 linhas
+ * afetadas": sem esta checagem, salvar a persona numa empresa sem config
+ * viraria um sucesso silencioso, e a tela diria "salvo" sobre nada.
+ */
+export class ConfigBotAusenteError extends Error {}
 
-export async function salvarConfigBot(
-  dados: { ativo: boolean; personaNome: string; personaPapel: string; regras: string[]; faq: string },
-  usuarioId: string
-) {
-  return prisma.botConfig.update({
-    where: { id: BOT_CONFIG_ID },
-    data: { ...dados, atualizadoPorId: usuarioId },
-  });
+function exigirLinhaAtualizada(count: number, companyId: string, operacao: string) {
+  if (count === 0) {
+    throw new ConfigBotAusenteError(
+      `${operacao}: a empresa ${JSON.stringify(companyId)} não tem linha de BotConfig. ` +
+        `Uma linha por empresa é criada pelo seed (prisma/seed.ts#semearBotConfig).`
+    );
+  }
 }
 
 /**
- * Restaura persona, regras e FAQ a partir de `config/bot.ts`.
+ * Lê a config do bot DA EMPRESA.
+ *
+ * `findFirstOrThrow`, e não `findUniqueOrThrow`: o escopo recusa as operações
+ * por chave única por uniformidade, mesmo em `BotConfig`, que é o único
+ * modelo de tenant onde `companyId` É único — o raciocínio inteiro está em
+ * "Recusa, lançando" (`core/tenancy/escopo.ts`). A consulta resultante é a
+ * mesma: `where: { companyId }` sobre uma coluna com `@@unique`.
+ */
+export async function lerConfigBot(companyId: string) {
+  return prismaDaEmpresa(companyId).botConfig.findFirstOrThrow({});
+}
+
+export async function salvarConfigBot(
+  companyId: string,
+  dados: { ativo: boolean; personaNome: string; personaPapel: string; regras: string[]; faq: string },
+  usuarioId: string
+): Promise<void> {
+  const { count } = await prismaDaEmpresa(companyId).botConfig.updateMany({
+    where: {},
+    data: { ...dados, atualizadoPorId: usuarioId },
+  });
+  exigirLinhaAtualizada(count, companyId, "salvarConfigBot");
+}
+
+/**
+ * Restaura persona, regras e FAQ DA EMPRESA a partir de `config/bot.ts`.
  *
  * Este é um dos DOIS únicos momentos em que o arquivo é lido — o outro é o
  * seed (`prisma/seed.ts#semearBotConfig`). Nunca no caminho de resposta ao
@@ -58,9 +145,9 @@ export async function salvarConfigBot(
  * botão de conserto reabrindo o problema. Ver os dois testes em
  * `tests/unit/agente-actions.test.ts`.
  */
-export async function restaurarConfigPadrao(usuarioId: string) {
-  return prisma.botConfig.update({
-    where: { id: BOT_CONFIG_ID },
+export async function restaurarConfigPadrao(companyId: string, usuarioId: string): Promise<void> {
+  const { count } = await prismaDaEmpresa(companyId).botConfig.updateMany({
+    where: {},
     data: {
       personaNome: botConfig.persona.nome,
       personaPapel: botConfig.persona.papel,
@@ -69,6 +156,7 @@ export async function restaurarConfigPadrao(usuarioId: string) {
       atualizadoPorId: usuarioId,
     },
   });
+  exigirLinhaAtualizada(count, companyId, "restaurarConfigPadrao");
 }
 
 /** Teto de tamanho de uma mensagem enviada pelo humano — o WhatsApp corta bem
@@ -89,7 +177,24 @@ const MAX_CARACTERES_RESPOSTA_HUMANA = 4000;
 export class RespostaHumanaInvalidaError extends Error {}
 
 /**
- * Envia uma resposta escrita por um humano.
+ * Envia uma resposta escrita por um humano, numa conversa DA EMPRESA.
+ *
+ * ## O pior defeito da fila do Ciclo 1a morava aqui
+ *
+ * A busca da conversa era `prisma.conversation.findUniqueOrThrow({ where: {
+ * id: conversationId } })`, com o id vindo cru da Server Action. Um usuário
+ * da empresa A que soubesse (ou adivinhasse) o id de uma conversa da empresa
+ * B mandava uma mensagem de WhatsApp de verdade **pela instância Evolution da
+ * B, para o cliente da B, com o número da B**. Não é leitura de dado alheio:
+ * é falar com o cliente de outra empresa se passando por ela.
+ *
+ * A busca escopada é a PRIMEIRA coisa que toca o banco, antes da pausa e
+ * antes do envio, e ela LANÇA (`findFirstOrThrow`) quando a conversa não é da
+ * empresa. Por isso a prova de que o defeito fechou não é "a função lançou" —
+ * uma função que lançasse depois do envio passaria nesse teste e continuaria
+ * vazando. `tests/unit/whatsapp-isolamento.test.ts` afirma que o mock do
+ * gateway **não foi chamado**, que nenhuma linha de `WhatsappMessage` nasceu
+ * na thread da outra empresa, e que nem a pausa do passo 1 aconteceu.
  *
  * ## A ordem importa e é contraintuitiva: pausa → envia → grava
  *
@@ -113,6 +218,7 @@ export class RespostaHumanaInvalidaError extends Error {}
  * nunca recebeu.
  */
 export async function responderComoHumano(
+  companyId: string,
   conversationId: string,
   texto: string,
   usuarioId: string
@@ -127,20 +233,43 @@ export async function responderComoHumano(
     );
   }
 
-  const conversa = await prisma.conversation.findUniqueOrThrow({
+  const escopo = prismaDaEmpresa(companyId);
+
+  // O portão. `findFirstOrThrow` escopado: conversa de outra empresa lança
+  // AQUI, antes da pausa e antes do gateway. `companyId` saiu do `select` —
+  // ele já está em mãos, e o escopo o injeta no `create` do passo 3.
+  const conversa = await escopo.conversation.findFirstOrThrow({
     where: { id: conversationId },
-    select: { waId: true },
+    // `connectionId` entra no `select` desde o Ciclo 2a: é por ele que a
+    // resposta sai. Sem ele aqui, o envio cairia sempre no caminho de "única
+    // conexão ativa" (`credencialAtivaUnica`) e uma empresa com DUAS conexões
+    // ativas receberia `ConexaoAmbiguaError` numa conversa que sabe
+    // perfeitamente por onde entrou. Há caso de teste com duas conexões ativas
+    // na fixture (`tests/unit/whatsapp-envio-por-conexao.test.ts`) — com uma
+    // só, este `select` poderia sumir e o arquivo continuaria verde.
+    select: { waId: true, connectionId: true },
   });
 
   // 1. Pausa primeiro — mesmo que tudo depois falhe, a IA fica calada.
-  await pausarIa(conversationId, usuarioId);
+  await pausarIa(companyId, conversationId, usuarioId);
 
   // 2. Envia. Loga no `conversationId` (nunca o texto nem `conversa.waId` —
   // é o telefone do cliente, dado pessoal) para deixar rastro de quando o
   // humano precisou repetir o envio.
+  //
+  // O gateway é resolvido DEPOIS da pausa e ANTES do envio, dentro do MESMO
+  // `try`: se a conexão estiver ausente, ambígua ou desativada, a IA já está
+  // calada (passo 1) e nada foi mandado — que é exatamente a ordem que o
+  // resto desta função protege. Recusa de conexão entra aqui pela mesma porta
+  // que "gateway fora do ar", e o caso de teste que afirma "nada enviado" é o
+  // mesmo (`tests/unit/whatsapp-envio-por-conexao.test.ts`).
   let envio: { idExterno: string };
   try {
-    envio = await whatsappGateway.enviarTexto(conversa.waId, conteudo);
+    const gateway = await gatewayDaConversa(companyId, {
+      id: conversationId,
+      connectionId: conversa.connectionId,
+    });
+    envio = await gateway.enviarTexto(conversa.waId, conteudo);
   } catch (erro) {
     console.error(
       `Falha ao enviar resposta humana (conversationId=${conversationId}) — IA pausada, nada enviado.`,
@@ -154,8 +283,19 @@ export async function responderComoHumano(
   // pausa→envia→grava não elimina, só limita. `idExterno` (id do gateway,
   // não dado pessoal) fica no log para permitir reconciliação manual.
   try {
-    await prisma.whatsappMessage.create({
+    // `WhatsappMessage.companyId` é `NOT NULL` desde a Task 1. Ele vinha
+    // copiado da conversa (`select: { companyId: true }`); agora vem do
+    // ESCOPO — a mesma origem que decidiu QUE conversa é esta.
+    //
+    // Escrito explícito porque o `$extends` de query NÃO relaxa os TIPOS: o
+    // `WhatsappMessageUncheckedCreateInput` continua exigindo `companyId`
+    // mesmo com a injeção em vigor (medido aqui com `npm run typecheck`).
+    // Para um valor já igual ao escopo, o escopo age como VERIFICADOR
+    // (recusa divergência) em vez de preenchedor — ver "O tipo não sabe o
+    // que o runtime faz" em `core/tenancy/escopo.ts`.
+    await escopo.whatsappMessage.create({
       data: {
+        companyId,
         conversationId,
         idExterno: envio.idExterno,
         direcao: "SAIDA",
@@ -179,5 +319,11 @@ export async function responderComoHumano(
   // viesse antes do envio, uma falha do gateway apagaria o sinal de que o
   // cliente ainda espera, e a conversa sumiria do topo da lista sem ninguém
   // ter falado com ele.
-  await limparAguardandoHumano(conversationId);
+  //
+  // `limparAguardandoHumano` (`notificacoes.ts`) foi convertida no Ciclo 1d e
+  // passou a EXIGIR o `companyId` — o `updateMany` dela filtrava só por id.
+  // Por este caminho ela nunca vazou (o `conversationId` que chega aqui já
+  // passou pelo portão escopado acima); quem dependia da conversão era o outro
+  // chamador, `turno.ts`, que roda fora de requisição.
+  await limparAguardandoHumano(companyId, conversationId);
 }

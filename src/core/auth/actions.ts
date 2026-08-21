@@ -1,6 +1,8 @@
 "use server";
 
 import { signOut } from "@/lib/auth";
+import { auditarLogout } from "./auditoria-login";
+import { usuarioAtual } from "./session";
 
 /**
  * Encerra a sessão.
@@ -20,5 +22,26 @@ import { signOut } from "@/lib/auth";
  * direto evita um salto extra.
  */
 export async function sairAction() {
+  // ## A auditoria vem ANTES do `signOut`, e vem num `try` proprio
+  //
+  // Depois do `signOut` nao ha mais sessao para dizer QUEM saiu -- e o
+  // `signOut({ redirectTo })` termina lancando o erro especial de `redirect()`,
+  // entao nem ha "depois" alcancavel neste arquivo.
+  //
+  // O `try` cobre `usuarioAtual()` porque ele LANCA quando a sessao ja morreu
+  // (expirou, ou a conta foi desativada no meio): nesse caso nao ha o que
+  // auditar, e o botao "Sair" precisa continuar limpando o cookie. Sair
+  // deixando de revogar por causa do rastro seria exatamente o defeito que o
+  // AGENTS.md conta -- so que causado pela correcao dele.
+  //
+  // `auditarLogout` ja engole a propria falha (ver `auditoria-login.ts`); este
+  // `try` e sobre a resolucao da sessao, nao sobre a escrita.
+  try {
+    const usuario = await usuarioAtual();
+    await auditarLogout({ userId: usuario.id, companyId: usuario.companyId });
+  } catch {
+    // Sessao ja invalida: nada a registrar, e o logout segue.
+  }
+
   await signOut({ redirectTo: "/login" });
 }

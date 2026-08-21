@@ -27,9 +27,9 @@ export default async function EtapasPage() {
   }
 
   const [etapas, ativosPorEtapa, totaisPorEtapa] = await Promise.all([
-    listarEtapas(),
-    contarLeadsPorEtapa(),
-    contarLeadsQueSeguramEtapa(),
+    listarEtapas(usuario.companyId),
+    contarLeadsPorEtapa(usuario.companyId),
+    contarLeadsQueSeguramEtapa(usuario.companyId),
   ]);
 
   // O `.map()` é a fronteira servidor→cliente, não o `select`: é aqui que se

@@ -32,6 +32,70 @@ import { z } from "zod";
  */
 
 /**
+ * ## Os três campos de identificação, e por que eles ganharam checador aqui
+ *
+ * `nome`, `telefone` e `email` continuam com validador IMPERATIVO em
+ * `service.ts` — a seção acima explica por quê e isso não mudou. O que mudou
+ * na Fase 2 da auditoria de 2026-08-21 é que as regras de `nome` e `email`
+ * eram PRIVADAS daquele arquivo, e `core/leads/service.ts` criava `Contact`
+ * por outro caminho (`criarLead` → `encontrarOuCriarContact`, `leads/dedupe.ts`)
+ * repassando os dois valores INTACTOS ao `db.contact.create`. Achado 18 do
+ * relatório: sem obrigatoriedade, sem teto e sem formato do lado do servidor,
+ * com as regras existindo só no Zod de `components/leads/lead-form.tsx` — que
+ * é do CLIENTE e não é fronteira, porque Server Action é endpoint HTTP
+ * público. O teto de fato era 1 MB, o `bodySizeLimit`.
+ *
+ * As funções abaixo NÃO lançam, pelo mesmo motivo da seção "Por que o `throw`
+ * NÃO mora aqui": os dois chamadores têm erros de domínio DIFERENTES
+ * (`ContatoInvalidoError` em `contacts/service.ts`, `LeadInvalidoError` em
+ * `leads/service.ts`, que é a classe que `paraResultadoErro` de
+ * `leads/actions.ts` repassa verbatim para a tela). Elas devolvem o valor
+ * normalizado ou a MENSAGEM de recusa, e quem chama lança a sua classe.
+ *
+ * Uma regra escrita duas vezes é uma regra que diverge — foi exatamente essa
+ * divergência que criou o achado. Por isso o texto das mensagens também mora
+ * aqui: os dois caminhos recusam com a MESMA frase.
+ */
+
+/** Teto de `Contact.nome`. Não é limite de banco (a coluna é `text`): é limite de produto. */
+export const LIMITE_NOME = 120;
+/**
+ * Teto de `Contact.email`. 254 é o comprimento máximo de um endereço de
+ * e-mail, e é o mesmo número que `service.ts` já usava antes desta extração.
+ */
+export const LIMITE_EMAIL = 254;
+
+/** Valor aprovado, ou a mensagem que quem chamou deve mostrar a quem digitou. */
+export type Checagem<T> = { ok: true; valor: T } | { ok: false; mensagem: string };
+
+export function checarNome(bruto: string): Checagem<string> {
+  const nome = bruto.trim();
+  if (nome.length === 0) return { ok: false, mensagem: "O nome é obrigatório." };
+  if (nome.length > LIMITE_NOME) {
+    return { ok: false, mensagem: `O nome pode ter no máximo ${LIMITE_NOME} caracteres.` };
+  }
+  return { ok: true, valor: nome };
+}
+
+/**
+ * E-mail é opcional (ao contrário de `User`): muito lead de WhatsApp chega só
+ * com telefone, e exigir e-mail obrigaria a inventar um. String vazia vira
+ * `null`, não `""` — senão a coluna passa a ter dois jeitos de dizer "não
+ * tem", e toda consulta futura precisa lembrar dos dois.
+ */
+export function checarEmail(bruto: string | undefined): Checagem<string | null> {
+  const email = bruto?.trim().toLowerCase() ?? "";
+  if (email.length === 0) return { ok: true, valor: null };
+  if (email.length > LIMITE_EMAIL) {
+    return { ok: false, mensagem: `O e-mail pode ter no máximo ${LIMITE_EMAIL} caracteres.` };
+  }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return { ok: false, mensagem: "E-mail inválido." };
+  }
+  return { ok: true, valor: email };
+}
+
+/**
  * As 27 unidades federativas. Lista fechada porque UF é dado de duas letras
  * com conjunto conhecido e estável — aceitar texto livre aqui produziria "sp",
  * "SP ", "São Paulo" e "S.P." na mesma coluna, e o dia em que alguém quiser

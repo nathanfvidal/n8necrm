@@ -42,8 +42,9 @@ export interface WhatsappGateway {
    * por isso este método mora no adapter, não na rota que o chama:
    *
    * - Evolution self-hosted não assina webhooks (sem HMAC). A defesa aqui é
-   *   conferir que o campo `instance` do corpo bate com a instância
-   *   configurada neste ambiente (`EVOLUTION_INSTANCE`) — não impede um
+   *   conferir que o campo `instance` do corpo bate com a instância da
+   *   CONEXÃO que atende aquele webhook (`WhatsappConnection.instancia`;
+   *   até o Ciclo 2a era uma variável do deploy) — não impede um
    *   payload forjado por quem já conhece o token do path (a defesa contra
    *   ISSO é o token imprevisível comparado com `timingSafeEqual` na
    *   própria rota, fora deste método), mas impede que uma instância

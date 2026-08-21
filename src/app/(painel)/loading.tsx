@@ -48,6 +48,20 @@ import { LoadingState } from "@/components/loading-state";
  * `tests/e2e/transicao.spec.ts` trava cada um no seu caminho: aqui, que o
  * marcador do esqueleto sai no HTML ANTES da `<table>`; lá, que o link acende
  * enquanto a navegação está a caminho.
+ *
+ * ## "Toda navegação deste painel é `prefetch={false}`" — quem prova isso
+ *
+ * Esta frase aparece duas vezes acima e é UNIVERSAL. Até 2026-08-21 ela não
+ * tinha trava nenhuma: existia em `nav-links.tsx` e em mais nada, e a
+ * auditoria da branch de tenancy achou 13 dos 15 `<Link>` do painel sem a
+ * prop — dois deles em `<nav>` na mesma tela do botão "Sair"
+ * (docs/auditorias/2026-08-21-fase1-seguranca-branch-tenancy.md).
+ *
+ * Agora quem a sustenta são dois arquivos, e nenhum dos dois é decorativo:
+ * `tests/unit/prefetch-do-painel.test.ts` varre `src/app/(painel)/**` e
+ * `src/components/**` e reprova qualquer `<Link>` sem a prop; o teste de
+ * pré-busca em `transicao.spec.ts` observa o fio no build de produção, com
+ * controle próprio para não ficar verde por não estar medindo nada.
  */
 export default function CarregandoPainel() {
   return <LoadingState />;

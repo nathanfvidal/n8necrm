@@ -243,7 +243,7 @@ export async function GET(request: Request) {
   // um CSV completo para quem abre a planilha, e viraria decisão de negócio
   // tomada sobre dado faltando. O teto de escala desta rota é o descrito
   // acima (tempo de execução da função), não o número de linhas.
-  const { itens: leads } = await listarLeads({ semTeto: true });
+  const { itens: leads } = await listarLeads(usuario.companyId, { semTeto: true });
 
   // Registro da extração em massa (Fase 2 da auditoria de segurança).
   //
@@ -270,6 +270,7 @@ export async function GET(request: Request) {
   // para um log de auditoria.
   try {
     await registrarAuditoria({
+      companyId: usuario.companyId,
       userId: usuario.id,
       acao: "exportar_leads",
       entidade: "Lead",

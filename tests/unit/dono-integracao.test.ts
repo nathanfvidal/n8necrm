@@ -34,6 +34,11 @@ let idIntruso = "";
 let idLead = "";
 let idNota = "";
 let idTask = "";
+// Hoisted para os casos: `editarTask`/`excluirTask` passaram a receber
+// `companyId` no Ciclo 1d, e ele e o mesmo da fixture — dono e intruso estao na
+// MESMA empresa aqui de proposito, para que o que barre o intruso seja a regra
+// de DONO e nada mais.
+let companyId = "";
 
 async function limpar() {
   const contatos = await prisma.contact.findMany({
@@ -67,7 +72,6 @@ beforeAll(async () => {
       nome: `Dono ${MARCA}`,
       email: `dono-${MARCA.toLowerCase()}@teste.invalid`,
       senhaHash: hashInerte,
-      papel: "VENDEDOR",
       ativo: false,
     },
   });
@@ -76,29 +80,64 @@ beforeAll(async () => {
       nome: `Intruso ${MARCA}`,
       email: `intruso-${MARCA.toLowerCase()}@teste.invalid`,
       senhaHash: hashInerte,
-      papel: "VENDEDOR",
       ativo: false,
     },
   });
   idDono = dono.id;
   idIntruso = intruso.id;
 
+  // Empresa única do Ciclo 1a (mesma suposição de `prisma/seed.ts`) — dono e
+  // intruso pertencem à mesma empresa aqui de propósito: este arquivo prova
+  // a regra de DONO (autor x autor), não a de tenancy (empresa x empresa) —
+  // duas empresas diferentes tornariam o cenário ambíguo sobre qual regra
+  // barrou o intruso.
+  const empresa = await prisma.company.findFirstOrThrow();
+  companyId = empresa.id;
+
+  // OS DOIS precisam de `Membership`, e a lista cresceu no Ciclo 1a (Task 4).
+  //
+  // Antes só o dono precisava: `registrarAuditoria` resolvia a empresa por
+  // `companyIdDoUsuario(autorId)`, e o intruso era recusado pela regra de dono
+  // ANTES de chegar lá. Isso deixou de valer quando `editarNota`/`excluirNota`
+  // (`core/leads/notes.ts`) passaram a resolver o ESCOPO como primeira coisa
+  // que fazem — a busca da nota agora sai do cliente escopado, então a empresa
+  // de quem age precisa existir antes de qualquer checagem de dono.
+  //
+  // Os dois na MESMA empresa, de propósito, e agora isso importa mais do que
+  // importava: com o escopo em vigor, um intruso de OUTRA empresa seria
+  // recusado pelo escopo, e os dois primeiros casos deste arquivo passariam
+  // sem exercitar a regra de dono nenhuma vez — verdes pelo motivo errado. É
+  // exatamente a armadilha que este arquivo foi criado para não repetir.
+  await prisma.membership.createMany({
+    data: [
+      { userId: idDono, companyId, papel: "VENDEDOR" },
+      { userId: idIntruso, companyId, papel: "VENDEDOR" },
+    ],
+  });
+
   const contato = await prisma.contact.create({
-    data: { nome: `Cliente ${MARCA}`, telefone: TELEFONE },
+    data: { companyId, nome: `Cliente ${MARCA}`, telefone: TELEFONE },
   });
   const etapa = await prisma.pipelineStage.findFirstOrThrow({ orderBy: { ordem: "asc" } });
   const lead = await prisma.lead.create({
-    data: { contactId: contato.id, stageId: etapa.id, responsavelId: idDono, canal: "MANUAL" },
+    data: {
+      companyId,
+      contactId: contato.id,
+      stageId: etapa.id,
+      responsavelId: idDono,
+      canal: "MANUAL",
+    },
   });
   idLead = lead.id;
 
   const nota = await prisma.leadNote.create({
-    data: { leadId: idLead, autorId: idDono, texto: "texto original do dono" },
+    data: { companyId, leadId: idLead, autorId: idDono, texto: "texto original do dono" },
   });
   idNota = nota.id;
 
   const task = await prisma.task.create({
     data: {
+      companyId,
       titulo: `Tarefa ${MARCA}`,
       vencimento: new Date(Date.UTC(2026, 11, 31)),
       responsavelId: idDono,
@@ -134,6 +173,7 @@ describe("regra de dono contra o banco real", () => {
   it("intruso NAO edita a tarefa de outra pessoa", async () => {
     await expect(
       editarTask({
+        companyId,
         taskId: idTask,
         titulo: "invadido",
         vencimento: new Date(Date.UTC(2026, 11, 31)),
@@ -146,7 +186,7 @@ describe("regra de dono contra o banco real", () => {
   });
 
   it("intruso NAO exclui a tarefa de outra pessoa, e nao gera auditoria", async () => {
-    await expect(excluirTask({ taskId: idTask, autorId: idIntruso })).rejects.toThrow(
+    await expect(excluirTask({ companyId, taskId: idTask, autorId: idIntruso })).rejects.toThrow(
       "Tarefa não encontrada"
     );
     expect(await prisma.task.count({ where: { id: idTask } })).toBe(1);
@@ -189,7 +229,7 @@ describe("regra de dono contra o banco real", () => {
   // Decisão do dono do projeto na auditoria: exclusão de tarefa deixa rastro,
   // porque a linha some para sempre.
   it("o DONO exclui a propria tarefa e a auditoria guarda o que foi destruido", async () => {
-    await excluirTask({ taskId: idTask, autorId: idDono });
+    await excluirTask({ companyId, taskId: idTask, autorId: idDono });
 
     expect(await prisma.task.count({ where: { id: idTask } })).toBe(0);
 

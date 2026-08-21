@@ -6,7 +6,9 @@
 // nada impede mockar `usuarioAtual()`, `hasPermission()` e o `service`
 // diretamente, isolando a decisão de autorização da action de tudo o mais.
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import type { User, Lead } from "@prisma/client";
+import type { Lead } from "@prisma/client";
+
+import type { UsuarioAtivo } from "@/core/auth/usuario-ativo";
 
 const usuarioAtualMock = vi.fn();
 vi.mock("@/core/auth/session", () => ({ usuarioAtual: () => usuarioAtualMock() }));
@@ -73,15 +75,26 @@ const { criarLeadManualAction, moverLeadDeEtapaAction, adicionarNotaAction } = a
 const { hasPermission } = await import("../../src/core/auth/permissions");
 const { MENSAGEM_SESSAO_INVALIDA } = await import("../../src/lib/acao");
 
-function usuarioFake(overrides: Partial<User>): User {
+// `UsuarioAtivo` e NÃO `User` do Prisma: é o que `usuarioAtual()` devolve, e é
+// de onde saem os `autor.papel` que `core/leads/actions.ts:53` e `:146` passam
+// para `hasPermission`. O `papel` aqui sempre foi o do VÍNCULO na semântica --
+// tipá-lo como `User.papel` era o erro, e ele custava um `tsc` vermelho em nove
+// linhas deste arquivo no dia em que a coluna saísse.
+//
+// Diferente de `task-actions.test.ts`, aqui o tipo errado não escondia defeito
+// nenhum: `core/leads/actions.ts` não menciona `companyId` em ponto algum
+// (medido em 2026-08-21: `grep -c companyId src/core/leads/actions.ts` → `0`).
+// `senhaHash` e `criadoEm` somem porque `UsuarioAtivo` não os tem, e nenhum
+// caso deste arquivo os lia -- as vinte chamadas de `usuarioFake` passam só
+// `id` e `papel`.
+function usuarioFake(overrides: Partial<UsuarioAtivo>): UsuarioAtivo {
   return {
     id: "usuario-fake-id",
     nome: "Usuário Fake",
     email: "fake@teste.local",
-    senhaHash: "hash",
-    papel: "VENDEDOR",
     ativo: true,
-    criadoEm: new Date("2026-01-01T00:00:00.000Z"),
+    companyId: "empresa-fake-id",
+    papel: "VENDEDOR",
     ...overrides,
   };
 }
@@ -89,6 +102,7 @@ function usuarioFake(overrides: Partial<User>): User {
 function leadFake(overrides: Partial<Lead> = {}): Lead {
   return {
     id: "lead-fake-id",
+    companyId: "empresa-fake-id",
     contactId: "contact-fake-id",
     itemId: null,
     stageId: "stage-fake-id",

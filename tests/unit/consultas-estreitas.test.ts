@@ -49,6 +49,7 @@ const RELACOES_SENSIVEIS: Record<string, string> = {
   user: "User (senhaHash)",
   iaPausadaPor: "User (senhaHash)",
   atualizadoPor: "User (senhaHash)",
+  segredoAtualizadoPor: "User (senhaHash)",
 };
 
 

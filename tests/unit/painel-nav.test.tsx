@@ -2,34 +2,11 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
 
-// `config/client` é mockado para que o teste não dependa do que o fork atual
-// tem ligado: se alguém mexer em `client.modulos`, estes casos continuam
-// válidos.
-//
-// Mutável (via `vi.hoisted`, porque a fábrica de `vi.mock` é içada acima das
-// declarações do arquivo) para que os dois lados da filtragem possam ser
-// provados de verdade — antes de 2026-08-07 havia três links de módulo na
-// nav, dois deles para rotas inexistentes, e o teste usava um módulo ligado e
-// outro desligado. Com um único módulo de verdade (`whatsapp`), provar o caso
-// "não aparece" exige trocar a lista entre um teste e outro; um mock fixo só
-// conseguiria testar metade.
-//
-// `nome`/`marca` entraram junto com a reforma da barra lateral: `PainelNav`
-// agora renderiza `<Marca />` (Task 5) duas vezes (aside e gaveta), e o
-// componente lê `client.nome`/`client.marca.logo` — sem esses dois campos
-// aqui, o render quebra com "Cannot read properties of undefined". Mesmo
-// formato de `marca.test.tsx`, sem `logo` para cair no caminho de texto.
-const mocks = vi.hoisted(() => ({ modulos: ["whatsapp"] as string[] }));
-
-vi.mock("../../config/client", () => ({
-  client: {
-    get modulos() {
-      return mocks.modulos;
-    },
-    nome: "AutoCenter",
-    marca: { nome: "AutoCenter", corPrimaria: "#0F62FE", fonte: "Geist" },
-  },
-}));
+// `config/client` NÃO é mais mockado aqui: desde o Ciclo 1c os módulos e o
+// nome da marca chegam por PROP, vindos do banco por empresa. O mock existia
+// para o teste não depender do que o fork tivesse ligado; a prop faz melhor,
+// porque cada caso declara na própria linha o que está ligado — e não há mais
+// objeto mutável compartilhado entre casos para alguém esquecer de restaurar.
 
 // PainelNav (Task 19) agora renderiza <NotificationBell> como último item —
 // um Client Component que importa `marcarNotificacaoComoLidaAction` de
@@ -60,22 +37,28 @@ vi.mock("@/core/auth/actions", () => ({
 
 const { PainelNav } = await import("../../src/components/painel-nav");
 
+/**
+ * As duas props obrigatórias do Ciclo 1c em um lugar só. Cada caso sobrepõe o
+ * que interessa a ele — antes isso era um objeto `mocks` mutável compartilhado
+ * por todo o arquivo, com `afterEach` restaurando o padrão; um caso que
+ * esquecesse de restaurar vazava para o seguinte.
+ */
+function montar(props: Partial<React.ComponentProps<typeof PainelNav>> = {}) {
+  return render(<PainelNav modulosAtivos={["whatsapp"]} nomeMarca="AutoCenter" {...props} />);
+}
+
 describe("PainelNav", () => {
   afterEach(() => {
     cleanup();
-    // Restaura o padrão para não vazar o estado de um teste para o seguinte —
-    // `mocks` é um objeto único compartilhado por todo o arquivo.
-    mocks.modulos = ["whatsapp"];
   });
 
   it("mostra o link de um módulo ativo", () => {
-    render(<PainelNav />);
+    montar();
     expect(screen.getByRole("link", { name: "Conversas" })).toBeTruthy();
   });
 
   it("não mostra o link de um módulo desligado", () => {
-    mocks.modulos = [];
-    render(<PainelNav />);
+    montar({ modulosAtivos: [] });
     expect(screen.queryByRole("link", { name: "Conversas" })).toBeNull();
   });
 
@@ -83,8 +66,7 @@ describe("PainelNav", () => {
   // `/analytics`, rotas que nunca existiram — o link aparecia e a navegação
   // dava 404. Se alguém reintroduzir um link sem a rota, este teste avisa.
   it("não anuncia catálogo nem analytics, que não têm rota", () => {
-    mocks.modulos = ["catalog", "analytics", "whatsapp"];
-    render(<PainelNav />);
+    montar({ modulosAtivos: ["catalog", "analytics", "whatsapp"] });
     expect(screen.queryByRole("link", { name: "Catálogo" })).toBeNull();
     expect(screen.queryByRole("link", { name: "Analytics" })).toBeNull();
   });
@@ -94,26 +76,55 @@ describe("PainelNav", () => {
   // a página redireciona e cada Server Action checa a permissão — mas mostrar
   // a um VENDEDOR um link que só leva a um redirecionamento é ruído.
   it("mostra Equipe para ADMIN", () => {
-    render(<PainelNav papelUsuario="ADMIN" />);
+    montar({ papelUsuario: "ADMIN" });
     expect(screen.getByRole("link", { name: "Equipe" })).toBeTruthy();
   });
 
   it("não mostra Equipe para GESTOR nem VENDEDOR", () => {
-    render(<PainelNav papelUsuario="GESTOR" />);
+    montar({ papelUsuario: "GESTOR" });
     expect(screen.queryByRole("link", { name: "Equipe" })).toBeNull();
     cleanup();
 
-    render(<PainelNav papelUsuario="VENDEDOR" />);
+    montar({ papelUsuario: "VENDEDOR" });
     expect(screen.queryByRole("link", { name: "Equipe" })).toBeNull();
   });
 
+  // "Configurações" (/configuracoes) é filtrado por PAPEL, como "Equipe":
+  // administração é núcleo, existe em todo fork. Esconder o link não é a
+  // defesa — a página redireciona e cada Server Action checa a permissão —
+  // mas mostrar a um VENDEDOR um link que só leva a um redirecionamento é
+  // ruído.
+  it("mostra Configurações para ADMIN", () => {
+    montar({ papelUsuario: "ADMIN" });
+    expect(screen.getByRole("link", { name: "Configurações" })).toBeTruthy();
+  });
+
+  it("não mostra Configurações para GESTOR nem VENDEDOR", () => {
+    montar({ papelUsuario: "GESTOR" });
+    expect(screen.queryByRole("link", { name: "Configurações" })).toBeNull();
+    cleanup();
+
+    montar({ papelUsuario: "VENDEDOR" });
+    expect(screen.queryByRole("link", { name: "Configurações" })).toBeNull();
+  });
+
+  it("aponta para `/configuracoes`, não para a seção — a URL do menu é estável", () => {
+    // Direto em `/configuracoes/conexoes`, o item de menu teria de mudar no
+    // dia da segunda seção. `/configuracoes` redireciona para a primeira que a
+    // pessoa pode ver.
+    montar({ papelUsuario: "ADMIN" });
+    expect(screen.getByRole("link", { name: "Configurações" }).getAttribute("href")).toBe(
+      "/configuracoes"
+    );
+  });
+
   it("omite Equipe quando o papel não é informado — padrão seguro", () => {
-    render(<PainelNav />);
+    montar();
     expect(screen.queryByRole("link", { name: "Equipe" })).toBeNull();
   });
 
   it("sempre mostra os links fixos, independente dos módulos", () => {
-    render(<PainelNav />);
+    montar();
     expect(screen.getByRole("link", { name: "Dashboard" })).toBeTruthy();
     expect(screen.getByRole("link", { name: "Leads" })).toBeTruthy();
     expect(screen.getByRole("link", { name: "Funil" })).toBeTruthy();
@@ -122,7 +133,7 @@ describe("PainelNav", () => {
   });
 
   it("mostra o botão de sair — sem ele não havia como encerrar a sessão pela interface", () => {
-    render(<PainelNav />);
+    montar();
     const botao = screen.getByRole("button", { name: "Sair" });
     expect(botao).toBeTruthy();
     // Precisa ser submit de um <form> (POST via Server Action), não link:
@@ -132,22 +143,22 @@ describe("PainelNav", () => {
   });
 
   it("mostra quem está logado quando o nome é informado", () => {
-    render(<PainelNav nomeUsuario="Maria Vendedora" />);
+    montar({ nomeUsuario: "Maria Vendedora" });
     expect(screen.getByTestId("usuario-logado").textContent).toBe("Maria Vendedora");
   });
 
   it("não quebra quando o nome não é informado", () => {
-    render(<PainelNav />);
+    montar();
     expect(screen.queryByTestId("usuario-logado")).toBeNull();
   });
 
   it("mostra o nome do usuario no rodape da barra", () => {
-    render(<PainelNav nomeUsuario="Rodrigo" papelUsuario="ADMIN" />);
+    montar({ nomeUsuario: "Rodrigo", papelUsuario: "ADMIN" });
     expect(screen.getByTestId("usuario-logado").textContent).toContain("Rodrigo");
   });
 
   it("mantem o logout como form, nunca como link", () => {
-    const { container } = render(<PainelNav nomeUsuario="Rodrigo" papelUsuario="ADMIN" />);
+    const { container } = montar({ nomeUsuario: "Rodrigo", papelUsuario: "ADMIN" });
     // GET que desloga e disparavel por <img src> de qualquer site.
     expect(container.querySelector("form")).toBeTruthy();
     expect(screen.queryByRole("link", { name: /Sair/ })).toBeNull();
@@ -161,7 +172,7 @@ describe("PainelNav", () => {
   // O nome fica invisível (`sr-only`) de propósito: a gaveta já mostra a
   // marca no topo, então repetir na tela seria ruído para quem enxerga.
   it("a gaveta do celular abre com nome acessivel, nao so como dialogo anonimo", async () => {
-    render(<PainelNav nomeUsuario="Rodrigo" />);
+    montar({ nomeUsuario: "Rodrigo" });
 
     fireEvent.click(screen.getByRole("button", { name: "Abrir menu" }));
 
@@ -184,9 +195,18 @@ describe("PainelNav", () => {
     expect(rotulo || textoApontado, "a gaveta abriu sem nome acessivel").toBeTruthy();
   });
 
+  // A marca por PROP é comportamento novo do Ciclo 1c e sem este caso ninguém
+  // cobre: um `nomeMarca` ignorado dentro do componente passaria por todos os
+  // outros.
+  it("mostra o nome da marca que RECEBEU, não um valor de arquivo", () => {
+    // Duas ocorrências: o `<aside>` do desktop e a barra do celular renderizam
+    // `<Marca />` cada um (ver o comentário de `conteudo` em painel-nav.tsx).
+    montar({ nomeMarca: "Empresa da Sessao" });
+    expect(screen.getAllByText("Empresa da Sessao")).toHaveLength(2);
+  });
+
   it("nao renderiza regua para VENDEDOR com o modulo desligado", () => {
-    mocks.modulos = [];
-    const { container } = render(<PainelNav nomeUsuario="Ana" papelUsuario="VENDEDOR" />);
+    const { container } = montar({ modulosAtivos: [], nomeUsuario: "Ana", papelUsuario: "VENDEDOR" });
     expect(container.querySelectorAll("hr")).toHaveLength(0);
   });
 });

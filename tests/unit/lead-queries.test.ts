@@ -24,10 +24,23 @@ import { prisma } from "../../src/lib/prisma";
 import { seed } from "../../prisma/seed";
 
 describe("listarLeads", () => {
+  // A empresa do SEED, lida do vínculo do admin — não uma string fixa nem
+  // `prisma.company.findFirst()`. `listarLeads` passou a exigir o escopo no
+  // Ciclo 1a (Task 4), e a origem legítima dele em produção é
+  // `UsuarioAtivo.companyId`, que sai do `Membership`. Ler daqui mantém o
+  // teste falando a mesma língua do código.
+  let companyId: string;
+
   beforeAll(async () => {
     // Garante o seed (4 leads: 2 do admin, 2 do vendedor — ver
     // prisma/seed.ts) sem depender de execução manual prévia.
     await seed();
+
+    const admin = await prisma.user.findUniqueOrThrow({
+      where: { email: "admin@exemplo.com" },
+      include: { memberships: true },
+    });
+    companyId = admin.memberships[0]!.companyId;
   });
 
   it(
@@ -39,7 +52,7 @@ describe("listarLeads", () => {
       const admin = await prisma.user.findUniqueOrThrow({ where: { email: "admin@exemplo.com" } });
       const vendedor = await prisma.user.findUniqueOrThrow({ where: { email: "vendedor@exemplo.com" } });
 
-      const { itens: leads } = await listarLeads();
+      const { itens: leads } = await listarLeads(companyId);
 
       const responsaveisPresentes = new Set(leads.map((lead) => lead.responsavelId));
       expect(responsaveisPresentes.has(admin.id)).toBe(true);
@@ -48,7 +61,7 @@ describe("listarLeads", () => {
   );
 
   it("cada lead vem com a etapa (`stage`) incluída — a tabela da Task 16 usa `stage.nome` como coluna", async () => {
-    const { itens: leads } = await listarLeads();
+    const { itens: leads } = await listarLeads(companyId);
 
     expect(leads.length).toBeGreaterThan(0);
     for (const lead of leads) {
@@ -58,7 +71,7 @@ describe("listarLeads", () => {
   });
 
   it("ordena por criadoEm decrescente (mesmo contrato de listarLeadsPorEtapa, Task 13)", async () => {
-    const { itens: leads } = await listarLeads();
+    const { itens: leads } = await listarLeads(companyId);
 
     for (let i = 1; i < leads.length; i++) {
       expect(leads[i - 1].criadoEm.getTime()).toBeGreaterThanOrEqual(leads[i].criadoEm.getTime());

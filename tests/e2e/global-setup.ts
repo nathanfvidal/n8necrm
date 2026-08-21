@@ -20,23 +20,121 @@ const CUSTO_BCRYPT = 10;
  *
  * `upsert` e não `create`: roda antes de toda execução da suíte e não pode
  * quebrar na segunda vez nem depender de o banco estar num estado anterior.
- * O `update` regrava `senhaHash`, `ativo` e `papel` porque cada um desses já
- * foi motivo de suíte quebrada — conta desativada por um teste que falhou no
- * meio, papel trocado por um teste de permissão, senha rotacionada no `.env`.
+ * Os dois `update` regravam `senhaHash`, `ativo` e `papel` porque cada um
+ * desses já foi motivo de suíte quebrada — conta desativada por um teste que
+ * falhou no meio, papel trocado por um teste de permissão, senha rotacionada
+ * no `.env`. São DOIS porque as três coisas moram em duas tabelas: `senhaHash`
+ * e `ativo` no `User`, `papel` no `Membership` — o `upsert` do vínculo, mais
+ * abaixo. Até o Ciclo 1f o `papel` era regravado aqui também, na coluna
+ * espelho `User.papel`, que já não existe.
  */
 async function garantirContasDeTeste(prisma: PrismaClient): Promise<void> {
   const senhaHash = await bcrypt.hash(senhaE2e(), CUSTO_BCRYPT);
+
+  // A empresa das contas de teste: a MAIS ANTIGA do banco, que nesta árvore é
+  // `company-migracao-1a` — a que a migração do Ciclo 1a criou e à qual todo o
+  // resto do dado de desenvolvimento está preso. Fixture não inventa empresa
+  // nova: uma empresa por execução da suíte é exatamente o resíduo que a
+  // auditoria do Ciclo 1a mediu (empresas órfãs deixadas por fixture).
+  //
+  // `findFirst` aqui não contradiz a regra "nunca `company.findFirst()`" de
+  // `src/core/config/leitura.ts`: aquela proíbe DERIVAR a empresa do usuário
+  // logado a partir do banco em código de aplicação. Aqui não há usuário
+  // logado — este código está CRIANDO o vínculo que, depois, vai ser a origem
+  // do `companyId` da sessão.
+  const empresa = await prisma.company.findFirst({
+    orderBy: { criadoEm: "asc" },
+    select: { id: true },
+  });
+  if (!empresa) {
+    throw new Error(
+      "Não há nenhuma Company no banco, e as contas de teste E2E precisam de um Membership " +
+        "para entrar no painel (src/core/auth/session.ts resolve o companyId da sessão pelo " +
+        "vínculo). Rode as migrations e o seed antes da suíte E2E.",
+    );
+  }
 
   for (const [email, nome, papel] of [
     [EMAIL_ADMIN_E2E, "E2E Admin", "ADMIN"],
     [EMAIL_VENDEDOR_E2E, "E2E Vendedor", "VENDEDOR"],
   ] as const) {
-    await prisma.user.upsert({
+    const usuario = await prisma.user.upsert({
       where: { email },
-      update: { senhaHash, ativo: true, papel },
-      create: { nome, email, senhaHash, papel },
+      update: { senhaHash, ativo: true },
+      create: { nome, email, senhaHash },
+      select: { id: true },
+    });
+
+    // O VÍNCULO, e sem ele a suíte inteira não entra no painel.
+    //
+    // Desde o Ciclo 1a `Membership.papel` é a fonte de verdade, e desde o
+    // Ciclo 1f é a ÚNICA: `User.papel` era espelho depreciado e saiu do banco
+    // em `20260821130000_derruba_user_papel_de_vez` (ver o bloco acima de
+    // `model User`, em `prisma/schema.prisma`). `usuarioAtual()` resolve
+    // `companyId` e `papel` pelo vínculo e LANÇA quando não há nenhum. Esta função foi escrita antes disso e continuou
+    // criando só o `User` — medido em 2026-08-20, os dois `e2e-*@teste.invalid`
+    // tinham ZERO linhas em `Membership`.
+    //
+    // O sintoma não apontava para cá: o login em si funcionava, `/` redirecionava
+    // de volta para `/login` porque `(painel)/layout.tsx` captura o erro de
+    // `usuarioAtual()` e manda para lá, e `auth.setup.ts` falhava dizendo que o
+    // link "Equipe" não estava visível. É o mesmo defeito que o commit e67e1e6
+    // fechou em `tests/unit/audit-log.test.ts`; a fixture E2E ficou de fora.
+    //
+    // `update: { papel }` e não só `create`: um teste de permissão que troque o
+    // papel e falhe no meio deixaria o vínculo com o papel errado para a
+    // execução seguinte. Desde o Ciclo 1f este `upsert` é o ÚNICO lugar que
+    // grava o papel destas duas contas — o `upsert` do usuário, acima, também
+    // regravava a coluna espelho `User.papel` e parou. Quem sustenta a palavra
+    // "único" não é esta prosa: é `tests/unit/user-papel-nao-volta.test.ts`,
+    // que reprova `papel` em qualquer chamada a `prisma.user.*` do
+    // repositório e deixa o vínculo como a única via.
+    await prisma.membership.upsert({
+      where: { userId_companyId: { userId: usuario.id, companyId: empresa.id } },
+      update: { papel },
+      create: { userId: usuario.id, companyId: empresa.id, papel },
     });
   }
+}
+
+/**
+ * Carimbo desta EXECUÇÃO da suíte, visível a todos os workers.
+ *
+ * ## Para que serve
+ *
+ * Uma fixture que grava numa coluna com unicidade não pode usar valor fixo:
+ * `test.beforeAll` roda uma vez POR WORKER, não por arquivo
+ * (`node_modules/playwright/lib/runner/`, `createTestGroups`), então com
+ * `workers: 3` o segundo worker bate na constraint. O caso concreto que
+ * motivou isto: `seguranca-headers.spec.ts` criava um `Contact` com telefone
+ * fixo — 22 verdes com `--workers=1`,
+ * `Unique constraint failed on the fields: (telefone)` com 3.
+ *
+ * O Ciclo 1e compôs essa chave com a empresa (`@@unique([companyId,
+ * telefone])`) e isso NÃO dispensa o carimbo: os três workers rodam contra a
+ * MESMA empresa (a do seed), então a colisão é entre workers e sobrevive à
+ * composição. Ver a seção correspondente em `seguranca-headers.spec.ts`.
+ *
+ * Só o índice do worker não basta. Ele resolve a colisão DENTRO de uma
+ * execução, mas deixa o valor igual entre execuções, e aí a limpeza de
+ * resíduo de uma execução anterior não tem como distinguir "linha velha, pode
+ * apagar" de "linha do worker vizinho, ainda em uso". Com este carimbo a
+ * distinção é literal: o que não começa com o carimbo desta execução é
+ * resíduo.
+ *
+ * `globalSetup` roda no processo PAI, antes de qualquer worker existir, e o
+ * Playwright forka cada worker com `env: { ...process.env, ...extraEnv }`
+ * (`node_modules/playwright/lib/runner/index.js`, `startRunner`) — então
+ * escrever em `process.env` aqui é o caminho suportado de passar um valor
+ * único para todos os workers da mesma execução.
+ *
+ * Dois dígitos porque é só um desempate entre execuções VIZINHAS: a fixture
+ * apaga o valor exato antes de criar, então uma repetição de carimbo a cada
+ * 100 execuções não quebra nada — só faz aquela execução não varrer o
+ * resíduo da homônima anterior.
+ */
+function carimbarExecucao(): void {
+  process.env.E2E_ID_EXECUCAO = String(Date.now() % 100).padStart(2, "0");
 }
 
 /**
@@ -67,6 +165,7 @@ export default async function globalSetup() {
   });
 
   try {
+    carimbarExecucao();
     await garantirContasDeTeste(prisma);
 
     const { count } = await prisma.rateLimit.deleteMany({

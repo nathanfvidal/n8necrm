@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 
-import type { User } from "@prisma/client";
+import type { Role } from "@prisma/client";
 
 import { usuarioAtual } from "@/core/auth/session";
 import { hasPermission } from "@/core/auth/permissions";
@@ -55,12 +55,22 @@ import {
  */
 function semDocumentoSeNaoPodeVer<T extends { documento?: string | null }>(
   dados: T,
-  autor: User
+  autor: { papel: Role }
 ): T {
   if (hasPermission(autor.papel, "ver_documento_contato")) return dados;
   const { documento: _ignorado, ...resto } = dados;
   return resto as T;
 }
+// `autor` acima é tipado `{ papel: Role }`, não `autor: User` (Prisma) -- a
+// função só lê `.papel`. Ficou explícito na Task 2 do Ciclo 1a: `usuarioAtual()`
+// parou de devolver o modelo `User` inteiro (passou a devolver `UsuarioAtivo`,
+// que não tem `senhaHash` nem `criadoEm`), e o tipo largo `User` aqui nunca
+// foi necessário -- estreitá-lo para o que é de fato usado é o que mantém a
+// função compilando com a nova origem de `autor`, sem reabrir a leitura de
+// campo nenhum novo. Comentário depois da função, não antes, de propósito:
+// a chamada acima é uma das 26 que a Task 2 do Ciclo 1a prova que não mudou
+// (via `grep -n`, que também conta número de linha) -- um comentário inserido
+// ANTES dela mudaria a contagem de linha sem mudar o código.
 
 function paraResultadoErro(erro: unknown, mensagemGenerica: string): { ok: false; erro: string } {
   if (erro instanceof ContatoInvalidoError) {
@@ -83,7 +93,10 @@ export async function criarContatoAction(
 ): Promise<ResultadoAcao> {
   try {
     const autor = await usuarioAtual();
-    await criarContato(semDocumentoSeNaoPodeVer(dados, autor), autor.id);
+    // A empresa sai de `usuarioAtual().companyId`, nunca de `dados`: esta é
+    // uma Server Action, que é endpoint HTTP público, e tudo que vem em
+    // `dados` foi montado pelo cliente. Ver o cabeçalho de `service.ts`.
+    await criarContato(autor.companyId, semDocumentoSeNaoPodeVer(dados, autor), autor.id);
   } catch (erro) {
     return paraResultadoErro(erro, "Falha ao salvar o contato. Tente novamente.");
   }
@@ -101,7 +114,10 @@ export async function atualizarContatoAction(
 ): Promise<ResultadoAcao> {
   try {
     const autor = await usuarioAtual();
-    await atualizarContato(semDocumentoSeNaoPodeVer(dados, autor), autor.id);
+    // Mesma origem de empresa da ação de criar, e aqui ela vale ainda mais:
+    // `dados.id` é o id do contato a reescrever, e vem do cliente. É o escopo
+    // que decide se aquele id pertence a quem está agindo.
+    await atualizarContato(autor.companyId, semDocumentoSeNaoPodeVer(dados, autor), autor.id);
   } catch (erro) {
     return paraResultadoErro(erro, "Falha ao salvar o contato. Tente novamente.");
   }

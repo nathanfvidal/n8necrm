@@ -6,8 +6,9 @@
 // Sem mockar `@/core/auth/session` e `@/core/leads/queries`, a importação da
 // rota puxaria `@/lib/prisma` (que tem `import "server-only"`) e exigiria
 // DATABASE_URL — este arquivo testa só a rota, não o banco.
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import type { User, Lead, Contact, PipelineStage } from "@prisma/client";
+import type { UsuarioAtivo } from "@/core/auth/usuario-ativo";
 
 const usuarioAtualMock = vi.fn();
 vi.mock("@/core/auth/session", () => ({ usuarioAtual: () => usuarioAtualMock() }));
@@ -47,37 +48,63 @@ const { GET } = await import("../../src/app/(painel)/export/leads/route");
 // Política (limite/janela) importada de verdade, não repetida como número
 // solto aqui: se alguém afrouxar a cota no módulo, o teste acompanha em vez
 // de virar um literal desatualizado guardando um valor que não existe mais.
+const { IP_DESCONHECIDO } = await import("../../src/lib/ip");
+
 const { LIMITE_EXPORT_POR_CONTA, JANELA_EXPORT_MS } = await import(
   "../../src/core/rate-limit/export-leads"
 );
 
 /**
+ * O cabecalho que a borda sobrescreve, nomeado por `IP_CABECALHO_CONFIAVEL`.
+ * Desde o Ciclo 2d `obterIpDaRequisicao` nao le cabecalho nenhum sem essa
+ * variavel (ver `src/lib/ip.ts`), entao o `beforeEach` a define.
+ *
+ * A COTA desta rota e por conta (`export:leads:<userId>`), nunca por IP, entao
+ * nenhum desfecho de rate limit deste arquivo depende disso. O que depende e o
+ * `ip` que vai para a linha de auditoria -- e e por ele que a variavel esta aqui.
+ */
+const CABECALHO_DA_BORDA = "x-vercel-forwarded-for";
+
+/**
  * A rota passou a receber a `Request` (antes era `GET()` sem argumento) porque
  * precisa do IP de origem para a auditoria — `obterIpDaRequisicao` lê header.
- * `x-vercel-forwarded-for` é o header que a própria borda da Vercel define e
- * que o cliente não consegue forjar (ver `src/lib/ip.ts`).
  */
 function requisicaoFake(ip = "203.0.113.7"): Request {
   return new Request("http://localhost/export/leads", {
-    headers: { "x-vercel-forwarded-for": ip },
+    headers: { [CABECALHO_DA_BORDA]: ip },
   });
 }
 
-function usuarioFake(overrides: Partial<User>): User {
+/**
+ * `UsuarioAtivo`, e NÃO `User` do Prisma.
+ *
+ * Era `User` — com `senhaHash` e `criadoEm`, sem `companyId`. Isso deixou de
+ * descrever o que `usuarioAtual()` devolve quando a Task 2 do Ciclo 1a trocou
+ * o retorno por `UsuarioAtivo` (`core/auth/usuario-ativo.ts`): a projeção sem
+ * hash de senha, com a EMPRESA da requisição e o papel vindo do `Membership`.
+ *
+ * Enquanto o mock mentia sobre a forma, a rota podia ler `usuario.companyId` e
+ * receber `undefined` sem nenhum caso ficar vermelho — o teste passaria por
+ * cima de uma exportação sem escopo, que é justamente o que esta rota não pode
+ * fazer (ela tira a base inteira de clientes num arquivo só).
+ */
+const EMPRESA_FAKE = "empresa-fake-id";
+
+function usuarioFake(overrides: Partial<UsuarioAtivo>): UsuarioAtivo {
   return {
     id: "usuario-fake-id",
     nome: "Usuário Fake",
     email: "fake@teste.local",
-    senhaHash: "hash",
     papel: "ADMIN",
     ativo: true,
-    criadoEm: new Date("2026-01-01T00:00:00.000Z"),
+    companyId: EMPRESA_FAKE,
     ...overrides,
   };
 }
 
 const etapaFake: PipelineStage = {
   id: "stage-1",
+  companyId: "empresa-fake-id",
   nome: "Novo",
   ordem: 0,
   cor: "#000000",
@@ -88,6 +115,7 @@ const etapaFake: PipelineStage = {
 function contactFake(overrides: Partial<Contact> = {}): Contact {
   return {
     id: "contact-1",
+    companyId: "empresa-fake-id",
     nome: "Nome Qualquer",
     telefone: "11999990000",
     email: null,
@@ -118,6 +146,7 @@ type LeadFake = Lead & {
 function leadFake(overrides: Partial<LeadFake> = {}): LeadFake {
   return {
     id: "lead-1",
+    companyId: "empresa-fake-id",
     contactId: "contact-1",
     itemId: null,
     stageId: "stage-1",
@@ -138,7 +167,18 @@ function leadFake(overrides: Partial<LeadFake> = {}): LeadFake {
   };
 }
 
+const cabecalhoOriginal = process.env.IP_CABECALHO_CONFIAVEL;
+
+afterEach(() => {
+  if (cabecalhoOriginal === undefined) delete process.env.IP_CABECALHO_CONFIAVEL;
+  else process.env.IP_CABECALHO_CONFIAVEL = cabecalhoOriginal;
+});
+
 beforeEach(() => {
+  // Sem esta linha `obterIpDaRequisicao` devolveria a sentinela e a linha de
+  // auditoria sairia sem IP -- o caso que mede "de qual IP" ficaria medindo o
+  // estado degradado. O caso que mede o estado degradado apaga a variavel.
+  process.env.IP_CABECALHO_CONFIAVEL = CABECALHO_DA_BORDA;
   usuarioAtualMock.mockReset();
   listarLeadsMock.mockReset();
   // Padrão "caminho feliz" para os dois controles novos, para que os testes
@@ -161,7 +201,10 @@ describe("GET /export/leads — a exportacao nunca e' truncada", () => {
 
     await GET(requisicaoFake());
 
-    expect(listarLeadsArgsMock).toHaveBeenCalledWith({ semTeto: true });
+    // A empresa vem de `usuarioAtual().companyId`, e é o primeiro
+    // argumento — não um campo dentro de `opcoes`, e nunca algo vindo da
+    // requisição. Ver `listarLeads` em `core/leads/queries.ts`.
+    expect(listarLeadsArgsMock).toHaveBeenCalledWith(EMPRESA_FAKE, { semTeto: true });
   });
 });
 
@@ -534,6 +577,10 @@ describe("GET /export/leads — auditoria da extração em massa", () => {
     expect(resposta.status).toBe(200);
     expect(registrarAuditoriaMock).toHaveBeenCalledTimes(1);
     expect(registrarAuditoriaMock).toHaveBeenCalledWith({
+      // A empresa da SESSAO: `AuditLog` e modelo de tenant, e desde o Ciclo 1d
+      // `registrarAuditoria` a recebe explicita em vez de deduzi-la de um
+      // vinculo arbitrario do autor.
+      companyId: EMPRESA_FAKE,
       userId: "gestor-7",
       acao: "exportar_leads",
       entidade: "Lead",
@@ -541,6 +588,26 @@ describe("GET /export/leads — auditoria da extração em massa", () => {
       depois: { totalLeads: 2 },
       ip: "198.51.100.20",
     });
+  });
+
+  it("sem cabeçalho confiável, a auditoria sai SEM ip — e a exportação acontece assim mesmo", async () => {
+    // As duas metades importam. A primeira: `obterIpDaRequisicao` devolve a
+    // sentinela e o funil de auditoria (`core/audit/log.ts`) a normaliza para
+    // `undefined`, para a coluna anulável ficar nula em vez de guardar um valor
+    // que não é IP. A segunda: exportar é a operação, o IP é metadado dela — sem
+    // borda configurada a extração continua acontecendo e continua sendo
+    // registrada, só que sem origem. Fail-closed aqui trancaria uma função
+    // legítima por causa de uma variável de ambiente ausente.
+    delete process.env.IP_CABECALHO_CONFIAVEL;
+    usuarioAtualMock.mockResolvedValue(usuarioFake({ id: "gestor-7", papel: "GESTOR" }));
+    listarLeadsMock.mockResolvedValue([leadFake({ id: "lead-1" })]);
+
+    const resposta = await GET(requisicaoFake("198.51.100.20"));
+
+    expect(resposta.status).toBe(200);
+    expect(registrarAuditoriaMock).toHaveBeenCalledWith(
+      expect.objectContaining({ acao: "exportar_leads", ip: IP_DESCONHECIDO })
+    );
   });
 
   it("401 (sem sessão) não grava auditoria nem consome cota — não houve exportação para registrar", async () => {

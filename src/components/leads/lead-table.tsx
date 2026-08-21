@@ -46,7 +46,16 @@ const columns = [
     // de entrada para a página de detalhe (dados do lead + notas).
     cell: (info) => (
       <span className="flex items-center gap-2">
-        <Link href={`/leads/${info.row.original.id}`} className="font-medium hover:underline">
+        {/* `prefetch={false}` vale para TODO `<Link>` do painel, também fora de
+            `<nav>`: a pré-busca leva o cookie de sessão ao servidor e o Auth.js
+            o reemite — o defeito de logout de `0a81737` (AGENTS.md). Aqui é uma
+            pré-busca por linha da tabela de leads. Cobrado por
+            `tests/unit/prefetch-do-painel.test.ts`. */}
+        <Link
+          href={`/leads/${info.row.original.id}`}
+          prefetch={false}
+          className="font-medium hover:underline"
+        >
           {info.getValue()}
         </Link>
         {/* Sem esta marca, com `?arquivados=1` ligado a lista mistura lead

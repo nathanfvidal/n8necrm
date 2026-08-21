@@ -1,6 +1,7 @@
 import Link from "next/link";
 
-import { exigirModulo } from "@/lib/module-gate";
+import { exigirModulo } from "@/core/config/modulos";
+import { usuarioAtualOuLogin } from "@/core/auth/session";
 import { listarConversas } from "@/modules/whatsapp/queries";
 import { EmptyState } from "@/components/empty-state";
 import { Badge } from "@/components/ui/badge";
@@ -29,20 +30,27 @@ import { formatarDataHoraBR, formatarDuracaoDesde } from "@/lib/date";
  * prática o tom é discreto (fundo em baixa opacidade, ver `badge.tsx`), não
  * um vermelho sólido — não compete visualmente com "IA pausada" ao lado.
  *
- * `exigirModulo("whatsapp")` faz esta rota devolver 404 se algum fork
- * desligar o módulo em `config/client.ts` — mesma defesa em profundidade de
- * `moduloAtivo` em `painel-nav.tsx` (o link some do menu, mas digitar a URL
- * direto não pode contornar o gate).
+ * `exigirModulo(usuario.companyId, "whatsapp")` faz esta rota devolver 404 se
+ * a EMPRESA desta sessão não tiver o módulo ligado (`CompanyConfig.modulos`,
+ * com `config/client.ts` como padrão quando não há linha) — mesma defesa em
+ * profundidade de `modulosAtivos` em `painel-nav.tsx` (o link some do menu, mas
+ * digitar a URL direto não pode contornar o portão). Roda DEPOIS de
+ * `usuarioAtualOuLogin()` porque agora precisa saber de qual empresa é a
+ * pergunta.
  *
  * `(painel)/layout.tsx` já garante sessão válida antes de qualquer página
- * deste route group renderizar — não repetimos `usuarioAtual()` aqui
- * (mesma observação já feita em `leads/page.tsx`), porque esta página não
- * precisa saber QUEM está logado (sem formulário, sem responsável padrão).
+ * deste route group renderizar, e esta página não usava `usuarioAtual()` por
+ * não precisar saber QUEM está logado (sem formulário, sem responsável
+ * padrão). O Ciclo 1d mudou isso: ela precisa saber em QUAL EMPRESA, que é
+ * outra pergunta. `listarConversas` passou a exigir `companyId`, e a origem
+ * é `usuarioAtualOuLogin().companyId` — enquanto não era, a inbox listava
+ * conversa de todo cliente do banco.
  */
 export default async function ConversasPage() {
-  exigirModulo("whatsapp");
+  const usuario = await usuarioAtualOuLogin();
+  await exigirModulo(usuario.companyId, "whatsapp");
 
-  const conversas = await listarConversas();
+  const conversas = await listarConversas(usuario.companyId);
 
   return (
     <div className="space-y-6 p-6">
@@ -73,8 +81,15 @@ export default async function ConversasPage() {
               return (
                 <TableRow key={conversa.id} className="cursor-pointer">
                   <TableCell>
+                    {/* `prefetch={false}` vale para TODO `<Link>` do painel: a
+                        pré-busca leva o cookie de sessão ao servidor e o
+                        Auth.js o reemite — o defeito de logout de `0a81737`
+                        (AGENTS.md). Numa inbox de 30 linhas seriam 30
+                        pré-buscas em voo. Cobrado por
+                        `tests/unit/prefetch-do-painel.test.ts`. */}
                     <Link
                       href={`/conversas/${conversa.id}`}
+                      prefetch={false}
                       className="flex items-center gap-2 hover:underline"
                     >
                       <span className="font-medium">

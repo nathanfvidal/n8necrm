@@ -12,7 +12,7 @@ vi.mock("server-only", () => ({}));
 
 import { PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
-import { BOT_CONFIG_ID, botConfig } from "../../config/bot";
+import { botConfig } from "../../config/bot";
 import { semearBotConfig } from "../../prisma/seed";
 
 const prisma = new PrismaClient({
@@ -20,6 +20,14 @@ const prisma = new PrismaClient({
 });
 
 describe("seed do BotConfig", () => {
+  // `BotConfig` deixou de ter `id` constante (Task 1 do Ciclo 1a — uma linha
+  // por empresa, `@@unique([companyId])`); `BOT_CONFIG_ID` ("bot-config") não
+  // é mais um id válido para buscar em runtime — mesmo raciocínio documentado
+  // em `src/modules/whatsapp/turno.ts` sobre por que a busca virou por
+  // `companyId`. Empresa única do Ciclo 1a: `prisma/seed.ts` já cria/encontra
+  // exatamente uma `Company`.
+  let companyId: string;
+
   // Capturada ANTES do `deleteMany` abaixo, para o `afterAll` devolver
   // exatamente o que estava aqui — não uma suposição sobre o que "deveria"
   // estar. Rodada de correção 1, achado M1: a versão anterior deste
@@ -29,8 +37,10 @@ describe("seed do BotConfig", () => {
   let linhaOriginal: Awaited<ReturnType<typeof prisma.botConfig.findUnique>>;
 
   beforeAll(async () => {
-    linhaOriginal = await prisma.botConfig.findUnique({ where: { id: BOT_CONFIG_ID } });
-    await prisma.botConfig.deleteMany({ where: { id: BOT_CONFIG_ID } });
+    const empresa = await prisma.company.findFirstOrThrow();
+    companyId = empresa.id;
+    linhaOriginal = await prisma.botConfig.findUnique({ where: { companyId } });
+    await prisma.botConfig.deleteMany({ where: { companyId } });
   });
 
   // Achado da revisão (rodada 1): o teste abaixo ("NÃO sobrescreve o que foi
@@ -61,15 +71,15 @@ describe("seed do BotConfig", () => {
       ativo: linhaOriginal?.ativo ?? true,
     };
     await prisma.botConfig.upsert({
-      where: { id: BOT_CONFIG_ID },
+      where: { companyId },
       update: dadosParaRestaurar,
-      create: { id: BOT_CONFIG_ID, ...dadosParaRestaurar },
+      create: { companyId, ...dadosParaRestaurar },
     });
   });
 
   it("cria a linha única a partir de config/bot.ts", async () => {
-    await semearBotConfig();
-    const linha = await prisma.botConfig.findUniqueOrThrow({ where: { id: BOT_CONFIG_ID } });
+    await semearBotConfig(companyId);
+    const linha = await prisma.botConfig.findUniqueOrThrow({ where: { companyId } });
     expect(linha.personaNome).toBe(botConfig.persona.nome);
     expect(linha.regras).toEqual(botConfig.regras);
     expect(linha.faq).toBe(botConfig.faq);
@@ -81,13 +91,13 @@ describe("seed do BotConfig", () => {
   // silenciosa, que é o pior jeito de perder configuração.
   it("NÃO sobrescreve o que foi editado pelo CRM", async () => {
     await prisma.botConfig.update({
-      where: { id: BOT_CONFIG_ID },
+      where: { companyId },
       data: { personaNome: "Editado pelo CRM" },
     });
 
-    await semearBotConfig();
+    await semearBotConfig(companyId);
 
-    const linha = await prisma.botConfig.findUniqueOrThrow({ where: { id: BOT_CONFIG_ID } });
+    const linha = await prisma.botConfig.findUniqueOrThrow({ where: { companyId } });
     expect(linha.personaNome).toBe("Editado pelo CRM");
   });
 });

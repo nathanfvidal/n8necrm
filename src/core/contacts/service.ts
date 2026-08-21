@@ -1,11 +1,45 @@
-import { prisma } from "@/lib/prisma";
+import { prismaDaEmpresa } from "@/core/tenancy/escopo";
 import { registrarAuditoria } from "@/core/audit/log";
 import { normalizarTelefone } from "@/core/leads/dedupe";
-import { camposCadastraisSchema, type CamposCadastrais } from "./schema";
+import {
+  camposCadastraisSchema,
+  checarEmail,
+  checarNome,
+  type CamposCadastrais,
+} from "./schema";
 import type { Contact } from "@prisma/client";
 
+/** O cliente Prisma já amarrado a uma empresa. */
+type ClienteDaEmpresa = ReturnType<typeof prismaDaEmpresa>;
+
 /**
- * Escrita da agenda de contatos.
+ * Escrita da agenda de contatos, escopada por empresa (Ciclo 1a).
+ *
+ * ## As duas funções ganharam `companyId` como PRIMEIRO parâmetro
+ *
+ * `atualizarContato` validava `dados.id` só por EXISTÊNCIA — a família de
+ * defeito que este ciclo já viu seis vezes. O `id` chega de
+ * `atualizarContatoAction`, que é endpoint HTTP público, então qualquer id
+ * conhecido reescrevia o cadastro de qualquer contato do banco, com o autor
+ * registrado no `AuditLog` da empresa errada.
+ *
+ * O parâmetro é o PRIMEIRO e fica FORA de `dados` de propósito: `dados` é o
+ * payload do formulário, que vem do cliente e é forjável. Empresa dentro dele
+ * seria empresa vinda de parâmetro de formulário — a origem é
+ * `usuarioAtual().companyId` na Server Action, e só ela.
+ *
+ * O `companyIdDoUsuario(autorId)` que `criarContato` usava saiu junto, e o
+ * ganho é maior que um import a menos: ele pega um vínculo ARBITRÁRIO de quem
+ * tiver mais de um (o próprio arquivo se documenta como ponte temporária por
+ * isso), então um contato criado por alguém com dois vínculos podia nascer na
+ * empresa errada mesmo sem existir vazamento de leitura.
+ *
+ * ## O que o escopo faz por este arquivo, e o que ele NÃO faz
+ *
+ * `prismaDaEmpresa` injeta `where.companyId`/`data.companyId` e LANÇA nas
+ * operações por chave única — é por isso que `findUnique` virou `findFirst` e
+ * `update` virou `updateManyAndReturn` aqui dentro. Ver "Recusa, lançando" em
+ * `core/tenancy/escopo.ts`.
  *
  * ## Reaproveita `normalizarTelefone`, não escreve outro
  *
@@ -31,34 +65,23 @@ import type { Contact } from "@prisma/client";
 /** Erro esperado e seguro de mostrar na tela — mesmo papel de `UsuarioInvalidoError`. */
 export class ContatoInvalidoError extends Error {}
 
-const MAX_NOME = 120;
-const MAX_EMAIL = 254;
-
+/**
+ * As regras de `nome` e `email` moram em `./schema.ts` desde a Fase 2 da
+ * auditoria de 2026-08-21, e o motivo está lá: elas eram privadas deste
+ * arquivo, e `core/leads/service.ts` criava `Contact` por outro caminho sem
+ * nenhuma delas (achado 18). O que sobra aqui é a tradução para o erro de
+ * domínio DESTE módulo — `leads/service.ts` faz a mesma tradução para o dele.
+ */
 function validarNome(bruto: string): string {
-  const nome = bruto.trim();
-  if (nome.length === 0) throw new ContatoInvalidoError("O nome é obrigatório.");
-  if (nome.length > MAX_NOME) {
-    throw new ContatoInvalidoError(`O nome pode ter no máximo ${MAX_NOME} caracteres.`);
-  }
-  return nome;
+  const checado = checarNome(bruto);
+  if (!checado.ok) throw new ContatoInvalidoError(checado.mensagem);
+  return checado.valor;
 }
 
-/**
- * E-mail é opcional aqui (ao contrário de `User`): muito lead de WhatsApp
- * chega só com telefone, e exigir e-mail obrigaria a inventar um. String
- * vazia vira `null`, não `""` — senão a coluna passa a ter dois jeitos de
- * dizer "não tem", e toda consulta futura precisa lembrar dos dois.
- */
 function validarEmail(bruto: string | undefined): string | null {
-  const email = bruto?.trim().toLowerCase() ?? "";
-  if (email.length === 0) return null;
-  if (email.length > MAX_EMAIL) {
-    throw new ContatoInvalidoError(`O e-mail pode ter no máximo ${MAX_EMAIL} caracteres.`);
-  }
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-    throw new ContatoInvalidoError("E-mail inválido.");
-  }
-  return email;
+  const checado = checarEmail(bruto);
+  if (!checado.ok) throw new ContatoInvalidoError(checado.mensagem);
+  return checado.valor;
 }
 
 /**
@@ -76,18 +99,41 @@ function validarTelefone(bruto: string): string {
 }
 
 /**
- * Monta a mensagem de colisão já com o NOME de quem ocupa o telefone.
+ * Monta a mensagem de colisão já com o NOME de quem ocupa o telefone —
+ * **quando o dono é desta empresa**.
  *
  * "Já existe um contato com este telefone" sozinho manda a pessoa procurar às
  * cegas; com o nome, ela reconhece na hora se é a mesma pessoa (e não precisa
  * cadastrar) ou se digitou o número errado.
+ *
+ * ## Por que a busca é escopada, e por que a mensagem tem dois ramos
+ *
+ * A versão anterior fazia `findUnique({ where: { telefone } })` no prisma cru,
+ * quando `Contact.telefone` era `@unique` GLOBAL: digitar um número qualquer no
+ * cadastro devolvia na tela o NOME do contato de outra empresa — um oráculo de
+ * "quem é o cliente do concorrente neste número", alcançável por qualquer
+ * sessão e sem precisar de id nenhum. Quem fechou isso foi a busca ESCOPADA
+ * (Ciclo 1a), e ela continua escopada.
+ *
+ * Desde o Ciclo 1e a chave é `@@unique([companyId, telefone])`, e as duas
+ * colunas dela são as mesmas que esta busca filtra. Consequência: quando o
+ * banco devolve `P2002`, o dono ESTÁ dentro do escopo e é encontrado — o
+ * primeiro ramo. O segundo ramo deixou de descrever "existe fora desta
+ * empresa" (que agora é estado legítimo e não gera erro nenhum) e passou a ser
+ * defesa contra uma janela real: o cadastro colidiu e foi APAGADO antes desta
+ * leitura. Os dois ramos continuam sem citar nome de contato de fora, e há caso
+ * de teste para o ramo alcançável (`tests/unit/contact-isolamento.test.ts`,
+ * "telefone ocupado DENTRO da empresa continua nomeando o dono").
  */
-async function erroDeTelefoneOcupado(telefone: string): Promise<ContatoInvalidoError> {
-  const dono = await prisma.contact.findUnique({ where: { telefone }, select: { nome: true } });
+async function erroDeTelefoneOcupado(
+  db: ClienteDaEmpresa,
+  telefone: string
+): Promise<ContatoInvalidoError> {
+  const dono = await db.contact.findFirst({ where: { telefone }, select: { nome: true } });
   return new ContatoInvalidoError(
     dono
       ? `Este telefone já está cadastrado para ${dono.nome}.`
-      : "Este telefone já está cadastrado para outro contato."
+      : "Este telefone acabou de ser cadastrado e removido por outra operação. Atualize a página e tente de novo."
   );
 }
 
@@ -145,6 +191,48 @@ function validarCadastrais(dados: DadosCadastrais): CamposCadastrais {
  * viram 8000 caracteres por linha de auditoria — `AuditLog` incha rápido e
  * nenhum investigador precisa do texto para responder "quem mexeu e quando".
  * O tamanho basta para ver que mudou; o texto atual está no próprio contato.
+ *
+ * ## O CRITÉRIO, escrito uma vez para os onze campos
+ *
+ * Até a Fase 2 da auditoria de 2026-08-21 este arquivo aplicava DOIS critérios
+ * opostos sem dizer que eram dois: `documento` saía do retrato com um
+ * argumento de dado pessoal, e `endereco` — do mesmo tipo, com o mesmo prazo
+ * de descarte inexistente — entrava inteiro, duas vezes por edição. A
+ * incoerência é o achado A7 de `docs/auditorias/2026-08-21-fase1-seguranca-branch-tenancy.md`.
+ *
+ * O critério que vale agora, e que decide qualquer campo futuro:
+ *
+ * 1. **É o IDENTIFICADOR da linha auditada?** Então entra por valor.
+ *    `AuditLog` não tem FK para `Contact` (schema, `model AuditLog`): o
+ *    `entidadeId` é um id solto, e no dia em que houver exclusão de contato
+ *    ele não resolve para nada. Sem `nome`/`telefone` a linha de auditoria
+ *    deixa de ser LEGÍVEL — não fica menos detalhada, fica inútil. `telefone`
+ *    é ainda a chave natural do modelo (é ele que é UNIQUE e que o dedupe
+ *    usa), e `email` é o segundo canal de contato pelo qual uma pessoa é
+ *    reconhecida numa investigação.
+ * 2. **É ATRIBUTO da pessoa, sensível, e a pergunta "qual era antes" tem
+ *    valor investigativo baixo?** Então entra como BOOLEANO de presença mais
+ *    booleano de alteração. É o caso de `documento` (CPF/CNPJ) e de
+ *    `endereco` (onde a pessoa mora). Os dois duplicam dado pessoal numa
+ *    segunda tabela sem prazo de descarte e sem FK — sobreviveriam à exclusão
+ *    de quem pedisse para ser apagado. "Mudou" é tudo que a trilha precisa; o
+ *    valor atual está no próprio contato, que é onde dado de pessoa deve
+ *    morar: em um lugar só.
+ * 3. **É dado de baixa granularidade, que não localiza ninguém?** Entra por
+ *    valor. `cidade` e `uf` dizem "São Paulo/SP", não onde a pessoa dorme, e
+ *    o schema criou `cidade` como coluna separada justamente para agrupar
+ *    ("permite leads por cidade depois sem migração"). `empresa` e `cargo`
+ *    são dado profissional, público por natureza — o que está no cartão de
+ *    visita.
+ *
+ * `observacoes` é o caso 2 por outra porta: texto livre pode conter qualquer
+ * coisa, e o tamanho + `observacoesAlterada` já cobrem.
+ *
+ * A alternativa que NÃO foi escolhida, e por quê: reduzir também
+ * `nome`/`telefone`/`email` a booleanos deixaria a trilha sem nenhum jeito de
+ * dizer SOBRE QUEM ela fala, porque não existe FK para recuperar isso depois.
+ * Seria trocar um risco de retenção por perda total da capacidade de
+ * auditoria, que é o oposto do que uma auditoria quer.
  */
 function instantaneoParaAuditoria(contato: Contact) {
   return {
@@ -167,7 +255,12 @@ function instantaneoParaAuditoria(contato: Contact) {
     // QUEM mexeu, QUANDO, e SE o documento mudou. O valor atual está no
     // próprio contato, que é onde dado de pessoa deve morar — em um lugar só.
     documentoPreenchido: contato.documento !== null,
-    endereco: contato.endereco,
+    // `endereco` NÃO entra por valor, pelo caso 2 do critério acima. Era a
+    // incoerência do achado A7: o mesmo argumento que tirou o CPF vale
+    // inteiro para o endereço residencial, e ele ficava gravado em `antes` E
+    // em `depois` a cada edição — duas cópias por edição, numa tabela que
+    // sobrevive ao contato.
+    enderecoPreenchido: contato.endereco !== null,
     cidade: contato.cidade,
     uf: contato.uf,
     observacoesTamanho: contato.observacoes?.length ?? 0,
@@ -175,9 +268,11 @@ function instantaneoParaAuditoria(contato: Contact) {
 }
 
 export async function criarContato(
+  companyId: string,
   dados: { nome: string; telefone: string; email?: string } & DadosCadastrais,
   autorId: string
 ): Promise<Contact> {
+  const db = prismaDaEmpresa(companyId);
   const nome = validarNome(dados.nome);
   const telefone = validarTelefone(dados.telefone);
   const email = validarEmail(dados.email);
@@ -185,7 +280,13 @@ export async function criarContato(
 
   let criado: Contact;
   try {
-    criado = await prisma.contact.create({ data: { nome, telefone, email, ...cadastrais } });
+    // `companyId` explícito no `data` mesmo sob escopo: a extensão `$extends`
+    // de query altera os ARGUMENTOS em tempo de execução e não os TIPOS, então
+    // `ContactUncheckedCreateInput` continua exigindo o campo. Para uma
+    // chamada que já o passa, o escopo age como VERIFICADOR — confere que bate
+    // e recusa se não bater. Ver "O tipo não sabe o que o runtime faz" em
+    // `core/tenancy/escopo.ts`.
+    criado = await db.contact.create({ data: { companyId, nome, telefone, email, ...cadastrais } });
   } catch (erro) {
     // Deixamos o banco decidir em vez de consultar antes: entre a consulta e a
     // escrita cabe outra criação com o mesmo telefone. Mesmo raciocínio de
@@ -193,11 +294,12 @@ export async function criarContato(
     // o contato existente (o chamador só quer UM contato), e aqui ela é
     // relatada, porque quem está preenchendo o formulário precisa saber que a
     // pessoa já estava cadastrada.
-    if (ehTelefoneDuplicado(erro)) throw await erroDeTelefoneOcupado(telefone);
+    if (ehTelefoneDuplicado(erro)) throw await erroDeTelefoneOcupado(db, telefone);
     throw erro;
   }
 
   await registrarAuditoria({
+    companyId,
     userId: autorId,
     acao: "criar_contato",
     entidade: "Contact",
@@ -209,9 +311,11 @@ export async function criarContato(
 }
 
 export async function atualizarContato(
+  companyId: string,
   dados: { id: string; nome: string; telefone: string; email?: string } & DadosCadastrais,
   autorId: string
 ): Promise<Contact> {
+  const db = prismaDaEmpresa(companyId);
   const nome = validarNome(dados.nome);
   const telefone = validarTelefone(dados.telefone);
   const email = validarEmail(dados.email);
@@ -223,12 +327,25 @@ export async function atualizarContato(
   // acrescentar a coluna nova — produzindo um `antes` que parece completo. Não
   // atravessa fronteira nenhuma: só `instantaneoParaAuditoria` lê este objeto,
   // e `Contact` não guarda senha.
-  const antes = await prisma.contact.findUnique({ where: { id: dados.id } });
+  //
+  // `findFirst` e não `findUnique`: o escopo recusa `findUnique` em modelo de
+  // tenant, lançando. É também esta linha que fecha o defeito ALTA deste
+  // arquivo — o `id` chega da Server Action e era validado só por EXISTÊNCIA.
+  // Contato de outra empresa some daqui, e a função para com a MESMA mensagem
+  // que um id inexistente produz: distinguir os dois casos confirmaria o id a
+  // quem estivesse varrendo.
+  const antes = await db.contact.findFirst({ where: { id: dados.id } });
   if (!antes) throw new ContatoInvalidoError("Contato não encontrado.");
 
-  let depois: Contact;
+  let depois: Contact | undefined;
   try {
-    depois = await prisma.contact.update({
+    // `updateManyAndReturn` no lugar de `update`, pelo mesmo motivo e no mesmo
+    // desenho de `atualizarLeadEscopado` (`core/leads/service.ts`): o escopo
+    // recusa `update` em modelo de tenant (o `where` dela só aceita campo
+    // único, e `companyId` não é único em `Contact`), e esta é a equivalente
+    // escopável que ainda devolve a linha gravada — que é o que a auditoria
+    // precisa para montar o "depois".
+    [depois] = await db.contact.updateManyAndReturn({
       where: { id: dados.id },
       data: { nome, telefone, email, ...cadastrais },
     });
@@ -236,11 +353,20 @@ export async function atualizarContato(
     // Trocar o telefone para um que já é de outra pessoa colide na mesma
     // constraint UNIQUE. Sem este tratamento, corrigir um dígito errado podia
     // devolver erro cru do Prisma na tela.
-    if (ehTelefoneDuplicado(erro)) throw await erroDeTelefoneOcupado(telefone);
+    if (ehTelefoneDuplicado(erro)) throw await erroDeTelefoneOcupado(db, telefone);
     throw erro;
   }
 
+  // Lista vazia significa que o `where` composto (`id` + `companyId` do
+  // escopo) não casou com nenhuma linha. O `findFirst` acima já encontrou o
+  // contato sob o MESMO escopo, então isso só acontece se a linha sumir entre
+  // as duas consultas — corrida real, ainda que rara. Parar aqui é o que
+  // impede o `[0]` de virar `undefined` disfarçado de `Contact` e o erro
+  // aparecer três linhas adiante, sem relação visível com a causa.
+  if (!depois) throw new ContatoInvalidoError("Contato não encontrado.");
+
   await registrarAuditoria({
+    companyId,
     userId: autorId,
     acao: "editar_contato",
     entidade: "Contact",
@@ -258,6 +384,11 @@ export async function atualizarContato(
       // trilha — que é justamente o evento mais suspeito que ela deveria
       // registrar.
       documentoAlterado: antes.documento !== depois.documento,
+      // Mesmo par para o endereço, pela mesma razão: `enderecoPreenchido` não
+      // muda quando uma rua vira outra rua, então sem este booleano a mudança
+      // de endereço de alguém — evento que importa numa investigação de
+      // cobrança ou de entrega — seria invisível na trilha.
+      enderecoAlterado: antes.endereco !== depois.endereco,
     },
   });
 

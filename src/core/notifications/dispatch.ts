@@ -1,28 +1,17 @@
 // `import "server-only"` — mesmo padrão de `src/lib/prisma.ts`,
 // `src/core/leads/notes.ts` e `src/core/tasks/service.ts`: este módulo
-// importa Prisma diretamente (e, agora, também o SDK do Resend, que espera
-// rodar em servidor). Sem esta linha, o único motivo pelo qual um Client
-// Component não conseguiria importar isto seria coincidência do bundler, não
-// uma garantia.
+// importa Prisma diretamente. Sem esta linha, o único motivo pelo qual um
+// Client Component não conseguiria importar isto seria coincidência do
+// bundler, não uma garantia.
 import "server-only";
 
 import { after } from "next/server";
-import { Resend } from "resend";
 
-import { prisma } from "@/lib/prisma";
+import { prismaDaEmpresa } from "@/core/tenancy/escopo";
+import { enviarEmailMelhorEsforco } from "./email-envio";
 import { NovoLeadEmail } from "./email";
 import type { NovoLeadPayload } from "./types";
 import type { Notification } from "@prisma/client";
-
-// `resend` é `null` quando `RESEND_API_KEY` não está definida — o caso real
-// deste projeto hoje: a Task 19 é explícita que a chave fica de fora do
-// `.env` (não há conta Resend real disponível), então o caminho de e-mail
-// nunca é exercitado de verdade, nem em dev nem nos testes. `null` em vez de
-// instanciar `Resend("")` é deliberado: o SDK não valida a chave na
-// construção, então um `new Resend("")` "funcionaria" até a primeira
-// chamada de rede falhar com um erro de autenticação genérico — pior sinal
-// para debugar do que simplesmente nunca tentar enviar.
-const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null;
 
 /**
  * Notifica o responsável por um lead recém-criado: grava uma notificação
@@ -42,16 +31,24 @@ const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KE
  *   real que deve propagar (o `try/catch` de `criarLead` do lado de fora é
  *   quem decide não deixar isso quebrar a criação do lead; aqui dentro não
  *   faz sentido fingir sucesso).
- * - O envio de e-mail É envolvido em try/catch, e SEMPRE roda depois da
- *   notificação in-app já estar gravada: um Resend fora do ar (ou, no caso
- *   comum deste projeto, `resend === null` porque a chave não existe) nunca
- *   deveria impedir a pessoa de ver a notificação dentro do próprio CRM.
- *   `console.error` é o único registro de uma falha de e-mail — sem retry,
- *   sem fila (a spec descreve entrega com retry via QStash como alvo
- *   futuro; esta fase implementa só o "melhor esforço" mais simples).
+ * - O envio de e-mail é MELHOR ESFORÇO, e SEMPRE roda depois da notificação
+ *   in-app já estar gravada: um Resend fora do ar (ou, no caso comum deste
+ *   projeto, a chave que não existe) nunca deveria impedir a pessoa de ver a
+ *   notificação dentro do próprio CRM. O try/catch e o `resend === null`
+ *   moram em `./email-envio.ts` desde o reparo do achado 40 — é o pedaço que
+ *   o alerta de rajada (`core/audit/alerta.ts`) passou a compartilhar, e a
+ *   regra de resiliência está escrita lá, uma vez só, para os dois caminhos.
  */
-export async function notificarNovoLead(leadId: string): Promise<void> {
-  const lead = await prisma.lead.findUniqueOrThrow({
+export async function notificarNovoLead(companyId: string, leadId: string): Promise<void> {
+  const db = prismaDaEmpresa(companyId);
+
+  // `findFirstOrThrow` e não `findUniqueOrThrow`: a segunda é recusada pelo
+  // escopo, porque o `where` dela só aceita campo único e `companyId` não é
+  // único em `Lead` (ver "Recusa, lançando" em `core/tenancy/escopo.ts`). O
+  // efeito prático é o desejado: um `leadId` de outra empresa deixa de devolver
+  // a linha e passa a lançar `NotFoundError` — a MESMA resposta de um id
+  // inexistente.
+  const lead = await db.lead.findFirstOrThrow({
     where: { id: leadId },
     // `select` explícito, e NUNCA `include: { ... responsavel: true }`.
     //
@@ -78,6 +75,7 @@ export async function notificarNovoLead(leadId: string): Promise<void> {
     // vira vazamento no dia em que alguém passa o objeto um nível adiante.
     select: {
       id: true,
+      companyId: true,
       contact: { select: { nome: true } },
       stage: { select: { nome: true } },
       responsavel: { select: { id: true, email: true } },
@@ -97,44 +95,84 @@ export async function notificarNovoLead(leadId: string): Promise<void> {
     contatoNome: lead.contact?.nome ?? "Sem contato identificado",
   };
 
-  await prisma.notification.create({
+  // `Notification.companyId` é `NOT NULL` desde a Task 1 do Ciclo 1a. `lead`
+  // já está em mãos (`select` acima) — é a origem preferida das três (registro
+  // já carregado), sem consulta extra nenhuma.
+  //
+  // ## A invariante que estas duas linhas assumem, e QUEM a garante
+  //
+  // `companyId` e `userId` saem de origens DIFERENTES — a empresa do lead e o
+  // responsável do lead — e nada aqui confere que batem. Uma `Notification`
+  // com `companyId` da empresa A e `userId` de alguém da B é expressável neste
+  // `create`, e seria exatamente o vazamento: a pessoa de fora recebe aviso
+  // in-app (e e-mail, logo abaixo) sobre o cliente de um terceiro.
+  //
+  // Elas batem porque `src/core/leads/service.ts` **exige `Membership` na
+  // empresa do lead** antes de gravar `Lead.responsavelId` — a função é
+  // `responsavelDaEmpresa`, e os três pontos que atribuem responsável
+  // (`criarLead`, `atualizarLead`, `criarLeadDeWhatsapp`) passam por ela
+  // desde o commit 6dfb325 (Ciclo 1a, Task 4, achado B). Antes disso a
+  // validação conferia só que o usuário EXISTIA, e este `create` gravava a
+  // divergência sem reclamar.
+  //
+  // Medido em 2026-08-20: `Lead.responsavelId` só é escrito em
+  // `src/core/leads/service.ts` (3 pontos) e nos dois seeds
+  // (`prisma/seed.ts:187`, `prisma/seed-demo.ts:359`), que criam responsável e
+  // lead na mesma empresa. `excluirEtapa` (`src/core/pipeline/service.ts`) toca
+  // `Lead` mas só o `stageId` — e, desde a conversão daquele módulo (Ciclo 1d),
+  // por um `updateMany` escopado. A citação era por NÚMERO de linha e virou por
+  // NOME de função de propósito: número de linha envelhece na primeira edição
+  // do arquivo citado, e foi o que aconteceu.
+  //
+  // **Se um import em massa, um script ou um módulo novo passar a escrever
+  // `Lead.responsavelId`, ele herda essa obrigação** — ou este ponto volta a
+  // vazar em silêncio, sem erro de tipo e sem teste vermelho aqui. O caso que
+  // trava a regressão é "a notificação do lead criado fica na empresa do lead"
+  // (`tests/unit/lead-isolamento.test.ts`), e ele exerce o caminho de
+  // `criarLead` — não os caminhos que ainda não existem.
+  await db.notification.create({
     data: {
+      companyId: lead.companyId,
       userId: lead.responsavel.id,
       tipo: "NOVO_LEAD",
       payload,
     },
   });
 
-  if (!resend) return;
-
-  try {
-    await resend.emails.send({
-      from: "CRM <notificacoes@exemplo.com>",
-      to: lead.responsavel.email,
-      subject: "Novo lead recebido",
-      react: NovoLeadEmail({
-        contatoNome: payload.contatoNome,
-        etapaNome: lead.stage.nome,
-      }),
-    });
-  } catch (erro) {
-    console.error("Falha ao enviar e-mail de notificação de novo lead:", erro);
-  }
+  await enviarEmailMelhorEsforco({
+    para: lead.responsavel.email,
+    assunto: "Novo lead recebido",
+    react: NovoLeadEmail({
+      contatoNome: payload.contatoNome,
+      etapaNome: lead.stage.nome,
+    }),
+    contexto: "notificação de novo lead",
+  });
 }
 
 /**
  * Lista as notificações não lidas de um usuário, mais recente primeiro.
- * Sempre escopada por `userId` — quem chama (o sino, `notification-bell.tsx`,
- * via layout do painel) sempre passa o id do usuário da sessão atual, nunca
- * um id arbitrário vindo do cliente.
+ * Escopada por `userId` E por empresa, e o "e" é o ponto: escopo por DONO não é
+ * escopo por EMPRESA. Enquanto ninguém tem vínculo em duas empresas os dois
+ * coincidem — toda notificação minha é da minha empresa —, e é por isso que
+ * `userId` sozinho parecia bastar. Com dois vínculos o sino misturaria os avisos
+ * das duas: o rótulo do cliente de uma empresa (`payload.nomeExibicao`, ver
+ * `modules/whatsapp/notificacoes.ts`) apareceria numa sessão da outra.
+ *
+ * `userId` continua vindo do usuário da sessão atual (o sino,
+ * `notification-bell.tsx`, via layout do painel), nunca de um id arbitrário do
+ * cliente — e `companyId` vem da mesma sessão.
  */
-export async function listarNotificacoesNaoLidas(userId: string): Promise<Notification[]> {
-  const naoLidas = await prisma.notification.findMany({
+export async function listarNotificacoesNaoLidas(
+  companyId: string,
+  userId: string
+): Promise<Notification[]> {
+  const naoLidas = await prismaDaEmpresa(companyId).notification.findMany({
     where: { userId, lidaEm: null },
     orderBy: { criadoEm: "desc" },
   });
 
-  agendarPoda();
+  agendarPoda(companyId);
 
   return naoLidas;
 }
@@ -177,9 +215,9 @@ export async function listarNotificacoesNaoLidas(userId: string): Promise<Notifi
  * volta a sorteá-la, e `podarNotificacoes` tem testes que a exercitam
  * diretamente (`tests/unit/notificacoes-poda.test.ts`).
  */
-function agendarPoda(): void {
+function agendarPoda(companyId: string): void {
   try {
-    after(() => podarDeVezEmQuando());
+    after(() => podarDeVezEmQuando(companyId));
   } catch (erro) {
     console.error("Falha ao agendar a poda de notificações:", erro);
   }
@@ -218,15 +256,34 @@ export const RETENCAO_ABSOLUTA_MS = 180 * 24 * 60 * 60_000;
  * o que o sino existe para mostrar. A segunda janela é o limite dessa
  * proteção.
  */
-export async function podarNotificacoes(opcoes?: {
-  retencaoLidaMs?: number;
-  retencaoAbsolutaMs?: number;
-}): Promise<number> {
+export async function podarNotificacoes(
+  companyId: string,
+  opcoes?: {
+    retencaoLidaMs?: number;
+    retencaoAbsolutaMs?: number;
+  }
+): Promise<number> {
   const agora = Date.now();
   const corteLida = new Date(agora - (opcoes?.retencaoLidaMs ?? RETENCAO_LIDA_MS));
   const corteAbsoluto = new Date(agora - (opcoes?.retencaoAbsolutaMs ?? RETENCAO_ABSOLUTA_MS));
 
-  const { count } = await prisma.notification.deleteMany({
+  // `companyId` obrigatório desde o Ciclo 1d, e a mudança de COMPORTAMENTO é
+  // real — vale dizer qual é, porque um `deleteMany` que apaga menos coisa
+  // parece regressão.
+  //
+  // Antes, uma navegação de QUALQUER empresa podava a tabela INTEIRA. Isso era
+  // uma escrita destrutiva cross-tenant disparada por requisição de terceiro:
+  // a empresa A apagando linhas da B. Não vazava dado (apagar não devolve
+  // nada), mas é exatamente o tipo de operação que o escopo existe para
+  // impedir, e nada aqui distinguia "faxina do deploy" de "uma empresa mexendo
+  // no dado da outra".
+  //
+  // Hoje cada empresa poda a própria. O custo é convergência mais lenta: uma
+  // empresa que ninguém abre não tem quem pode as notificações dela, e elas
+  // ficam. Isso é aceitável pelo que a poda é — higiene oportunista, por
+  // sorteio (`CHANCE_DE_PODA`), sem cron — e a tabela de uma empresa que
+  // ninguém usa não cresce, porque o que a faz crescer é uso.
+  const { count } = await prismaDaEmpresa(companyId).notification.deleteMany({
     where: {
       OR: [
         { lidaEm: { not: null }, criadoEm: { lt: corteLida } },
@@ -240,8 +297,14 @@ export async function podarNotificacoes(opcoes?: {
 /**
  * Mesma poda probabilística do limitador de taxa
  * (`core/rate-limit/limiter.ts`), pelo mesmo motivo: cron exigiria rota nova,
- * segredo próprio e configuração no painel da Vercel, e correção que depende
- * de configuração pode nunca entrar em vigor. Aqui vale sozinha.
+ * segredo próprio e alguém configurando um agendador, e correção que depende de
+ * configuração pode nunca entrar em vigor. Aqui vale sozinha.
+ *
+ * O argumento original citava "o painel da Vercel". A Vercel saiu no Ciclo 2d e
+ * ele sobreviveu à troca inteiro, porque nunca foi sobre AQUELA plataforma — o
+ * porquê longo está no bloco de `CHANCE_DE_PODA` do limitador, inclusive por
+ * que o laço de `npm run fila:worker`, que existe desde o Ciclo 2d, não passou
+ * a ser o lugar disto.
  *
  * O gancho é a listagem porque ela roda a cada navegação sob o layout do
  * painel — é o caminho frequente. 1% mantém a tabela sob controle deixando 99
@@ -249,10 +312,10 @@ export async function podarNotificacoes(opcoes?: {
  */
 const CHANCE_DE_PODA = 0.01;
 
-async function podarDeVezEmQuando(): Promise<void> {
+async function podarDeVezEmQuando(companyId: string): Promise<void> {
   if (Math.random() >= CHANCE_DE_PODA) return;
   try {
-    await podarNotificacoes();
+    await podarNotificacoes(companyId);
   } catch (erro) {
     // Limpeza é higiene, não decisão de produto: falhar aqui nunca pode
     // impedir alguém de ver as próprias notificações.
@@ -283,13 +346,27 @@ async function podarDeVezEmQuando(): Promise<void> {
  * não tem como aplicar a checagem de dono acima, e viraria a mesma classe de
  * falha que a Task 13/18 já fechou para lead/tarefa.
  */
-export async function marcarComoLida(input: { notificationId: string; userId: string }): Promise<void> {
-  const notificacao = await prisma.notification.findUnique({ where: { id: input.notificationId } });
+export async function marcarComoLida(input: {
+  companyId: string;
+  notificationId: string;
+  userId: string;
+}): Promise<void> {
+  const db = prismaDaEmpresa(input.companyId);
+
+  // Duas travas INDEPENDENTES, e é assim que elas precisam ser lidas: o escopo
+  // recusa notificação de outra empresa (`findFirst` não a encontra), a regra
+  // de dono recusa notificação de outra pessoa. A segunda escondia a falta da
+  // primeira no caso comum, porque quase toda notificação de outra empresa
+  // também é de outra pessoa — o caso que as separa é a pessoa com vínculo nas
+  // duas.
+  const notificacao = await db.notification.findFirst({ where: { id: input.notificationId } });
   if (!notificacao || notificacao.userId !== input.userId) {
     throw new Error("Notificação não encontrada");
   }
 
-  await prisma.notification.update({
+  // `updateMany` e não `update`: o escopo recusa `update` em modelo de tenant.
+  // O retorno não é usado — a função devolve `void`.
+  await db.notification.updateMany({
     where: { id: input.notificationId },
     data: { lidaEm: new Date() },
   });

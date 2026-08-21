@@ -32,6 +32,44 @@ function interceptado(pathname: string): boolean {
   return regex.test(pathname);
 }
 
+// `montarCsp` não é exportada por src/proxy.ts, e exportá-la só para este
+// teste NÃO destravaria nada: qualquer import do módulo (mesmo só de tipo
+// de função) arrasta `@/lib/auth`, que importa o barril de `next-auth`, que
+// falha ao carregar sob Vitest — comprovado rodando um import isolado deste
+// arquivo (`Cannot find module '.../node_modules/next/server' imported from
+// next-auth/lib/env.js`), a mesma classe de problema já documentada em
+// src/core/auth/credenciais.ts. Por isso este teste segue o mesmo espírito
+// de `extrairMatcher()` acima: extrai o literal do array que monta o CSP
+// direto do arquivo fonte e o executa isolado, sem importar o módulo. Uma
+// mudança futura no array real atualiza este teste sozinha, sem precisar
+// lembrar de copiar de novo.
+function extrairMontarCsp(): (nonce: string, ehDev: boolean) => string {
+  const conteudo = fs.readFileSync(
+    path.join(__dirname, "..", "..", "src", "proxy.ts"),
+    "utf-8"
+  );
+  const match = /return \[([\s\S]*?)\]\.join\("; "\);/.exec(conteudo);
+  if (!match) throw new Error("Não encontrei o array que monta o CSP em src/proxy.ts");
+  // eslint-disable-next-line @typescript-eslint/no-implied-eval -- monta a
+  // função a partir do próprio literal do array extraído do arquivo fonte
+  // (não de input externo), só para testar o array sem importar `@/lib/auth`.
+  return new Function("nonce", "ehDev", `return [${match[1]}].join("; ");`) as (
+    nonce: string,
+    ehDev: boolean
+  ) => string;
+}
+
+describe("CSP de src/proxy.ts (montarCsp)", () => {
+  it("o CSP permite embutir o n8n e continua proibindo embutir o CRM", () => {
+    const montarCsp = extrairMontarCsp();
+    const csp = montarCsp("nonce-de-teste", false);
+
+    expect(csp).toContain("frame-src https://n8n.nateksoft.com");
+    expect(csp).toContain("frame-ancestors 'none'");
+    expect(csp).toContain("script-src 'self' 'nonce-nonce-de-teste' 'strict-dynamic'");
+  });
+});
+
 describe("matcher de src/proxy.ts", () => {
   it("NÃO intercepta o webhook público do WhatsApp (Evolution não tem sessão de usuário)", () => {
     expect(interceptado("/api/whatsapp/evolution/token-imprevisivel-123")).toBe(false);

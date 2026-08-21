@@ -49,6 +49,31 @@ const PADRAO_BR = /^(\d{1,3}(?:\.\d{3})*|\d+)(?:,(\d{1,2}))?$/;
  */
 const TAMANHO_MAX = 32;
 
+/**
+ * Teto de VALOR, que é coisa diferente do teto de TAMANHO acima.
+ *
+ * Achado 20 da Fase 1 da auditoria
+ * (`docs/auditorias/2026-08-21-fase1-seguranca-branch-tenancy.md`): tipo e
+ * mínimo estavam cobertos, máximo não. `TAMANHO_MAX` deixa passar 32
+ * caracteres, e "9999999999999999999999999" — 25 dígitos — casa com
+ * `PADRAO_BR` sem reclamar. Quem recusava era o Postgres, três camadas
+ * adiante: a pessoa lia uma mensagem genérica de falha e o Sentry ganhava um
+ * erro "inesperado" que na verdade era entrada de formulário.
+ *
+ * O número NÃO foi escolhido aqui: é lido de `Lead.valorEstimado`, declarado
+ * `@db.Decimal(14, 2)` em `prisma/schema.prisma`. Precisão 14 com escala 2
+ * significa 14 dígitos no total, 2 deles depois da vírgula — logo 12 antes.
+ * O maior valor que a coluna comporta é 999.999.999.999,99.
+ *
+ * Se a coluna mudar de precisão, esta constante tem que mudar junto, e
+ * `tests/unit/dinheiro.test.ts` guarda os dois lados (o maior valor aceito e o
+ * primeiro recusado) para que a divergência apareça como teste vermelho.
+ */
+const DIGITOS_INTEIROS_MAX = 12;
+
+/** `999.999.999.999,99`, escrito uma vez para a mensagem e para o teste. */
+export const VALOR_MAXIMO_BR = "999.999.999.999,99";
+
 export function parseValorBR(texto: string): Prisma.Decimal {
   if (texto.length > TAMANHO_MAX) {
     throw new Error(
@@ -65,8 +90,23 @@ export function parseValorBR(texto: string): Prisma.Decimal {
     );
   }
 
-  const inteiro = match[1].replace(/\./g, "");
+  // Zeros à esquerda saem ANTES da contagem: "000000000000001" tem 15 dígitos
+  // e vale 1. Contar o texto cru recusaria um valor que a coluna aceita sem
+  // esforço — e o `mascararValorBR` da tela produz zeros à esquerda quando
+  // alguém digita centavos primeiro.
+  const inteiro = match[1].replace(/\./g, "").replace(/^0+(?=\d)/, "");
   const centavos = (match[2] ?? "").padEnd(2, "0");
+
+  // A recusa é aqui, e não no banco. A mensagem DIZ o limite: "valor inválido"
+  // sozinho manda a pessoa adivinhar quantos dígitos sobram. O prefixo "Valor
+  // inválido:" é obrigatório — `MENSAGENS_SEGURAS` em `core/leads/actions.ts`
+  // reconhece a família por ele (`/^Valor inválido:/`), e sem o prefixo esta
+  // recusa cairia no ramo genérico e a pessoa leria "Falha ao salvar o lead".
+  if (inteiro.length > DIGITOS_INTEIROS_MAX) {
+    throw new Error(
+      `Valor inválido: acima do máximo de R$ ${VALOR_MAXIMO_BR}.`
+    );
+  }
 
   return new Prisma.Decimal(`${inteiro}.${centavos}`);
 }

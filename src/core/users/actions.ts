@@ -66,7 +66,7 @@ export async function criarUsuarioAction(dados: {
 }): Promise<ResultadoAcao> {
   try {
     const autor = await exigirGestorDeUsuarios();
-    await criarUsuario(dados, autor.id);
+    await criarUsuario(dados, autor.id, autor.companyId);
   } catch (erro) {
     return paraResultadoErro(erro, "Falha ao criar o usuário. Tente novamente.");
   }
@@ -81,7 +81,7 @@ export async function atualizarUsuarioAction(dados: {
 }): Promise<ResultadoAcao> {
   try {
     const autor = await exigirGestorDeUsuarios();
-    await atualizarUsuario(dados, autor.id);
+    await atualizarUsuario(dados, autor.id, autor.companyId);
   } catch (erro) {
     return paraResultadoErro(erro, "Falha ao salvar o usuário. Tente novamente.");
   }
@@ -92,7 +92,7 @@ export async function atualizarUsuarioAction(dados: {
 export async function definirAtivoAction(dados: { id: string; ativo: boolean }): Promise<ResultadoAcao> {
   try {
     const autor = await exigirGestorDeUsuarios();
-    await definirAtivo(dados, autor.id);
+    await definirAtivo(dados, autor.id, autor.companyId);
   } catch (erro) {
     return paraResultadoErro(erro, "Falha ao mudar a situação do usuário. Tente novamente.");
   }
@@ -109,7 +109,12 @@ export async function definirAtivoAction(dados: { id: string; ativo: boolean }):
 export async function redefinirSenhaAction(dados: { id: string; senha: string }): Promise<ResultadoAcao> {
   try {
     const autor = await exigirGestorDeUsuarios();
-    await redefinirSenha(dados, autor.id);
+    // `autor.companyId` sai de `usuarioAtual()` (via `exigirGestorDeUsuarios`),
+    // NUNCA de `dados` — mesmo raciocínio de `autorId` no comentário do topo
+    // deste arquivo, e o motivo é ainda mais direto aqui: uma empresa vinda do
+    // formulário devolveria exatamente a tomada de conta que o parâmetro
+    // existe para fechar.
+    await redefinirSenha(dados, autor.id, autor.companyId);
   } catch (erro) {
     return paraResultadoErro(erro, "Falha ao redefinir a senha. Tente novamente.");
   }

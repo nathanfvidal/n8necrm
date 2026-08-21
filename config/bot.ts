@@ -28,7 +28,23 @@
  * nome do cliente) — ver o comentário lá sobre por que isso precisa ser
  * determinístico.
  */
-/** Id fixo da linha única de `BotConfig`. Ver o modelo em prisma/schema.prisma. */
+/**
+ * Id fixo que `BotConfig.id` tinha por DEFAULT antes do Ciclo 1a (Task 1).
+ *
+ * NÃO é mais um id válido para buscar a config em runtime: config por empresa
+ * quebrou o truque de linha única por PK constante (ver o comentário do
+ * modelo `BotConfig` em prisma/schema.prisma), `id` passou a `cuid()`, e a
+ * busca correta passou a ser por `companyId` (`@@unique([companyId])`).
+ * `prisma/seed.ts` já não importa este símbolo.
+ *
+ * Ainda é importado por `src/modules/whatsapp/agente.ts`,
+ * `src/modules/whatsapp/turno.ts` e por três arquivos de teste — todos
+ * quebram em runtime (não em compilação: `id` continua `String` dos dois
+ * lados) desde que esta migração rodou, porque nenhuma linha de `BotConfig`
+ * tem mais `id = "bot-config"`. Corrigi-los depende de `companyId` chegar até
+ * esse código (Task 2/3 deste ciclo) — fora do escopo da Task 1
+ * (schema/migração). Ver o relatório da Task 1 para a lista completa.
+ */
 export const BOT_CONFIG_ID = "bot-config";
 
 export interface BotConfigPadrao {

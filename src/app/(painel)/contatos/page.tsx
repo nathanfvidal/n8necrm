@@ -38,16 +38,15 @@ export default async function ContatosPage({
   const { q } = await searchParams;
   const busca = q?.trim() ?? "";
 
-  // As duas juntas: `listarContatos` não olha para `usuario`, então esperar a
-  // sessão para só então começar a busca era uma viagem de rede em fila por
-  // nada. Ver o comentário longo em `leads/page.tsx` sobre por que isso pesa
-  // (85 ms de mediana por consulta, banco em `sa-east-1`) e o que muda para a
-  // auditoria — as consultas passam a começar antes de a sessão ser
-  // confirmada, e `redirect()` continua lançando antes de qualquer render.
-  const [usuario, { itens: contatos, truncado }] = await Promise.all([
-    usuarioAtualOuLogin(),
-    listarContatos(busca),
-  ]);
+  // O `Promise.all` que existia aqui SAIU no Ciclo 1a, e a perda é real: as
+  // duas consultas iam juntas porque `listarContatos` não olhava para
+  // `usuario` (ver o comentário longo em `leads/page.tsx` — 85 ms de mediana
+  // por consulta, banco em `sa-east-1`). Agora a agenda é escopada, e a
+  // empresa só existe depois da sessão: começar a busca antes dela significa
+  // buscar sem saber de quem, que é o defeito que acabou de ser fechado. A
+  // sequência é o preço do escopo, e é o preço certo.
+  const usuario = await usuarioAtualOuLogin();
+  const { itens: contatos, truncado } = await listarContatos(usuario.companyId, busca);
 
   // Mesma regra da tela de detalhe: quem não pode ver o documento também não
   // pode preenchê-lo no cadastro. Sem isto, o campo apareceria em "Adicionar
@@ -85,8 +84,15 @@ export default async function ContatosPage({
         <Button type="submit" variant="outline">
           Buscar
         </Button>
+        {/* `prefetch={false}` em TODO `<Link>` do painel, e não só nos que
+            moram dentro de `<nav>`: o mecanismo do defeito de logout
+            (`0a81737`, AGENTS.md) é a requisição de pré-busca carregando o
+            cookie de sessão e o Auth.js o reemitindo — e ela não distingue
+            link de menu de link de tabela. Na tabela abaixo há o agravante de
+            a lista renderizar até 25 linhas, ou seja, 25 pré-buscas em voo por
+            tela. Cobrado por `tests/unit/prefetch-do-painel.test.ts`. */}
         {busca && (
-          <Link href="/contatos" className="text-sm text-muted-foreground underline">
+          <Link href="/contatos" prefetch={false} className="text-sm text-muted-foreground underline">
             Limpar
           </Link>
         )}
@@ -130,7 +136,11 @@ export default async function ContatosPage({
             {contatos.map((contato) => (
               <tr key={contato.id} className="border-b hover:bg-muted/40">
                 <td className="py-2">
-                  <Link href={`/contatos/${contato.id}`} className="text-primary underline">
+                  <Link
+                    href={`/contatos/${contato.id}`}
+                    prefetch={false}
+                    className="text-primary underline"
+                  >
                     {contato.nome}
                   </Link>
                 </td>

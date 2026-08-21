@@ -26,6 +26,14 @@ const TODOS_TELEFONES = Object.values(TELEFONES);
 
 describe("core/contacts", () => {
   let autorId: string;
+  // A empresa do autor, resolvida uma vez no `beforeAll` e passada explícita
+  // em toda chamada. Desde o Ciclo 1a as quatro funções deste módulo recebem
+  // `companyId` como PRIMEIRO parâmetro — antes disso `criarContato` o deduzia
+  // sozinho por `companyIdDoUsuario(autorId)` e as outras três não tinham
+  // noção de empresa nenhuma. O isolamento entre DUAS empresas é medido em
+  // `tests/unit/contact-isolamento.test.ts`; aqui a empresa é uma só, e o que
+  // se testa é o comportamento de sempre.
+  let companyId: string;
 
   beforeAll(async () => {
     // Resíduo de uma execução anterior que tenha morrido no meio — sem isto,
@@ -38,14 +46,35 @@ describe("core/contacts", () => {
         nome: `Autor ${MARCA}`,
         email: "teste-contatos-autor@teste.local",
         senhaHash: "hash-fake-nao-usado-em-login",
-        papel: "ADMIN",
       },
     });
     autorId = autor.id;
+
+    // O `Membership` continua necessário mesmo depois de `criarContato` parar
+    // de resolver a empresa sozinho: `registrarAuditoria` (`core/audit/log.ts`)
+    // ainda tira o `companyId` da linha de auditoria do vínculo do AUTOR, e sem
+    // ele toda chamada deste arquivo lança antes de qualquer asserção rodar
+    // (achado rodando a suíte, não pego pelo `tsc`: `Membership` é tabela à
+    // parte, não campo obrigatório de `User`). Empresa única do Ciclo 1a
+    // (mesma suposição de `prisma/seed.ts`).
+    const empresa = await prisma.company.findFirstOrThrow();
+    companyId = empresa.id;
+    await prisma.membership.create({
+      data: { userId: autorId, companyId, papel: "ADMIN" },
+    });
   });
 
   afterAll(async () => {
     await limpar();
+    // `Notification.userId` é RESTRICT, e este autor é ATIVO e vinculado à
+    // empresa REAL do banco de desenvolvimento — qualquer despacho legítimo
+    // que rode junto (o aviso de conversa aguardando humano é o caminho vivo)
+    // deixa uma linha apontando para ele, e o `delete` abaixo passa a falhar.
+    // Quando falha, o autor fica para trás com e-mail determinístico e a
+    // PRÓXIMA execução quebra no `beforeAll` por unicidade, sem que o sintoma
+    // aponte para a causa. Mesmo reparo aplicado em `users-service.test.ts`,
+    // onde o estrago foi medido de verdade.
+    await prisma.notification.deleteMany({ where: { userId: autorId } });
     await prisma.auditLog.deleteMany({ where: { userId: autorId } });
     await prisma.user.delete({ where: { id: autorId } });
   });
@@ -69,7 +98,7 @@ describe("core/contacts", () => {
 
   describe("criarContato", () => {
     it("normaliza o telefone antes de gravar", async () => {
-      const criado = await criarContato(
+      const criado = await criarContato(companyId,
         { nome: `Maria ${MARCA}`, telefone: "+55 (11) 98888-7001", email: "MARIA@Exemplo.com" },
         autorId
       );
@@ -82,7 +111,7 @@ describe("core/contacts", () => {
     });
 
     it("guarda null, não string vazia, quando não há e-mail", async () => {
-      const criado = await criarContato(
+      const criado = await criarContato(companyId,
         { nome: `Sem Email ${MARCA}`, telefone: TELEFONES.duplicado, email: "   " },
         autorId
       );
@@ -95,24 +124,32 @@ describe("core/contacts", () => {
       // A mensagem com o nome é o que faz a pessoa reconhecer na hora se é a
       // mesma pessoa ou se digitou o número errado.
       await expect(
-        criarContato({ nome: `Outro ${MARCA}`, telefone: TELEFONES.duplicado }, autorId)
+        criarContato(companyId, { nome: `Outro ${MARCA}`, telefone: TELEFONES.duplicado }, autorId)
       ).rejects.toThrow(new RegExp(`já está cadastrado para Sem Email ${MARCA}`));
     });
 
     it("recusa telefone que não é um número brasileiro reconhecível", async () => {
       await expect(
-        criarContato({ nome: `Ruim ${MARCA}`, telefone: "123" }, autorId)
+        criarContato(companyId, { nome: `Ruim ${MARCA}`, telefone: "123" }, autorId)
       ).rejects.toThrow(ContatoInvalidoError);
 
       // E a mensagem é de formulário, não o texto técnico de
       // `normalizarTelefone` (que é feito para log).
       await expect(
-        criarContato({ nome: `Ruim ${MARCA}`, telefone: "a definir" }, autorId)
+        criarContato(companyId, { nome: `Ruim ${MARCA}`, telefone: "a definir" }, autorId)
       ).rejects.toThrow(/Use DDD \+ número/);
     });
 
     it("registra auditoria da criação", async () => {
-      const contato = await prisma.contact.findUniqueOrThrow({ where: { telefone: TELEFONES.basico } });
+      // `findFirstOrThrow` com `companyId` junto, e não `findUniqueOrThrow` por
+      // telefone: desde o Ciclo 1e a chave única de `Contact` é
+      // `@@unique([companyId, telefone])` e o telefone sozinho deixou de existir
+      // em `ContactWhereUniqueInput`. O oráculo continua sendo o prisma CRU,
+      // fora do escopo — o que mudou é que ele agora nomeia a empresa em vez de
+      // depender da unicidade global para acertar a linha.
+      const contato = await prisma.contact.findFirstOrThrow({
+        where: { companyId, telefone: TELEFONES.basico },
+      });
       const log = await prisma.auditLog.findFirst({
         where: { entidade: "Contact", entidadeId: contato.id, acao: "criar_contato" },
       });
@@ -122,12 +159,12 @@ describe("core/contacts", () => {
 
   describe("atualizarContato", () => {
     it("edita e guarda antes/depois na auditoria", async () => {
-      const criado = await criarContato(
+      const criado = await criarContato(companyId,
         { nome: `Antes ${MARCA}`, telefone: TELEFONES.colisao },
         autorId
       );
 
-      const depois = await atualizarContato(
+      const depois = await atualizarContato(companyId,
         { id: criado.id, nome: `Depois ${MARCA}`, telefone: TELEFONES.colisao, email: "novo@exemplo.com" },
         autorId
       );
@@ -143,10 +180,14 @@ describe("core/contacts", () => {
     });
 
     it("recusa mudar o telefone para um que já é de outra pessoa", async () => {
-      const contato = await prisma.contact.findUniqueOrThrow({ where: { telefone: TELEFONES.colisao } });
+      // Mesmo motivo do caso "registra auditoria da criação": a chave única é
+      // composta desde o Ciclo 1e.
+      const contato = await prisma.contact.findFirstOrThrow({
+        where: { companyId, telefone: TELEFONES.colisao },
+      });
 
       await expect(
-        atualizarContato(
+        atualizarContato(companyId,
           { id: contato.id, nome: `Depois ${MARCA}`, telefone: TELEFONES.basico },
           autorId
         )
@@ -161,13 +202,13 @@ describe("core/contacts", () => {
 
   describe("listarContatos", () => {
     it("encontra por nome sem diferenciar maiúsculas", async () => {
-      const encontrados = (await listarContatos(MARCA.toLowerCase())).itens;
+      const encontrados = (await listarContatos(companyId, MARCA.toLowerCase())).itens;
       expect(encontrados.length).toBeGreaterThan(0);
       expect(encontrados.every((c) => c.nome.includes(MARCA))).toBe(true);
     });
 
     it("encontra por telefone mesmo digitado com formatação", async () => {
-      const encontrados = (await listarContatos("(11) 98888-7001")).itens;
+      const encontrados = (await listarContatos(companyId, "(11) 98888-7001")).itens;
       expect(encontrados.map((c) => c.telefone)).toContain(TELEFONES.basico);
     });
 
@@ -177,36 +218,46 @@ describe("core/contacts", () => {
       // casaria com TODOS os telefones e anularia o filtro. Uma busca por
       // "maria" devolveria o banco completo, e ninguém notaria até a agenda
       // crescer.
-      await criarContato({ nome: `Alvo Unico ${MARCA}`, telefone: TELEFONES.busca }, autorId);
+      await criarContato(companyId, { nome: `Alvo Unico ${MARCA}`, telefone: TELEFONES.busca }, autorId);
 
-      const encontrados = (await listarContatos(`Alvo Unico ${MARCA}`)).itens;
+      const encontrados = (await listarContatos(companyId, `Alvo Unico ${MARCA}`)).itens;
       expect(encontrados).toHaveLength(1);
       expect(encontrados[0].telefone).toBe(TELEFONES.busca);
     });
 
     it("conta os leads de cada contato", async () => {
-      const encontrados = (await listarContatos(`Alvo Unico ${MARCA}`)).itens;
+      const encontrados = (await listarContatos(companyId, `Alvo Unico ${MARCA}`)).itens;
       expect(encontrados[0].totalLeads).toBe(0);
     });
   });
 
   describe("buscarContatoComHistorico", () => {
     it("devolve null para id que não existe, em vez de lançar", async () => {
-      expect(await buscarContatoComHistorico("id-que-nao-existe")).toBeNull();
+      expect(await buscarContatoComHistorico(companyId, "id-que-nao-existe")).toBeNull();
     });
 
     it("traz os leads e nunca devolve o hash de senha do responsável", async () => {
-      const contato = await criarContato(
+      const contato = await criarContato(companyId,
         { nome: `Historico ${MARCA}`, telefone: TELEFONES.historico },
         autorId
       );
       const etapa = await prisma.pipelineStage.findFirstOrThrow({ orderBy: { ordem: "asc" } });
+      // Mesma empresa do contato, que é a do escopo passado acima. Um `Lead`
+      // de OUTRA empresa apontando para este `Contact` é estado expressável no
+      // schema (`Lead.contactId` não carrega empresa) e é medido em
+      // `tests/unit/contact-isolamento.test.ts`; aqui só existe uma empresa.
       const lead = await prisma.lead.create({
-        data: { contactId: contato.id, stageId: etapa.id, responsavelId: autorId, canal: "MANUAL" },
+        data: {
+          companyId: contato.companyId,
+          contactId: contato.id,
+          stageId: etapa.id,
+          responsavelId: autorId,
+          canal: "MANUAL",
+        },
       });
 
       try {
-        const comHistorico = await buscarContatoComHistorico(contato.id);
+        const comHistorico = await buscarContatoComHistorico(companyId, contato.id);
 
         expect(comHistorico?.leads).toHaveLength(1);
         expect(comHistorico?.leads[0].responsavelNome).toBe(`Autor ${MARCA}`);
@@ -245,7 +296,7 @@ describe("core/contacts", () => {
     const TELEFONE_CADASTRO = "11988887006";
 
     async function criarCompleto(observacoes?: string) {
-      return criarContato(
+      return criarContato(companyId,
         {
           nome: `Cadastro ${MARCA}`,
           telefone: TELEFONE_CADASTRO,
@@ -281,14 +332,14 @@ describe("core/contacts", () => {
       // tela. Sem essa ponte, a action cairia no ramo genérico e a pessoa leria
       // "Falha ao salvar o contato" no lugar do motivo.
       await expect(
-        criarContato(
+        criarContato(companyId,
           { nome: `Ruim ${MARCA}`, telefone: "11988887007", uf: "XX" },
           autorId
         )
       ).rejects.toThrow(ContatoInvalidoError);
 
       await expect(
-        criarContato(
+        criarContato(companyId,
           { nome: `Ruim ${MARCA}`, telefone: "11988887007", uf: "XX" },
           autorId
         )
@@ -310,6 +361,9 @@ describe("core/contacts", () => {
           uf: "SP",
           observacoesTamanho: texto.length,
           documentoPreenchido: true,
+          // A metade legítima: o retrato continua dizendo que HAVIA endereço.
+          // Sem esta asserção, apagar o campo de vez também passaria.
+          enderecoPreenchido: true,
         });
 
         // As duas metades que importam, e são o achado R1 da auditoria: nem o
@@ -325,6 +379,15 @@ describe("core/contacts", () => {
         // Nem parcial: metade de um CPF ainda é CPF de alguém.
         expect(gravado).not.toContain("123456");
         expect(gravado).not.toContain("678901");
+        // Terceira metade, do achado A7 da Fase 1: o ENDEREÇO seguia o
+        // critério oposto ao do CPF no mesmo objeto. Nem inteiro, nem em
+        // pedaço — "Rua das Flores" sozinho já é endereço de alguém.
+        expect(gravado).not.toContain("Rua das Flores, 100");
+        expect(gravado).not.toContain("Rua das Flores");
+        // `cidade` e `uf` CONTINUAM por valor, e é decisão, não descuido:
+        // dizem "São Paulo/SP", não onde a pessoa dorme. Ver o critério em
+        // `instantaneoParaAuditoria` (`core/contacts/service.ts`).
+        expect(gravado).toContain("São Paulo");
       } finally {
         await prisma.auditLog.deleteMany({ where: { entidadeId: criado.id } });
         await prisma.contact.delete({ where: { id: criado.id } });
@@ -334,7 +397,7 @@ describe("core/contacts", () => {
     it("a edição guarda antes e depois dos campos novos", async () => {
       const criado = await criarCompleto();
       try {
-        await atualizarContato(
+        await atualizarContato(companyId,
           {
             id: criado.id,
             nome: criado.nome,
@@ -378,7 +441,7 @@ describe("core/contacts", () => {
       // acontecido. Este é o caso que a comparação de tamanhos perde sozinha.
       const criado = await criarCompleto("Pedro");
       try {
-        await atualizarContato(
+        await atualizarContato(companyId,
           { id: criado.id, nome: criado.nome, telefone: TELEFONE_CADASTRO, observacoes: "Paulo" },
           autorId
         );
@@ -389,6 +452,48 @@ describe("core/contacts", () => {
 
         expect(log.antes).toMatchObject({ observacoesTamanho: 5 });
         expect(log.depois).toMatchObject({ observacoesTamanho: 5, observacoesAlterada: true });
+      } finally {
+        await prisma.auditLog.deleteMany({ where: { entidadeId: criado.id } });
+        await prisma.contact.delete({ where: { id: criado.id } });
+      }
+    });
+
+    // Achado A7 da Fase 1, as duas metades juntas: a mudança de endereço
+    // continua VISÍVEL na trilha (senão a correção seria "esconder o campo e
+    // perder o evento"), e o texto do endereço não aparece em lugar nenhum do
+    // par antes/depois.
+    it("acusa endereço trocado sem gravar nenhum dos dois endereços", async () => {
+      const criado = await criarCompleto();
+      try {
+        await atualizarContato(companyId,
+          {
+            id: criado.id,
+            nome: criado.nome,
+            telefone: TELEFONE_CADASTRO,
+            endereco: "Avenida Paulista, 900",
+          },
+          autorId
+        );
+
+        const log = await prisma.auditLog.findFirstOrThrow({
+          where: { entidade: "Contact", entidadeId: criado.id, acao: "editar_contato" },
+        });
+
+        expect(log.antes).toMatchObject({ enderecoPreenchido: true });
+        expect(log.depois).toMatchObject({
+          enderecoPreenchido: true,
+          enderecoAlterado: true,
+        });
+
+        const gravado = `${JSON.stringify(log.antes)}${JSON.stringify(log.depois)}`;
+        expect(gravado).not.toContain("Rua das Flores");
+        expect(gravado).not.toContain("Avenida Paulista");
+
+        // A linha do contato continua com o endereço NOVO — o que saiu foi a
+        // cópia na auditoria, não o dado. Sem esta asserção, uma correção que
+        // parasse de gravar o campo passaria neste teste.
+        const noBanco = await prisma.contact.findUniqueOrThrow({ where: { id: criado.id } });
+        expect(noBanco.endereco).toBe("Avenida Paulista, 900");
       } finally {
         await prisma.auditLog.deleteMany({ where: { entidadeId: criado.id } });
         await prisma.contact.delete({ where: { id: criado.id } });
@@ -417,7 +522,7 @@ describe("core/contacts", () => {
     it("a consulta da tela de detalhe devolve TODOS os campos do cadastro", async () => {
       const criado = await criarCompleto("Uma observação qualquer.");
       try {
-        const lido = await buscarContatoComHistorico(criado.id, { incluirDocumento: true });
+        const lido = await buscarContatoComHistorico(companyId, criado.id, { incluirDocumento: true });
 
         expect(lido).toMatchObject({
           nome: `Cadastro ${MARCA}`,
@@ -459,7 +564,7 @@ describe("core/contacts", () => {
     it("a consulta NÃO devolve o documento quando ninguém pediu por ele", async () => {
       const criado = await criarCompleto();
       try {
-        const lido = await buscarContatoComHistorico(criado.id);
+        const lido = await buscarContatoComHistorico(companyId, criado.id);
 
         expect(lido?.documento).toBeNull();
         // A linha no banco continua intacta — o que mudou é o que sai da
@@ -480,7 +585,7 @@ describe("core/contacts", () => {
     it("atualizadoEm avança na edição, e criadoEm não", async () => {
       const criado = await criarCompleto();
       try {
-        const editado = await atualizarContato(
+        const editado = await atualizarContato(companyId,
           { id: criado.id, nome: `Editado ${MARCA}`, telefone: TELEFONE_CADASTRO },
           autorId
         );

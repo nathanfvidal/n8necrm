@@ -33,6 +33,7 @@ vi.mock("server-only", () => ({}));
 
 import { prisma } from "../../src/lib/prisma";
 import { criarLead } from "../../src/core/leads/service";
+import { usuarioDoSeed } from "./helpers/usuarios-do-seed";
 import {
   notificarNovoLead,
   listarNotificacoesNaoLidas,
@@ -48,7 +49,12 @@ import { extrairPayloadNovoLead } from "../../src/core/notifications/types";
 const TELEFONE_TESTE = "11966660001";
 
 async function limparDadosDeTeste() {
-  const contato = await prisma.contact.findUnique({ where: { telefone: TELEFONE_TESTE } });
+  // `findFirst`, e nao `findUnique`: desde o Ciclo 1e a chave unica de
+  // `Contact` e `@@unique([companyId, telefone])` e o telefone sozinho deixou
+  // de existir em `ContactWhereUniqueInput`. Uma linha so continua sendo o
+  // esperado aqui — este arquivo reserva uma familia de telefone propria (ver
+  // o bloco acima) e todos os casos gravam na mesma empresa.
+  const contato = await prisma.contact.findFirst({ where: { telefone: TELEFONE_TESTE } });
   if (!contato) return;
 
   const leads = await prisma.lead.findMany({ where: { contactId: contato.id } });
@@ -79,14 +85,16 @@ describe("notificações", () => {
   let adminId: string;
   let vendedorId: string;
   let leadId: string;
+  // As quatro funcoes publicas de `dispatch.ts` passaram a receber `companyId`
+  // no Ciclo 1d. Em producao ele vem de `usuarioAtual().companyId`; aqui, do
+  // proprio lead que a fixture cria.
+  let companyId: string;
 
   beforeAll(async () => {
     await limparDadosDeTeste();
 
-    const admin = await prisma.user.findFirstOrThrow({ where: { papel: "ADMIN", ativo: true } });
-    adminId = admin.id;
-    const vendedor = await prisma.user.findFirstOrThrow({ where: { papel: "VENDEDOR", ativo: true } });
-    vendedorId = vendedor.id;
+    adminId = (await usuarioDoSeed("ADMIN")).id;
+    vendedorId = (await usuarioDoSeed("VENDEDOR")).id;
 
     // `criarLead` (leads/service.ts) já chama `notificarNovoLead` internamente
     // desde a Task 19 — este `beforeAll`, sozinho, já prova a integração do
@@ -98,12 +106,13 @@ describe("notificações", () => {
       autorId: adminId,
     });
     leadId = lead.id;
+    companyId = lead.companyId;
   });
 
   afterAll(limparDadosDeTeste);
 
   it("criarLead notifica automaticamente o responsável, sem precisar chamar notificarNovoLead manualmente", async () => {
-    const naoLidas = await listarNotificacoesNaoLidas(adminId);
+    const naoLidas = await listarNotificacoesNaoLidas(companyId, adminId);
     const notificacaoDoLead = naoLidas.find((n) => extrairPayloadNovoLead(n.payload)?.leadId === leadId);
 
     expect(notificacaoDoLead).toBeTruthy();
@@ -112,24 +121,24 @@ describe("notificações", () => {
   });
 
   it("cria uma notificação in-app ao notificar novo lead explicitamente", async () => {
-    await notificarNovoLead(leadId);
-    const naoLidas = await listarNotificacoesNaoLidas(adminId);
+    await notificarNovoLead(companyId, leadId);
+    const naoLidas = await listarNotificacoesNaoLidas(companyId, adminId);
     expect(naoLidas.some((n) => extrairPayloadNovoLead(n.payload)?.leadId === leadId)).toBe(true);
   });
 
   it("listarNotificacoesNaoLidas é escopada por usuário: não vaza notificação de outro responsável", async () => {
-    const naoLidasDoVendedor = await listarNotificacoesNaoLidas(vendedorId);
+    const naoLidasDoVendedor = await listarNotificacoesNaoLidas(companyId, vendedorId);
     expect(naoLidasDoVendedor.some((n) => extrairPayloadNovoLead(n.payload)?.leadId === leadId)).toBe(false);
   });
 
   it("marca notificação como lida e ela some da lista de não lidas", async () => {
-    await notificarNovoLead(leadId);
-    const naoLidas = await listarNotificacoesNaoLidas(adminId);
+    await notificarNovoLead(companyId, leadId);
+    const naoLidas = await listarNotificacoesNaoLidas(companyId, adminId);
     const notificacao = naoLidas[0];
 
-    await marcarComoLida({ notificationId: notificacao.id, userId: adminId });
+    await marcarComoLida({ companyId, notificationId: notificacao.id, userId: adminId });
 
-    const atualizadas = await listarNotificacoesNaoLidas(adminId);
+    const atualizadas = await listarNotificacoesNaoLidas(companyId, adminId);
     expect(atualizadas.find((n) => n.id === notificacao.id)).toBeUndefined();
   });
 
@@ -137,24 +146,24 @@ describe("notificações", () => {
     "marcarComoLida rejeita quando o id não pertence ao usuário informado (checagem de dono, " +
       "mesmo padrão de concluirTask) — e a notificação continua não lida para o dono de verdade",
     async () => {
-      await notificarNovoLead(leadId);
-      const naoLidasAntes = await listarNotificacoesNaoLidas(adminId);
+      await notificarNovoLead(companyId, leadId);
+      const naoLidasAntes = await listarNotificacoesNaoLidas(companyId, adminId);
       const notificacaoDoAdmin = naoLidasAntes.find(
         (n) => extrairPayloadNovoLead(n.payload)?.leadId === leadId
       )!;
 
       await expect(
-        marcarComoLida({ notificationId: notificacaoDoAdmin.id, userId: vendedorId })
+        marcarComoLida({ companyId, notificationId: notificacaoDoAdmin.id, userId: vendedorId })
       ).rejects.toThrow("Notificação não encontrada");
 
-      const naoLidasDepois = await listarNotificacoesNaoLidas(adminId);
+      const naoLidasDepois = await listarNotificacoesNaoLidas(companyId, adminId);
       expect(naoLidasDepois.some((n) => n.id === notificacaoDoAdmin.id)).toBe(true);
     }
   );
 
   it("marcarComoLida rejeita um id inexistente com a MESMA mensagem (não revela se o id existe)", async () => {
     await expect(
-      marcarComoLida({ notificationId: "id-que-nao-existe", userId: adminId })
+      marcarComoLida({ companyId, notificationId: "id-que-nao-existe", userId: adminId })
     ).rejects.toThrow("Notificação não encontrada");
   });
 });

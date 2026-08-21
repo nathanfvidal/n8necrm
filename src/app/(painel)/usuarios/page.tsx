@@ -40,7 +40,7 @@ export default async function UsuariosPage() {
     redirect("/");
   }
 
-  const usuarios = await listarUsuarios();
+  const usuarios = await listarUsuarios(usuario.companyId);
 
   return (
     <div className="space-y-6 p-6">

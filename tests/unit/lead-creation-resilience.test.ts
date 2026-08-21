@@ -33,6 +33,7 @@ vi.mock("@/core/notifications/dispatch", () => ({
 
 import { prisma } from "../../src/lib/prisma";
 import { criarLead } from "../../src/core/leads/service";
+import { usuarioDoSeed } from "./helpers/usuarios-do-seed";
 
 // Telefone JÁ NORMALIZADO que este arquivo grava. Prefixo "119444" é
 // exclusivo deste arquivo — não colide com o seed da Task 9
@@ -42,7 +43,12 @@ import { criarLead } from "../../src/core/leads/service";
 const TELEFONE_TESTE = "11944440001";
 
 async function limparDadosDeTeste() {
-  const contato = await prisma.contact.findUnique({ where: { telefone: TELEFONE_TESTE } });
+  // `findFirst`, e nao `findUnique`: desde o Ciclo 1e a chave unica de
+  // `Contact` e `@@unique([companyId, telefone])` e o telefone sozinho deixou
+  // de existir em `ContactWhereUniqueInput`. Uma linha so continua sendo o
+  // esperado aqui — este arquivo reserva uma familia de telefone propria (ver
+  // o bloco acima) e todos os casos gravam na mesma empresa.
+  const contato = await prisma.contact.findFirst({ where: { telefone: TELEFONE_TESTE } });
   if (!contato) return;
 
   const leads = await prisma.lead.findMany({ where: { contactId: contato.id } });
@@ -86,8 +92,7 @@ describe("criarLead — resiliência a falha do módulo de notificação (spec s
 
   beforeAll(async () => {
     await limparDadosDeTeste();
-    const admin = await prisma.user.findFirstOrThrow({ where: { papel: "ADMIN", ativo: true } });
-    autorId = admin.id;
+    autorId = (await usuarioDoSeed("ADMIN")).id;
   });
 
   afterAll(limparDadosDeTeste);
@@ -119,7 +124,9 @@ describe("criarLead — resiliência a falha do módulo de notificação (spec s
 
       // Prova que a falha realmente veio de notificarNovoLead sendo
       // chamada (não de um caminho que a pulou por engano).
-      expect(notificarNovoLeadMock).toHaveBeenCalledWith(lead.id);
+      // `companyId` como PRIMEIRO parametro desde o Ciclo 1d: `notificarNovoLead`
+      // le `Lead` pelo cliente escopado, e `criarLead` ja tinha a empresa em maos.
+      expect(notificarNovoLeadMock).toHaveBeenCalledWith(lead.companyId, lead.id);
     }
   );
 });

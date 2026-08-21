@@ -32,6 +32,9 @@ const prisma = new PrismaClient({
 const MARCA = "ZZPodaNotificacao";
 const DIA_MS = 24 * 60 * 60_000;
 let idDono = "";
+// Empresa única do Ciclo 1a (mesma suposição de `prisma/seed.ts`) —
+// `Notification.companyId` agora é obrigatório.
+let companyId = "";
 
 async function limpar() {
   const usuarios = await prisma.user.findMany({
@@ -47,12 +50,13 @@ async function limpar() {
 
 beforeAll(async () => {
   await limpar();
+  const empresa = await prisma.company.findFirstOrThrow();
+  companyId = empresa.id;
   const dono = await prisma.user.create({
     data: {
       nome: `Dono ${MARCA}`,
       email: `poda-${MARCA.toLowerCase()}@teste.invalid`,
       senhaHash: "$2b$10$invalidoinvalidoinvalidoinvalidoinvalidoinvalidoinvalidoinva",
-      papel: "VENDEDOR",
       ativo: false,
     },
   });
@@ -73,6 +77,7 @@ async function criar(opcoes: { diasAtras: number; lida: boolean }) {
   const quando = new Date(Date.now() - opcoes.diasAtras * DIA_MS);
   return prisma.notification.create({
     data: {
+      companyId,
       userId: idDono,
       tipo: "NOVO_LEAD",
       payload: { leadId: "x", contatoNome: MARCA },
@@ -91,7 +96,7 @@ describe("poda de notificacoes", () => {
     const dias = RETENCAO_LIDA_MS / DIA_MS + 1;
     const alvo = await criar({ diasAtras: dias, lida: true });
 
-    await podarNotificacoes();
+    await podarNotificacoes(companyId);
 
     expect(await sobreviveu(alvo.id)).toBe(false);
   });
@@ -99,7 +104,7 @@ describe("poda de notificacoes", () => {
   it("PRESERVA notificacao lida recente", async () => {
     const alvo = await criar({ diasAtras: 1, lida: true });
 
-    await podarNotificacoes();
+    await podarNotificacoes(companyId);
 
     expect(await sobreviveu(alvo.id)).toBe(true);
   });
@@ -112,7 +117,7 @@ describe("poda de notificacoes", () => {
     const dias = RETENCAO_LIDA_MS / DIA_MS + 30;
     const alvo = await criar({ diasAtras: dias, lida: false });
 
-    await podarNotificacoes();
+    await podarNotificacoes(companyId);
 
     expect(await sobreviveu(alvo.id)).toBe(true);
   });
@@ -124,7 +129,7 @@ describe("poda de notificacoes", () => {
     const dias = RETENCAO_ABSOLUTA_MS / DIA_MS + 1;
     const alvo = await criar({ diasAtras: dias, lida: false });
 
-    await podarNotificacoes();
+    await podarNotificacoes(companyId);
 
     expect(await sobreviveu(alvo.id)).toBe(false);
   });
@@ -138,7 +143,7 @@ describe("poda de notificacoes", () => {
     await criar({ diasAtras: RETENCAO_LIDA_MS / DIA_MS + 5, lida: true });
     const preservada = await criar({ diasAtras: 1, lida: false });
 
-    const removidas = await podarNotificacoes();
+    const removidas = await podarNotificacoes(companyId);
 
     expect(removidas).toBeGreaterThanOrEqual(2);
     expect(await sobreviveu(preservada.id)).toBe(true);

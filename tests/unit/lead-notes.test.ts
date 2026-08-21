@@ -23,6 +23,7 @@ vi.mock("server-only", () => ({}));
 import { prisma } from "../../src/lib/prisma";
 import { adicionarNota, listarNotas } from "../../src/core/leads/notes";
 import { criarLead } from "../../src/core/leads/service";
+import { usuarioDoSeed } from "./helpers/usuarios-do-seed";
 
 // Telefone JÁ NORMALIZADO que este arquivo grava (o que `criarLead` →
 // `encontrarOuCriarContact` efetivamente persiste em `Contact.telefone`).
@@ -33,7 +34,12 @@ import { criarLead } from "../../src/core/leads/service";
 const TELEFONE_TESTE = "11955556001";
 
 async function limparDadosDeTeste() {
-  const contato = await prisma.contact.findUnique({ where: { telefone: TELEFONE_TESTE } });
+  // `findFirst`, e nao `findUnique`: desde o Ciclo 1e a chave unica de
+  // `Contact` e `@@unique([companyId, telefone])` e o telefone sozinho deixou
+  // de existir em `ContactWhereUniqueInput`. Uma linha so continua sendo o
+  // esperado aqui — este arquivo reserva uma familia de telefone propria (ver
+  // o bloco acima) e todos os casos gravam na mesma empresa.
+  const contato = await prisma.contact.findFirst({ where: { telefone: TELEFONE_TESTE } });
   if (!contato) return;
 
   const leads = await prisma.lead.findMany({ where: { contactId: contato.id } });
@@ -70,12 +76,19 @@ async function limparDadosDeTeste() {
 describe("notas de lead", () => {
   let usuarioId: string;
   let leadId: string;
+  // A empresa vem do VÍNCULO do autor, não de uma string fixa: `listarNotas`
+  // passou a exigir o escopo no Ciclo 1a (Task 4), e em produção ele sai de
+  // `UsuarioAtivo.companyId`, que é `Membership.companyId`.
+  let companyId: string;
 
   beforeAll(async () => {
     await limparDadosDeTeste();
 
-    const usuario = await prisma.user.findFirstOrThrow({ where: { papel: "ADMIN", ativo: true } });
-    usuarioId = usuario.id;
+    // As duas informações numa consulta só, e as duas vindas do VÍNCULO: era
+    // `include: { memberships: true }` sobre `User` filtrado por `User.papel`,
+    // coluna que sai no Ciclo 1f. O `memberships[0]!` também some — ele pegava
+    // um vínculo arbitrário de quem tivesse dois.
+    ({ id: usuarioId, companyId } = await usuarioDoSeed("ADMIN"));
     const lead = await criarLead({
       nome: "Teste Notas",
       telefone: TELEFONE_TESTE,
@@ -97,13 +110,13 @@ describe("notas de lead", () => {
   it("lista as notas em ordem cronológica reversa", async () => {
     await adicionarNota({ leadId, autorId: usuarioId, texto: "Primeira" });
     await adicionarNota({ leadId, autorId: usuarioId, texto: "Segunda" });
-    const notas = await listarNotas(leadId);
+    const notas = await listarNotas(leadId, companyId);
     expect(notas[0].texto).toBe("Segunda");
   });
 
   it("lista as notas com o autor incluído — a página de detalhe mostra quem escreveu", async () => {
     await adicionarNota({ leadId, autorId: usuarioId, texto: "Nota com autor" });
-    const notas = await listarNotas(leadId);
+    const notas = await listarNotas(leadId, companyId);
     expect(notas[0].autor).toBeTruthy();
     expect(notas[0].autor.id).toBe(usuarioId);
   });

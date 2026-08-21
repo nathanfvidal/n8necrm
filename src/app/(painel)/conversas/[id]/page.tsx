@@ -1,7 +1,7 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
 
-import { exigirModulo } from "@/lib/module-gate";
+import { exigirModulo } from "@/core/config/modulos";
 import { usuarioAtualOuLogin } from "@/core/auth/session";
 import { hasPermission } from "@/core/auth/permissions";
 import { buscarConversaComMensagens } from "@/modules/whatsapp/queries";
@@ -25,8 +25,6 @@ export default async function ConversaDetalhePage({
 }: {
   params: Promise<{ id: string }>;
 }) {
-  exigirModulo("whatsapp");
-
   const { id } = await params;
   // `usuarioAtual()` aqui não repete a checagem de sessão de `(painel)/layout.tsx`
   // (que já garante sessão válida antes de qualquer página deste route group
@@ -36,7 +34,14 @@ export default async function ConversaDetalhePage({
   // pra cá em `/conversas/agente/page.tsx` — beco sem saída, não falha de
   // segurança, mas sem motivo para expor o link a quem não pode usá-lo).
   const usuario = await usuarioAtualOuLogin();
-  const conversa = await buscarConversaComMensagens(id);
+  // Depois da sessao, nao antes: o portao passou a perguntar de QUAL empresa e
+  // a pergunta (Ciclo 1c). Efeito colateral desejado -- visitante sem sessao
+  // agora e mandado para /login em vez de receber 404, e deixa de conseguir
+  // observar quais modulos a empresa tem pela diferenca entre as duas
+  // respostas.
+  await exigirModulo(usuario.companyId, "whatsapp");
+
+  const conversa = await buscarConversaComMensagens(usuario.companyId, id);
 
   if (!conversa) {
     notFound();
@@ -44,13 +49,17 @@ export default async function ConversaDetalhePage({
 
   // Revisão final, achado I1: `ConversaEstadoIa` precisa do interruptor
   // GLOBAL, não só do estado desta conversa — ver o comentário no componente.
-  const configBot = await lerConfigBot();
+  const configBot = await lerConfigBot(usuario.companyId);
 
   return (
     <div className="space-y-6 p-6">
       <div className="flex items-start justify-between">
         <div>
-          <Link href="/conversas" className="text-sm text-muted-foreground hover:underline">
+          {/* `prefetch={false}` vale para TODO `<Link>` do painel: a pré-busca
+              leva o cookie de sessão ao servidor e o Auth.js o reemite — o
+              defeito de logout de `0a81737` (AGENTS.md). Cobrado por
+              `tests/unit/prefetch-do-painel.test.ts`. */}
+          <Link href="/conversas" prefetch={false} className="text-sm text-muted-foreground hover:underline">
             ← Conversas
           </Link>
           <h1 className="text-xl font-semibold">
@@ -59,7 +68,11 @@ export default async function ConversaDetalhePage({
           <p className="text-sm text-muted-foreground">{conversa.telefone ?? conversa.waId}</p>
         </div>
         {hasPermission(usuario.papel, "configurar_agente") && (
-          <Link href="/conversas/agente" className="text-sm text-muted-foreground hover:underline">
+          <Link
+            href="/conversas/agente"
+            prefetch={false}
+            className="text-sm text-muted-foreground hover:underline"
+          >
             Configurar agente
           </Link>
         )}

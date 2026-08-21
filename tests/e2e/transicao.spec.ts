@@ -170,3 +170,137 @@ test("o indicador não entra no nome acessível dos links", async ({ page }) => 
     await expect(page.getByRole("link", { name: rotulo, exact: true }).first()).toBeVisible();
   }
 });
+
+/**
+ * Nenhuma navegação do painel pré-busca — e este arquivo agora prova isso
+ * FORA da barra lateral.
+ *
+ * ## O buraco que estes testes fecham
+ *
+ * Os testes acima afirmam, na prosa, que "toda navegação do painel é
+ * `prefetch={false}`", e exercitam **só a barra lateral** — que já estava
+ * corrigida desde `0a81737`. A auditoria de 2026-08-21
+ * (`docs/auditorias/2026-08-21-fase1-seguranca-branch-tenancy.md`) mediu o
+ * custo dessa lacuna: 13 dos 15 `<Link>` do painel estavam sem a prop, dois
+ * deles num `<nav>` da MESMA TELA onde vive o botão "Sair"
+ * (`(painel)/configuracoes/layout.tsx`).
+ *
+ * Por que a pré-busca é problema de segurança e não de banda: ela vai ao
+ * servidor COM o cookie de sessão, o Auth.js reemite o cookie na resposta
+ * (sessão JWT deslizante, `src/lib/auth.ts:10-12`), e uma resposta em voo no
+ * instante do "Sair" ressuscita a sessão revogada. É o defeito que o
+ * `AGENTS.md` conta.
+ *
+ * ## Por que isto precisa de navegador, tendo varredura de código
+ *
+ * `tests/unit/prefetch-do-painel.test.ts` prova a COBERTURA — que nenhum
+ * `<Link>` das duas árvores ficou sem a prop. Ele lê texto. O que ele não pode
+ * afirmar é que `prefetch={false}` realmente desliga a requisição na versão do
+ * Next que está instalada, nem que **nada mais** no painel dispara pré-busca.
+ * Isto aqui olha para o fio.
+ *
+ * E precisa ser contra o build de PRODUÇÃO, que é o que este `playwright.config.ts`
+ * já faz: *"Prefetching is only enabled in production"*
+ * (node_modules/next/dist/docs/01-app/03-api-reference/02-components/link.md,
+ * §`prefetch`). Rodando em `next dev` este teste seria verde por acidente.
+ */
+
+/**
+ * Passa a espionar as pré-buscas da página e devolve o que foi visto até
+ * agora, sob demanda.
+ *
+ * O crivo é o header `next-router-prefetch`, que o roteador do App Router põe
+ * em toda requisição de pré-busca (as de navegação de verdade levam só `rsc`).
+ * As chaves chegam em minúsculas pelo Playwright.
+ */
+function espionarPrebuscas(page: import("@playwright/test").Page) {
+  const prebuscas: string[] = [];
+  const todas: string[] = [];
+
+  page.on("request", (requisicao) => {
+    const cabecalhos = requisicao.headers();
+    todas.push(requisicao.url());
+    if (cabecalhos["next-router-prefetch"] !== undefined) prebuscas.push(requisicao.url());
+  });
+
+  return { prebuscas, todas };
+}
+
+test("nenhum link do painel pré-busca — inclusive fora da barra lateral", async ({ page }) => {
+  const espiao = espionarPrebuscas(page);
+
+  // `/configuracoes/conexoes` é a tela do achado: a régua de seções
+  // (`(painel)/configuracoes/layout.tsx`) divide o viewport com o cabeçalho
+  // que tem o botão "Sair", e era um dos dois `<nav>` sem a prop.
+  await page.goto("/configuracoes/conexoes");
+  await expect(page.getByRole("heading", { name: "Configurações", exact: true })).toBeVisible();
+  await page.waitForLoadState("networkidle");
+
+  // Hover em cada link visível: `prefetch={false}` no App Router promete
+  // *"Prefetching will never happen both on entering the viewport and on
+  // hover"* (link.md, §`prefetch`). A promessa tem duas metades; entrar na
+  // viewport já aconteceu no `goto`, e esta é a outra.
+  const links = await page.getByRole("link").all();
+  for (const link of links) {
+    if (await link.isVisible()) await link.hover();
+  }
+  await page.waitForLoadState("networkidle");
+
+  // A mesma varredura na inbox e na lista de leads, que são as telas onde o
+  // padrão do Next custaria uma pré-busca POR LINHA — `lead-table.tsx` e
+  // `conversas/page.tsx` estavam entre os treze achados.
+  for (const rota of ["/leads", "/conversas"]) {
+    await page.goto(rota);
+    await page.waitForLoadState("networkidle");
+    for (const link of await page.getByRole("link").all()) {
+      if (await link.isVisible()) await link.hover();
+    }
+    await page.waitForLoadState("networkidle");
+  }
+
+  expect(
+    espiao.prebuscas,
+    "algum `<Link>` do painel pré-buscou. A requisição leva o cookie de sessão " +
+      "ao servidor, o Auth.js o reemite, e uma resposta em voo no momento do " +
+      '"Sair" desfaz a revogação — o defeito de `0a81737`. Ver ' +
+      "`tests/unit/prefetch-do-painel.test.ts`."
+  ).toEqual([]);
+
+  // ── O controle, sem o qual o `toEqual([])` acima não vale nada ──
+  //
+  // "Zero pré-buscas observadas" tem duas causas possíveis: não houve
+  // pré-busca, ou o espião nunca observou nada. Um teste que não distingue as
+  // duas é verde por construção — exatamente o vício que este projeto já
+  // pagou caro em `transicao.spec.ts` (o glob que não casava e deixava o
+  // atraso de 3 s nunca ser aplicado, com a suíte "passando" em 2,1 s).
+  //
+  // Primeiro: o espião viu tráfego de verdade.
+  expect(espiao.todas.length, "o espião não observou requisição nenhuma").toBeGreaterThan(0);
+
+  // Segundo, e o que importa: uma requisição COM o header de pré-busca é
+  // reconhecida por ele. Se o Next mudar o nome do header, esta asserção fica
+  // vermelha e avisa que o crivo cegou — em vez de a suíte seguir verde
+  // afirmando o que não mede mais.
+  //
+  // O header `RSC: 1` NÃO acompanha a forja, e a ausência dele é deliberada:
+  // medido em 2026-08-21, uma requisição com `RSC: 1` e sem a query `_rsc`
+  // recebe **307 para `/leads?_rsc=<hash>`**, e o `upgrade-insecure-requests`
+  // do nosso CSP (`src/proxy.ts`) reescreve esse redirecionamento para
+  // `https://localhost:3000` — que não existe. O sintoma é um
+  // `TypeError: Failed to fetch` opaco, com `ERR_SSL_PROTOCOL_ERROR` no
+  // console. `Next-Router-Prefetch` sozinho é o que o crivo lê e responde 200.
+  //
+  // Aquela mesma medição rendeu a prova mais direta do porquê deste teste
+  // existir: a resposta do 307 vinha com
+  // `set-cookie: authjs.session-token=…; Expires=…`. Ou seja, uma requisição
+  // de rota do painel REEMITE o cookie de sessão — exatamente o passo 3 do
+  // defeito de `0a81737`, observado no fio e não deduzido.
+  await page.evaluate(() => fetch("/leads", { headers: { "Next-Router-Prefetch": "1" } }));
+  await expect
+    .poll(() => espiao.prebuscas.length, {
+      message:
+        "o crivo `next-router-prefetch` não reconheceu uma pré-busca forjada: o " +
+        "header mudou de nome e a asserção acima virou decorativa",
+    })
+    .toBe(1);
+});

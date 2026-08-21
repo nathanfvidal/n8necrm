@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import Link from "next/link";
 
-import { exigirModulo } from "@/lib/module-gate";
+import { exigirModulo } from "@/core/config/modulos";
 import { usuarioAtualOuLogin } from "@/core/auth/session";
 import { hasPermission } from "@/core/auth/permissions";
 import { lerConfigBot } from "@/modules/whatsapp/agente";
@@ -26,19 +26,27 @@ import { AgenteForm } from "@/components/agente-form";
  * checagem, só lê o papel para o gate de permissão abaixo.
  */
 export default async function AgentePage() {
-  exigirModulo("whatsapp");
-
   const usuario = await usuarioAtualOuLogin();
+  // Portao de MODULO antes do de PERMISSAO, e os dois continuam existindo:
+  // empresa sem o modulo whatsapp devolve 404 mesmo para ADMIN; ADMIN e o
+  // unico papel que passa do segundo. Ordem invertida trocaria o 404 por um
+  // redirecionamento para /conversas, que tambem nao existe naquela empresa.
+  await exigirModulo(usuario.companyId, "whatsapp");
+
   if (!hasPermission(usuario.papel, "configurar_agente")) {
     redirect("/conversas");
   }
 
-  const config = await lerConfigBot();
+  const config = await lerConfigBot(usuario.companyId);
 
   return (
     <div className="space-y-6 p-6">
       <div>
-        <Link href="/conversas" className="text-sm text-muted-foreground hover:underline">
+        {/* `prefetch={false}` vale para TODO `<Link>` do painel: a pré-busca
+            leva o cookie de sessão ao servidor e o Auth.js o reemite — o
+            defeito de logout de `0a81737` (AGENTS.md). Cobrado por
+            `tests/unit/prefetch-do-painel.test.ts`. */}
+        <Link href="/conversas" prefetch={false} className="text-sm text-muted-foreground hover:underline">
           ← Conversas
         </Link>
         <h1 className="text-xl font-semibold">Agente de atendimento</h1>

@@ -11,9 +11,20 @@ vi.mock("server-only", () => ({}));
 
 // Mocks dos três pontos de saída de turno.ts — nenhuma chamada real à
 // OpenAI ou à Evolution nestes testes (instrução explícita da Fatia 1).
+// Desde o Ciclo 2a (Tarefa 8) o envio não sai mais do singleton
+// `whatsappGateway`: `turno.ts` resolve o gateway pela CONEXÃO DA CONVERSA,
+// via `gatewayDaConversa`. O que é mockado aqui é a FÁBRICA; `enviarTextoMock`
+// continua sendo o mesmo espião do envio de sempre, e nenhuma expectativa
+// antiga sobre ele mudou.
+//
+// O caminho REAL da fábrica (credencial da conexão certa, recusa de conexão
+// desativada, apikey fora da mensagem de erro) é exercitado sem mock nenhum em
+// `tests/unit/whatsapp-envio-por-conexao.test.ts` — este arquivo prova a
+// ORIGEM do gateway, aquele prova o que a origem entrega.
 const enviarTextoMock = vi.fn();
-vi.mock("../../src/modules/whatsapp/gateway", () => ({
-  whatsappGateway: { enviarTexto: (...args: unknown[]) => enviarTextoMock(...args) },
+const gatewayDaConversaMock = vi.fn();
+vi.mock("@/modules/whatsapp/gateway/fabrica", () => ({
+  gatewayDaConversa: (...a: unknown[]) => gatewayDaConversaMock(...a),
 }));
 
 const gerarRespostaMock = vi.fn();
@@ -34,14 +45,30 @@ import {
   confirmarTitularidadeLease,
 } from "../../src/modules/whatsapp/turno";
 import { TIPO_CONVERSA_AGUARDANDO } from "../../src/modules/whatsapp/notificacao-tipos";
-import { BOT_CONFIG_ID, botConfig } from "../../config/bot";
+import {
+  chaveIaDaEmpresa,
+  LIMITE_RESPOSTAS_IA_POR_EMPRESA,
+} from "../../src/core/rate-limit/ia-whatsapp";
+import { botConfig } from "../../config/bot";
 // criarConversation/criarMensagemEntrada extraídos para tests/unit/helpers/whatsapp.ts
 // (Task 4 da Fatia 2) — mesmo nome, mesma assinatura, mesmo PREFIXO interno
 // ("teste-turno-") que este arquivo já usava, então `limparDadosDeTeste`
 // abaixo continua encontrando exatamente as linhas que estas funções criam.
-import { criarConversation, criarMensagemEntrada } from "./helpers/whatsapp";
+import { criarConversation, criarMensagemEntrada, companyIdSemeada } from "./helpers/whatsapp";
 
 const PREFIXO = "teste-turno-";
+
+/**
+ * A empresa das conversas que este arquivo cria — a mesma que
+ * `criarConversation` usa (`helpers/whatsapp.ts`).
+ *
+ * `turno.ts` passou a receber `companyId` no Ciclo 1d: ele roda fora de
+ * requisicao (e consumidor de fila), entao nao ha sessao de onde tira-lo, e a
+ * PRIMEIRA operacao do turno (`claimLease`) e `$queryRaw`, que o escopo nao
+ * alcanca e cujo `WHERE "companyId"` e escrito a mao. O valor viaja no
+ * `TurnoJob`, publicado pelo webhook com o que `ingerirMensagem` devolve.
+ */
+let EMPRESA = "";
 
 async function limparDadosDeTeste() {
   const conversas = await prisma.conversation.findMany({
@@ -70,17 +97,39 @@ async function limparDadosDeTeste() {
     await prisma.whatsappMessage.deleteMany({ where: { conversationId: { in: ids } } });
     await prisma.conversation.deleteMany({ where: { id: { in: ids } } });
   }
+
+  // A cota de IA POR EMPRESA (`core/rate-limit/ia-whatsapp.ts`, achado 24 da
+  // Fase 1) mora na tabela `RateLimit`, que não tem FK para nada deste arquivo
+  // e sobrevive a qualquer `deleteMany` de conversa. Cada turno bem-sucedido
+  // consome uma unidade da janela de 1h da empresa SEMEADA, que é a mesma em
+  // toda a suíte: sem esta linha, rodar o arquivo repetidas vezes na mesma hora
+  // acumularia contagem até o ducentésimo turno do dia falhar por um motivo que
+  // não é o do teste. É o tipo de teste que fica verde por meses e vermelho
+  // numa terça-feira movimentada.
+  if (EMPRESA) {
+    await prisma.rateLimit.deleteMany({ where: { chave: chaveIaDaEmpresa(EMPRESA) } });
+  }
 }
 
 describe("processarTurno", () => {
-  beforeEach(() => {
-    // Cada chamada precisa de um idExterno ÚNICO (a coluna é @unique) — um
-    // teste que envia mais de uma mensagem de saída (ex.: texto + fallback
-    // de mídia) colidiria na constraint se todas as chamadas devolvessem o
-    // mesmo valor fixo.
+  beforeEach(async () => {
+    EMPRESA = await companyIdSemeada();
+    // Cada chamada precisa de um idExterno ÚNICO — um teste que envia mais de
+    // uma mensagem de saída (ex.: texto + fallback de mídia) colidiria na
+    // constraint se todas as chamadas devolvessem o mesmo valor fixo. Desde o
+    // Ciclo 1e a chave é `@@unique([companyId, idExterno])` e não mais
+    // `idExterno @unique`, e isto NÃO afrouxa nada aqui: todas as mensagens
+    // deste arquivo nascem na empresa de `companyIdSemeada()`, uma só, onde a
+    // unicidade continua valendo integralmente.
     enviarTextoMock
       .mockReset()
       .mockImplementation(async () => ({ idExterno: `${PREFIXO}saida-${crypto.randomUUID()}` }));
+    // A fábrica devolve um gateway cujo `enviarTexto` é o espião de sempre —
+    // assim toda expectativa deste arquivo sobre `enviarTextoMock` continua
+    // medindo o ENVIO, e não a resolução da conexão.
+    gatewayDaConversaMock
+      .mockReset()
+      .mockResolvedValue({ enviarTexto: (...a: unknown[]) => enviarTextoMock(...a) });
     gerarRespostaMock.mockReset().mockResolvedValue({ mensagens: ["Oi! Como posso ajudar?"] });
     publicarTurnoMock.mockReset().mockResolvedValue(undefined);
   });
@@ -91,7 +140,7 @@ describe("processarTurno", () => {
     const conversation = await criarConversation({ bufferSeq: 1 });
     const mensagem = await criarMensagemEntrada(conversation.id, { texto: "Quero saber do Gol 2018" });
 
-    await processarTurno({ conversationId: conversation.id, seq: 1 });
+    await processarTurno({ companyId: EMPRESA, conversationId: conversation.id, seq: 1 });
 
     expect(gerarRespostaMock).toHaveBeenCalledTimes(1);
     expect(enviarTextoMock).toHaveBeenCalledWith(conversation.waId, "Oi! Como posso ajudar?");
@@ -120,7 +169,7 @@ describe("processarTurno", () => {
     await criarMensagemEntrada(conversation.id, { texto: "quero saber" });
     await criarMensagemEntrada(conversation.id, { texto: "do gol 2018" });
 
-    await processarTurno({ conversationId: conversation.id, seq: 3 });
+    await processarTurno({ companyId: EMPRESA, conversationId: conversation.id, seq: 3 });
 
     expect(gerarRespostaMock).toHaveBeenCalledTimes(1);
     const contexto = gerarRespostaMock.mock.calls[0]?.[0];
@@ -137,7 +186,7 @@ describe("processarTurno", () => {
     const conversation = await criarConversation({ bufferSeq: 5 }); // já avançou além do seq deste job
     await criarMensagemEntrada(conversation.id);
 
-    await processarTurno({ conversationId: conversation.id, seq: 3 });
+    await processarTurno({ companyId: EMPRESA, conversationId: conversation.id, seq: 3 });
 
     expect(gerarRespostaMock).not.toHaveBeenCalled();
     expect(enviarTextoMock).not.toHaveBeenCalled();
@@ -155,7 +204,7 @@ describe("processarTurno", () => {
     const conversation = await criarConversation({ bufferSeq: 1 });
     await criarMensagemEntrada(conversation.id, { tipo: "AUDIO", texto: null });
 
-    await processarTurno({ conversationId: conversation.id, seq: 1 });
+    await processarTurno({ companyId: EMPRESA, conversationId: conversation.id, seq: 1 });
 
     expect(gerarRespostaMock).not.toHaveBeenCalled();
     expect(enviarTextoMock).toHaveBeenCalledTimes(1);
@@ -168,7 +217,7 @@ describe("processarTurno", () => {
     await criarMensagemEntrada(conversation.id, { texto: "quanto custa esse carro?" });
     await criarMensagemEntrada(conversation.id, { tipo: "AUDIO", texto: null });
 
-    await processarTurno({ conversationId: conversation.id, seq: 2 });
+    await processarTurno({ companyId: EMPRESA, conversationId: conversation.id, seq: 2 });
 
     expect(gerarRespostaMock).toHaveBeenCalledTimes(1);
     expect(enviarTextoMock).toHaveBeenCalledTimes(2); // resposta do modelo + fallback de mídia
@@ -194,7 +243,7 @@ describe("processarTurno", () => {
           )
       );
 
-      const job = { conversationId: conversation.id, seq: 1 };
+      const job = { companyId: EMPRESA, conversationId: conversation.id, seq: 1 };
       await Promise.all([processarTurno(job), processarTurno(job)]);
 
       expect(gerarRespostaMock).toHaveBeenCalledTimes(1);
@@ -239,7 +288,7 @@ describe("processarTurno", () => {
 
       // `tentativaReagendamento` já no teto — a próxima tentativa (31ª)
       // deve desistir em vez de reagendar de novo.
-      await processarTurno({ conversationId: conversation.id, seq: 1, tentativaReagendamento: 30 });
+      await processarTurno({ companyId: EMPRESA, conversationId: conversation.id, seq: 1, tentativaReagendamento: 30 });
 
       expect(publicarTurnoMock).not.toHaveBeenCalled();
       expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining("desistiu depois de"));
@@ -253,29 +302,30 @@ describe("processarTurno", () => {
       "quando o reagendamento dela já existe na fila",
     async () => {
       // Cenário: a fila entrega o job (seq 1, tentativa 0), o lease está
-      // ocupado, o reagendamento r1 é publicado com sucesso e o handler
-      // devolve 200 — mas essa confirmação se perde (entrega "pelo menos uma
-      // vez" é justamente isso). A fila reentrega o MESMO job (seq 1,
-      // tentativa 0). O lease continua ocupado, então o código tenta publicar
-      // r1 de novo — e a chave r1 já está registrada na janela de dedupe.
+      // ocupado, o reagendamento r1 é publicado com sucesso — mas a conclusão
+      // daquele turno se perde (entrega "pelo menos uma vez" é justamente
+      // isso, e a reivindicação por lease de `fila/postgres.ts` tem a mesma
+      // propriedade). A fila reentrega o MESMO job (seq 1, tentativa 0). O
+      // lease continua ocupado, então o código tenta publicar r1 de novo — e a
+      // chave r1 já existe.
       //
-      // Sem tratamento, `DuplicateMessageError` sobe, o handler responde 500,
-      // a fila reentrega, e o ciclo se repete até esgotar as tentativas. É a
-      // MESMA classe do achado C2 (que era sempre) por outro gatilho (que é
-      // raro) — e o reagendamento r1 correto já está na fila fazendo o
-      // trabalho, então não há nada a recuperar: a publicação duplicada é uma
-      // não-operação, não uma falha.
+      // Até o Ciclo 2d isso subia como `DuplicateMessageError`, o handler
+      // respondia 500, a fila reentregava, e o ciclo se repetia até esgotar as
+      // tentativas — a MESMA classe do achado C2 (que era sempre) por um
+      // gatilho raro. O adaptador de Postgres torna a republicação um no-op
+      // (`skipDuplicates`), então o mock RESOLVE: o que este caso trava é que
+      // `processarTurno` sai sem lançar e sem republicar duas vezes, e isso não
+      // mudou.
       const conversation = await criarConversation({ bufferSeq: 1 });
       await prisma.conversation.update({
         where: { id: conversation.id },
         data: { processandoAte: new Date(Date.now() + 60_000) },
       });
 
-      const { DuplicateMessageError } = await import("@vercel/queue");
-      publicarTurnoMock.mockRejectedValueOnce(new DuplicateMessageError("já publicado"));
+      publicarTurnoMock.mockResolvedValueOnce(undefined);
 
       await expect(
-        processarTurno({ conversationId: conversation.id, seq: 1, tentativaReagendamento: 0 })
+        processarTurno({ companyId: EMPRESA, conversationId: conversation.id, seq: 1, tentativaReagendamento: 0 })
       ).resolves.toBeUndefined();
 
       expect(publicarTurnoMock).toHaveBeenCalledTimes(1);
@@ -290,7 +340,7 @@ describe("processarTurno", () => {
         const conversation = await criarConversation({ bufferSeq: 1 });
 
         // Processador A reivindica o lease — token A.
-        const tokenA = await claimLease(conversation.id);
+        const tokenA = await claimLease(EMPRESA, conversation.id);
         expect(tokenA).not.toBeNull();
 
         // Simula o lease de A expirando DE VERDADE (relógio avançou, ou A
@@ -303,7 +353,7 @@ describe("processarTurno", () => {
 
         // Processador B reivindica o lease agora livre — token B, DIFERENTE
         // do token A.
-        const tokenB = await claimLease(conversation.id);
+        const tokenB = await claimLease(EMPRESA, conversation.id);
         expect(tokenB).not.toBeNull();
         expect(tokenB!.processandoAte.getTime()).not.toBe(tokenA!.processandoAte.getTime());
 
@@ -311,7 +361,7 @@ describe("processarTurno", () => {
         // Achado CRÍTICO do revisor: sem o fencing token, isto apagava o
         // lease de B incondicionalmente — abrindo espaço para um TERCEIRO
         // processador entrar enquanto B ainda trabalha.
-        await liberarLease(conversation.id, tokenA!.processandoAte);
+        await liberarLease(EMPRESA, conversation.id, tokenA!.processandoAte);
 
         const conversationAposLiberacaoDeA = await prisma.conversation.findUniqueOrThrow({
           where: { id: conversation.id },
@@ -323,7 +373,7 @@ describe("processarTurno", () => {
 
         // B, ao terminar de verdade, libera com o PRÓPRIO token — agora sim
         // o lease é liberado.
-        await liberarLease(conversation.id, tokenB!.processandoAte);
+        await liberarLease(EMPRESA, conversation.id, tokenB!.processandoAte);
         const conversationAposLiberacaoDeB = await prisma.conversation.findUniqueOrThrow({
           where: { id: conversation.id },
         });
@@ -333,22 +383,22 @@ describe("processarTurno", () => {
 
     it("confirmarTitularidadeLease reflete corretamente titular atual vs. token antigo", async () => {
       const conversation = await criarConversation({ bufferSeq: 1 });
-      const tokenA = await claimLease(conversation.id);
+      const tokenA = await claimLease(EMPRESA, conversation.id);
 
       // Ainda titular e IA ativa: pode seguir (`null`).
-      expect(await confirmarTitularidadeLease(conversation.id, tokenA!.processandoAte)).toBeNull();
+      expect(await confirmarTitularidadeLease(EMPRESA, conversation.id, tokenA!.processandoAte)).toBeNull();
 
       await prisma.conversation.update({
         where: { id: conversation.id },
         data: { processandoAte: new Date(Date.now() - 1000) },
       });
-      const tokenB = await claimLease(conversation.id);
+      const tokenB = await claimLease(EMPRESA, conversation.id);
 
       // O token antigo (A) não é mais o titular; o novo (B) é.
-      expect(await confirmarTitularidadeLease(conversation.id, tokenA!.processandoAte)).toBe(
+      expect(await confirmarTitularidadeLease(EMPRESA, conversation.id, tokenA!.processandoAte)).toBe(
         "lease-perdido"
       );
-      expect(await confirmarTitularidadeLease(conversation.id, tokenB!.processandoAte)).toBeNull();
+      expect(await confirmarTitularidadeLease(EMPRESA, conversation.id, tokenB!.processandoAte)).toBeNull();
     });
 
     // A outra metade da distinção que motivou o tipo `MotivoAborto`: ainda
@@ -356,14 +406,14 @@ describe("processarTurno", () => {
     // tem que devolver "ia-pausada", não "lease-perdido" nem `null`.
     it("confirmarTitularidadeLease devolve \"ia-pausada\" quando o titular do lease está com a IA pausada", async () => {
       const conversation = await criarConversation({ bufferSeq: 1 });
-      const token = await claimLease(conversation.id);
+      const token = await claimLease(EMPRESA, conversation.id);
 
       await prisma.conversation.update({
         where: { id: conversation.id },
         data: { iaAtiva: false, iaPausadaEm: new Date() },
       });
 
-      expect(await confirmarTitularidadeLease(conversation.id, token!.processandoAte)).toBe(
+      expect(await confirmarTitularidadeLease(EMPRESA, conversation.id, token!.processandoAte)).toBe(
         "ia-pausada"
       );
     });
@@ -390,7 +440,7 @@ describe("processarTurno", () => {
         .mockImplementationOnce(() => chamadaLentaDeA) // 1ª chamada (A): fica pendurada até resolvermos.
         .mockResolvedValueOnce({ mensagens: ["Resposta de B"] }); // 2ª chamada (B): resolve na hora.
 
-      const job = { conversationId: conversation.id, seq: 1 };
+      const job = { companyId: EMPRESA, conversationId: conversation.id, seq: 1 };
 
       // Dispara A — ele reivindica o lease e fica bloqueado dentro da
       // chamada ao modelo (ainda não resolvida).
@@ -458,6 +508,7 @@ describe("processarTurno", () => {
       // de verdade.
       await prisma.whatsappMessage.createMany({
         data: Array.from({ length: 20 }, (_, i) => ({
+          companyId: conversation.companyId,
           conversationId: conversation.id,
           idExterno: `${PREFIXO}saida-teto-${i}-${crypto.randomUUID()}`,
           direcao: "SAIDA" as const,
@@ -470,7 +521,7 @@ describe("processarTurno", () => {
 
       const pendente = await criarMensagemEntrada(conversation.id, { texto: "mais uma pergunta" });
 
-      await processarTurno({ conversationId: conversation.id, seq: 1 });
+      await processarTurno({ companyId: EMPRESA, conversationId: conversation.id, seq: 1 });
 
       expect(gerarRespostaMock).not.toHaveBeenCalled();
       expect(enviarTextoMock).not.toHaveBeenCalled();
@@ -487,6 +538,7 @@ describe("processarTurno", () => {
       const conversation = await criarConversation({ bufferSeq: 1 });
       await prisma.whatsappMessage.createMany({
         data: Array.from({ length: 19 }, (_, i) => ({
+          companyId: conversation.companyId,
           conversationId: conversation.id,
           idExterno: `${PREFIXO}saida-abaixo-${i}-${crypto.randomUUID()}`,
           direcao: "SAIDA" as const,
@@ -498,7 +550,7 @@ describe("processarTurno", () => {
       });
       await criarMensagemEntrada(conversation.id, { texto: "mais uma pergunta" });
 
-      await processarTurno({ conversationId: conversation.id, seq: 1 });
+      await processarTurno({ companyId: EMPRESA, conversationId: conversation.id, seq: 1 });
 
       expect(gerarRespostaMock).toHaveBeenCalledTimes(1);
       expect(enviarTextoMock).toHaveBeenCalledTimes(1);
@@ -508,6 +560,7 @@ describe("processarTurno", () => {
       const conversation = await criarConversation({ bufferSeq: 1 });
       await prisma.whatsappMessage.createMany({
         data: Array.from({ length: 25 }, (_, i) => ({
+          companyId: conversation.companyId,
           conversationId: conversation.id,
           idExterno: `${PREFIXO}saida-antiga-${i}-${crypto.randomUUID()}`,
           direcao: "SAIDA" as const,
@@ -520,9 +573,143 @@ describe("processarTurno", () => {
       });
       await criarMensagemEntrada(conversation.id, { texto: "pergunta nova" });
 
-      await processarTurno({ conversationId: conversation.id, seq: 1 });
+      await processarTurno({ companyId: EMPRESA, conversationId: conversation.id, seq: 1 });
 
       expect(gerarRespostaMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // Achado 24 da Fase 1
+  // (`docs/auditorias/2026-08-21-fase1-seguranca-branch-tenancy.md`): o teto
+  // acima é por CONVERSA e não vê N conversas. Cem números diferentes, cada um
+  // dentro dos seus 20/h, davam 2000 chamadas de OpenAI numa hora, e o único
+  // freio era o teto de gasto no painel da OpenAI — fora do sistema.
+  //
+  // A cota é semeada direto na tabela `RateLimit` (mesma técnica das 20
+  // mensagens semeadas acima): rodar 200 turnos de verdade seria lento e não
+  // provaria nada a mais.
+  describe("teto de respostas de IA por EMPRESA por hora", () => {
+    async function esgotarCotaDaEmpresa() {
+      await prisma.rateLimit.upsert({
+        where: { chave: chaveIaDaEmpresa(EMPRESA) },
+        create: {
+          chave: chaveIaDaEmpresa(EMPRESA),
+          janelaInicio: new Date(),
+          contagem: LIMITE_RESPOSTAS_IA_POR_EMPRESA,
+        },
+        update: { janelaInicio: new Date(), contagem: LIMITE_RESPOSTAS_IA_POR_EMPRESA },
+      });
+    }
+
+    it("para de chamar o modelo quando a empresa esgota a cota, mesmo com a conversa zerada", async () => {
+      // A conversa é NOVA — zero respostas de IA no histórico dela. Se este
+      // caso passasse por causa do teto por conversa, ele não estaria provando
+      // o teto por empresa. É a distinção que o teste existe para fazer.
+      const conversation = await criarConversation({ bufferSeq: 1 });
+      const pendente = await criarMensagemEntrada(conversation.id, { texto: "primeira pergunta" });
+
+      await esgotarCotaDaEmpresa();
+
+      await processarTurno({ companyId: EMPRESA, conversationId: conversation.id, seq: 1 });
+
+      expect(gerarRespostaMock).not.toHaveBeenCalled();
+      expect(enviarTextoMock).not.toHaveBeenCalled();
+
+      // "Persiste mas para de responder", nunca "descarta calado": a mensagem
+      // do cliente fica marcada como processada e visível no inbox humano.
+      const pendenteAtualizada = await prisma.whatsappMessage.findUniqueOrThrow({
+        where: { id: pendente.id },
+      });
+      expect(pendenteAtualizada.processadoEm).not.toBeNull();
+    });
+
+    it("acende o sino: o cliente não fica no silêncio, um humano é chamado", async () => {
+      // A segunda metade de "não descarta calado". Sem isto, a correção
+      // trocaria custo de OpenAI por cliente sem resposta e sem ninguém
+      // sabendo — que é pior que o problema original.
+      const conversation = await criarConversation({ bufferSeq: 1 });
+      await criarMensagemEntrada(conversation.id, { texto: "alguém aí?" });
+
+      await esgotarCotaDaEmpresa();
+      await processarTurno({ companyId: EMPRESA, conversationId: conversation.id, seq: 1 });
+
+      const notificacoes = await prisma.notification.findMany({
+        where: { tipo: TIPO_CONVERSA_AGUARDANDO },
+      });
+      const daConversa = notificacoes.filter(
+        (n) => (n.payload as { conversationId?: string } | null)?.conversationId === conversation.id
+      );
+      expect(daConversa.length).toBeGreaterThan(0);
+    });
+
+    it("uma unidade abaixo do teto, a resposta sai normalmente", async () => {
+      // A metade que impede "recusar tudo" de passar como correção.
+      const conversation = await criarConversation({ bufferSeq: 1 });
+      await criarMensagemEntrada(conversation.id, { texto: "tem Gol 2018?" });
+
+      await prisma.rateLimit.upsert({
+        where: { chave: chaveIaDaEmpresa(EMPRESA) },
+        create: {
+          chave: chaveIaDaEmpresa(EMPRESA),
+          janelaInicio: new Date(),
+          contagem: LIMITE_RESPOSTAS_IA_POR_EMPRESA - 1,
+        },
+        update: { janelaInicio: new Date(), contagem: LIMITE_RESPOSTAS_IA_POR_EMPRESA - 1 },
+      });
+
+      await processarTurno({ companyId: EMPRESA, conversationId: conversation.id, seq: 1 });
+
+      expect(gerarRespostaMock).toHaveBeenCalledTimes(1);
+      expect(enviarTextoMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("uma janela vencida não conta: a cota de uma hora atrás não bloqueia agora", async () => {
+      // A janela do limitador é FIXA (`core/rate-limit/limiter.ts`): passada a
+      // hora, a próxima chamada reescreve `janelaInicio` e zera a contagem.
+      // Sem este caso, uma rajada às 14h deixaria a empresa muda para sempre.
+      const conversation = await criarConversation({ bufferSeq: 1 });
+      await criarMensagemEntrada(conversation.id, { texto: "e agora?" });
+
+      await prisma.rateLimit.upsert({
+        where: { chave: chaveIaDaEmpresa(EMPRESA) },
+        create: {
+          chave: chaveIaDaEmpresa(EMPRESA),
+          janelaInicio: new Date(Date.now() - 2 * 60 * 60 * 1000),
+          contagem: LIMITE_RESPOSTAS_IA_POR_EMPRESA,
+        },
+        update: {
+          janelaInicio: new Date(Date.now() - 2 * 60 * 60 * 1000),
+          contagem: LIMITE_RESPOSTAS_IA_POR_EMPRESA,
+        },
+      });
+
+      await processarTurno({ companyId: EMPRESA, conversationId: conversation.id, seq: 1 });
+
+      expect(gerarRespostaMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("mensagem só de mídia NÃO consome a cota — ela conta o que custa", async () => {
+      // A escolha de pôr a checagem DENTRO do ramo que chama o modelo, e não
+      // junto do teto por conversa. `checarRateLimit` consome uma unidade a
+      // cada chamada; se a checagem estivesse antes do `if`, uma rajada de
+      // áudios (que respondem com texto fixo, sem tocar a OpenAI) queimaria a
+      // cota da empresa e deixaria as conversas de TEXTO sem resposta.
+      await prisma.rateLimit.deleteMany({ where: { chave: chaveIaDaEmpresa(EMPRESA) } });
+
+      const conversation = await criarConversation({ bufferSeq: 1 });
+      await criarMensagemEntrada(conversation.id, { tipo: "AUDIO", texto: null });
+
+      await processarTurno({ companyId: EMPRESA, conversationId: conversation.id, seq: 1 });
+
+      expect(gerarRespostaMock).not.toHaveBeenCalled();
+      // O fallback de mídia FOI enviado — o turno rodou até o fim.
+      expect(enviarTextoMock).toHaveBeenCalledTimes(1);
+
+      // E a cota continua intocada: nenhuma linha foi criada para a empresa.
+      const cota = await prisma.rateLimit.findUnique({
+        where: { chave: chaveIaDaEmpresa(EMPRESA) },
+      });
+      expect(cota).toBeNull();
     });
   });
 
@@ -540,7 +727,7 @@ describe("processarTurno", () => {
         .mockResolvedValueOnce({ idExterno: `${PREFIXO}saida-ok-${crypto.randomUUID()}` })
         .mockRejectedValueOnce(new Error("Evolution fora do ar"));
 
-      await expect(processarTurno({ conversationId: conversation.id, seq: 1 })).rejects.toThrow(
+      await expect(processarTurno({ companyId: EMPRESA, conversationId: conversation.id, seq: 1 })).rejects.toThrow(
         "Evolution fora do ar"
       );
 
@@ -571,7 +758,7 @@ describe("processarTurno", () => {
     const textoEnorme = "a".repeat(5000);
     await criarMensagemEntrada(conversation.id, { texto: textoEnorme });
 
-    await processarTurno({ conversationId: conversation.id, seq: 1 });
+    await processarTurno({ companyId: EMPRESA, conversationId: conversation.id, seq: 1 });
 
     const contexto = gerarRespostaMock.mock.calls[0]?.[0];
     const ultimaEntrada = contexto.historico.at(-1);
@@ -584,7 +771,7 @@ describe("processarTurno", () => {
       const conversation = await criarConversation({ iaAtiva: false });
       const pendente = await criarMensagemEntrada(conversation.id, { texto: "oi, tem o Onix 2020?" });
 
-      await processarTurno({ conversationId: conversation.id, seq: conversation.bufferSeq });
+      await processarTurno({ companyId: EMPRESA, conversationId: conversation.id, seq: conversation.bufferSeq });
 
       expect(enviarTextoMock).not.toHaveBeenCalled();
       // Busca pelo id e confere `processadoEm` não nulo (mesmo padrão do
@@ -600,21 +787,28 @@ describe("processarTurno", () => {
     });
 
     it("não responde quando o interruptor global está desligado", async () => {
+      // `BotConfig` deixou de ter id constante (Task 1 do Ciclo 1a — uma
+      // linha por empresa, `@@unique([companyId])`); `BOT_CONFIG_ID`
+      // ("bot-config") não é mais um id válido para buscar em runtime (mesmo
+      // raciocínio documentado em `src/modules/whatsapp/turno.ts`) — busca
+      // agora por `companyId`, empresa única do Ciclo 1a.
+      //
       // Captura o valor original em vez de assumir `true`: o interruptor é
       // uma feature editável pelo CRM nesta fatia -- restaurar um `true`
       // fixo religaria em silêncio um bot que alguém tivesse desligado de
       // propósito antes de rodar a suíte contra o banco de dev.
-      const original = await prisma.botConfig.findUniqueOrThrow({ where: { id: BOT_CONFIG_ID } });
-      await prisma.botConfig.update({ where: { id: BOT_CONFIG_ID }, data: { ativo: false } });
+      const companyId = await companyIdSemeada();
+      const original = await prisma.botConfig.findUniqueOrThrow({ where: { companyId } });
+      await prisma.botConfig.update({ where: { companyId }, data: { ativo: false } });
       try {
         const conversation = await criarConversation();
         await criarMensagemEntrada(conversation.id, { texto: "bom dia" });
 
-        await processarTurno({ conversationId: conversation.id, seq: conversation.bufferSeq });
+        await processarTurno({ companyId: EMPRESA, conversationId: conversation.id, seq: conversation.bufferSeq });
 
         expect(enviarTextoMock).not.toHaveBeenCalled();
       } finally {
-        await prisma.botConfig.update({ where: { id: BOT_CONFIG_ID }, data: { ativo: original.ativo } });
+        await prisma.botConfig.update({ where: { companyId }, data: { ativo: original.ativo } });
       }
     });
 
@@ -634,7 +828,7 @@ describe("processarTurno", () => {
         return { mensagens: ["Resposta que não deve ser enviada"] };
       });
 
-      await processarTurno({ conversationId: conversation.id, seq: conversation.bufferSeq });
+      await processarTurno({ companyId: EMPRESA, conversationId: conversation.id, seq: conversation.bufferSeq });
 
       expect(enviarTextoMock).not.toHaveBeenCalled();
 
@@ -664,7 +858,7 @@ describe("processarTurno", () => {
         return { mensagens: ["resposta órfã"] };
       });
 
-      await processarTurno({ conversationId: conversation.id, seq: conversation.bufferSeq });
+      await processarTurno({ companyId: EMPRESA, conversationId: conversation.id, seq: conversation.bufferSeq });
 
       const pendentes = await prisma.whatsappMessage.findMany({
         where: { conversationId: conversation.id, direcao: "ENTRADA", processadoEm: null },
@@ -673,9 +867,10 @@ describe("processarTurno", () => {
     });
 
     it("monta o prompt a partir do banco, não de config/bot.ts", async () => {
-      const original = await prisma.botConfig.findUniqueOrThrow({ where: { id: BOT_CONFIG_ID } });
+      const companyId = await companyIdSemeada();
+      const original = await prisma.botConfig.findUniqueOrThrow({ where: { companyId } });
       await prisma.botConfig.update({
-        where: { id: BOT_CONFIG_ID },
+        where: { companyId },
         data: { personaNome: "Beatriz-do-teste" },
       });
 
@@ -684,7 +879,7 @@ describe("processarTurno", () => {
         await criarMensagemEntrada(conversation.id, { texto: "oi" });
         enviarTextoMock.mockResolvedValue({ idExterno: `${PREFIXO}saida-${conversation.id}` });
 
-        await processarTurno({ conversationId: conversation.id, seq: conversation.bufferSeq });
+        await processarTurno({ companyId: EMPRESA, conversationId: conversation.id, seq: conversation.bufferSeq });
 
         const [chamada] = gerarRespostaMock.mock.calls.at(-1)!;
         expect(chamada.systemPrompt).toContain("Beatriz-do-teste");
@@ -697,7 +892,7 @@ describe("processarTurno", () => {
         expect(chamada.systemPrompt).not.toContain(`Você é ${botConfig.persona.nome},`);
       } finally {
         await prisma.botConfig.update({
-          where: { id: BOT_CONFIG_ID },
+          where: { companyId },
           data: { personaNome: original.personaNome },
         });
       }
@@ -714,24 +909,25 @@ describe("processarTurno", () => {
       const conversa = await criarConversation({ iaAtiva: false });
       await criarMensagemEntrada(conversa.id, { texto: "oi, tem o Onix?" });
 
-      await processarTurno({ conversationId: conversa.id, seq: conversa.bufferSeq });
+      await processarTurno({ companyId: EMPRESA, conversationId: conversa.id, seq: conversa.bufferSeq });
 
       expect(await aguardandoDe(conversa.id)).toBeInstanceOf(Date);
     });
 
     it("marca quando o interruptor global está desligado", async () => {
-      const original = await prisma.botConfig.findUniqueOrThrow({ where: { id: BOT_CONFIG_ID } });
-      await prisma.botConfig.update({ where: { id: BOT_CONFIG_ID }, data: { ativo: false } });
+      const companyId = await companyIdSemeada();
+      const original = await prisma.botConfig.findUniqueOrThrow({ where: { companyId } });
+      await prisma.botConfig.update({ where: { companyId }, data: { ativo: false } });
       try {
         const conversa = await criarConversation();
         await criarMensagemEntrada(conversa.id, { texto: "bom dia" });
 
-        await processarTurno({ conversationId: conversa.id, seq: conversa.bufferSeq });
+        await processarTurno({ companyId: EMPRESA, conversationId: conversa.id, seq: conversa.bufferSeq });
 
         expect(await aguardandoDe(conversa.id)).toBeInstanceOf(Date);
       } finally {
         await prisma.botConfig.update({
-          where: { id: BOT_CONFIG_ID },
+          where: { companyId },
           data: { ativo: original.ativo },
         });
       }
@@ -743,7 +939,7 @@ describe("processarTurno", () => {
       const conversa = await criarConversation();
       await criarMensagemEntrada(conversa.id, { texto: "quanto custa?" });
 
-      await processarTurno({ conversationId: conversa.id, seq: conversa.bufferSeq });
+      await processarTurno({ companyId: EMPRESA, conversationId: conversa.id, seq: conversa.bufferSeq });
 
       expect(await aguardandoDe(conversa.id)).toBeNull();
     });
@@ -756,7 +952,7 @@ describe("processarTurno", () => {
       });
       await criarMensagemEntrada(conversa.id, { texto: "voltei" });
 
-      await processarTurno({ conversationId: conversa.id, seq: conversa.bufferSeq });
+      await processarTurno({ companyId: EMPRESA, conversationId: conversa.id, seq: conversa.bufferSeq });
 
       expect(await aguardandoDe(conversa.id)).toBeNull();
     });
@@ -765,6 +961,7 @@ describe("processarTurno", () => {
       const conversa = await criarConversation({ bufferSeq: 1 });
       await prisma.whatsappMessage.createMany({
         data: Array.from({ length: 20 }, (_, i) => ({
+          companyId: conversa.companyId,
           conversationId: conversa.id,
           idExterno: `${PREFIXO}saida-teto-aguardando-${i}-${crypto.randomUUID()}`,
           direcao: "SAIDA" as const,
@@ -776,7 +973,7 @@ describe("processarTurno", () => {
       });
       await criarMensagemEntrada(conversa.id, { texto: "mais uma pergunta" });
 
-      await processarTurno({ conversationId: conversa.id, seq: conversa.bufferSeq });
+      await processarTurno({ companyId: EMPRESA, conversationId: conversa.id, seq: conversa.bufferSeq });
 
       expect(await aguardandoDe(conversa.id)).toBeInstanceOf(Date);
     });
@@ -799,7 +996,7 @@ describe("processarTurno", () => {
         return { mensagens: ["resposta órfã"] };
       });
 
-      await processarTurno({ conversationId: conversa.id, seq: conversa.bufferSeq });
+      await processarTurno({ companyId: EMPRESA, conversationId: conversa.id, seq: conversa.bufferSeq });
 
       expect(await aguardandoDe(conversa.id)).toBeNull();
     });
@@ -820,9 +1017,74 @@ describe("processarTurno", () => {
         return { mensagens: ["Resposta que não deve ser enviada"] };
       });
 
-      await processarTurno({ conversationId: conversa.id, seq: conversa.bufferSeq });
+      await processarTurno({ companyId: EMPRESA, conversationId: conversa.id, seq: conversa.bufferSeq });
 
       expect(await aguardandoDe(conversa.id)).toBeInstanceOf(Date);
+    });
+  });
+
+  describe("o envio sai pela conexão da conversa (Ciclo 2a)", () => {
+    it("resolve o gateway com o `companyId` e o `connectionId` da conversa", async () => {
+      // O mesmo cenário de "caminho feliz" acima — o que muda é a pergunta:
+      // não "a mensagem saiu?", e sim "por qual conexão ela ia sair?".
+      const conversation = await criarConversation({ bufferSeq: 1 });
+      await criarMensagemEntrada(conversation.id, { texto: "Quero saber do Gol 2018" });
+
+      await processarTurno({ companyId: EMPRESA, conversationId: conversation.id, seq: 1 });
+
+      expect(enviarTextoMock).toHaveBeenCalledTimes(1);
+      // ## Por que `null` explícito, e não `expect.anything()`
+      //
+      // O briefing desta tarefa pedia `connectionId: expect.anything()`. Isso
+      // NÃO passa aqui, e foi medido: `expect.anything()` reprova `null` tanto
+      // quanto `undefined`, e `criarConversation` (`helpers/whatsapp.ts`) cria
+      // conversa SEM conexão — `connectionId` nulo é justamente o caso de toda
+      // conversa anterior ao Ciclo 2a, já que não houve backfill (Tarefa 1).
+      //
+      // `connectionId: null` continua sendo uma afirmação que MORDE: a
+      // frouxidão conhecida do Vitest ao comparar objeto parcial é entre chave
+      // ausente e `undefined` (armadilha medida na Tarefa 7, em
+      // `publicarTurno`) — `null` contra ausente reprova. Se `turno.ts`
+      // chamasse a fábrica com um objeto sem `connectionId`, esta linha ficaria
+      // vermelha.
+      //
+      // Com valor NÃO nulo quem morde é `whatsapp-envio-por-conexao.test.ts`,
+      // que tem duas conexões ativas de verdade no banco.
+      expect(gatewayDaConversaMock).toHaveBeenCalledWith(
+        EMPRESA,
+        expect.objectContaining({ id: conversation.id, connectionId: null })
+      );
+      // A segunda metade: o objeto passado é a CONVERSA, não um literal
+      // montado com o id — se alguém trocar por `{ id, connectionId: null }`
+      // fixo, esta linha continua verde, e por isso ela não está sozinha; o
+      // caso que morde de verdade é o de duas conexões ativas em
+      // `tests/unit/whatsapp-envio-por-conexao.test.ts`, que exercita a
+      // fábrica sem mock.
+      const [empresaRecebida, conversaRecebida] = gatewayDaConversaMock.mock.calls[0] as [
+        string,
+        { id: string; connectionId: string | null },
+      ];
+      expect(empresaRecebida).toBe(EMPRESA);
+      expect(conversaRecebida.id).toBe(conversation.id);
+      expect("connectionId" in conversaRecebida).toBe(true);
+    });
+
+    it("resolve o gateway UMA vez por turno, não uma por mensagem", async () => {
+      // Com o modelo devolvendo DUAS respostas, o gateway continua sendo
+      // resolvido uma vez só: resolver dentro do laço faria uma consulta ao
+      // banco e uma decifragem AES-GCM por mensagem enviada, sem nada em
+      // troca — a conexão não muda no meio de um turno.
+      //
+      // Duas respostas, e não uma: com uma só, "uma vez por turno" e "uma vez
+      // por mensagem" dão o mesmo número e o caso não distinguiria nada.
+      gerarRespostaMock.mockResolvedValueOnce({ mensagens: ["Primeira", "Segunda"] });
+      const conversation = await criarConversation({ bufferSeq: 1 });
+      await criarMensagemEntrada(conversation.id, { texto: "oi" });
+
+      await processarTurno({ companyId: EMPRESA, conversationId: conversation.id, seq: 1 });
+
+      expect(enviarTextoMock).toHaveBeenCalledTimes(2);
+      expect(gatewayDaConversaMock).toHaveBeenCalledTimes(1);
     });
   });
 });

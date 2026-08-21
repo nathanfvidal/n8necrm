@@ -98,7 +98,11 @@ test.beforeAll(async () => {
   // O seletor de contato só aparece quando existe pelo menos um contato — um
   // `<select>` com uma opção só não é escolha. Criar aqui, e não pela tela,
   // mantém este arquivo sobre TAREFAS.
-  await prisma.contact.create({ data: { nome: NOME_CONTATO, telefone: TELEFONE_CONTATO } });
+  // Empresa única do Ciclo 1a (mesma suposição de `prisma/seed.ts`).
+  const empresa = await prisma.company.findFirstOrThrow();
+  await prisma.contact.create({
+    data: { companyId: empresa.id, nome: NOME_CONTATO, telefone: TELEFONE_CONTATO },
+  });
 });
 
 test.afterAll(async () => {

@@ -13,7 +13,9 @@ vi.mock("server-only", () => ({}));
 // precisa vir antes de qualquer import que alcance `src/lib/prisma.ts`, e é por
 // isso que os imports aqui são dinâmicos.
 const { prisma } = await import("@/lib/prisma");
-const { criarConversation, limparConversasDeTeste } = await import("./helpers/whatsapp");
+const { companyIdSemeada, criarConversation, limparConversasDeTeste } = await import(
+  "./helpers/whatsapp"
+);
 const { marcarAguardandoHumano, limparAguardandoHumano } = await import(
   "../../src/modules/whatsapp/notificacoes"
 );
@@ -30,6 +32,29 @@ async function notificacoesDaConversa(conversationId: string) {
     (n) => (n.payload as { conversationId?: string } | null)?.conversationId === conversationId
   );
 }
+
+/**
+ * Quantos avisos ESTA conversa deve gerar: um por usuário ativo **com vínculo
+ * (`Membership`) na empresa da conversa**.
+ *
+ * Era `prisma.user.count({ where: { ativo: true } })` — a mesma consulta sem
+ * empresa que o defeito de `marcarAguardandoHumano` tinha. Com uma empresa só
+ * no banco os dois números coincidem, então o teste passava por cima do
+ * vazamento sem enxergá-lo; a expectativa precisa falar a mesma língua da
+ * regra que ela prova.
+ */
+async function destinatariosEsperados(companyId: string): Promise<number> {
+  return prisma.membership.count({ where: { companyId, user: { ativo: true } } });
+}
+
+// Marca deste arquivo nas linhas que ele cria fora do prefixo `teste-turno-`
+// (empresa e usuário do caso de tenancy abaixo) — mesmo recurso de
+// `tests/unit/alerta-atividade.test.ts`, para que a limpeza e qualquer
+// inspeção manual saibam de onde a linha veio.
+const MARCA = "ZZWhatsappNotificacoes";
+// Hash bcrypt sintaticamente válido e que não corresponde a senha nenhuma:
+// o usuário criado aqui existe só para ser (ou não ser) destinatário.
+const HASH_INERTE = "$2b$10$invalidoinvalidoinvalidoinvalidoinvalidoinvalidoinvalidoinva";
 
 describe("aviso de conversa aguardando humano", () => {
   // Ids das conversas que ESTE arquivo de teste criou, para escopar a limpeza
@@ -90,7 +115,7 @@ describe("aviso de conversa aguardando humano", () => {
     it("sem contato e sem nome: mascara, mantendo so os 4 ultimos digitos", async () => {
       const conversa = await criarConversaDeTeste({ telefone: "11987654321" });
 
-      await marcarAguardandoHumano(conversa.id);
+      await marcarAguardandoHumano(conversa.companyId, conversa.id);
 
       const [aviso] = await notificacoesDaConversa(conversa.id);
       const rotulo = (aviso.payload as { nomeExibicao: string }).nomeExibicao;
@@ -111,7 +136,7 @@ describe("aviso de conversa aguardando humano", () => {
         telefone: null,
       });
 
-      await marcarAguardandoHumano(conversa.id);
+      await marcarAguardandoHumano(conversa.companyId, conversa.id);
 
       const [aviso] = await notificacoesDaConversa(conversa.id);
       const rotulo = (aviso.payload as { nomeExibicao: string }).nomeExibicao;
@@ -128,7 +153,7 @@ describe("aviso de conversa aguardando humano", () => {
         nomeExibicao: "Joana Cliente",
       });
 
-      await marcarAguardandoHumano(conversa.id);
+      await marcarAguardandoHumano(conversa.companyId, conversa.id);
 
       const [aviso] = await notificacoesDaConversa(conversa.id);
       const rotulo = (aviso.payload as { nomeExibicao: string }).nomeExibicao;
@@ -137,31 +162,31 @@ describe("aviso de conversa aguardando humano", () => {
     });
   });
 
-  it("marca a conversa e notifica todos os usuários ativos", async () => {
+  it("marca a conversa e notifica os usuários ativos da empresa da conversa", async () => {
     const conversa = await criarConversaDeTeste();
-    const ganhou = await marcarAguardandoHumano(conversa.id);
+    const ganhou = await marcarAguardandoHumano(conversa.companyId, conversa.id);
 
     expect(ganhou).toBe(true);
 
     const depois = await prisma.conversation.findUniqueOrThrow({ where: { id: conversa.id } });
     expect(depois.aguardandoHumanoDesde).toBeInstanceOf(Date);
 
-    const ativos = await prisma.user.count({ where: { ativo: true } });
-    expect(await notificacoesDaConversa(conversa.id)).toHaveLength(ativos);
+    const esperados = await destinatariosEsperados(conversa.companyId);
+    expect(await notificacoesDaConversa(conversa.id)).toHaveLength(esperados);
   });
 
   // O comportamento que a fatia inteira existe para garantir: um cliente
   // ansioso mandando cinco mensagens não vira cinco avisos por pessoa.
   it("marcar de novo não cria segundo aviso", async () => {
     const conversa = await criarConversaDeTeste();
-    await marcarAguardandoHumano(conversa.id);
+    await marcarAguardandoHumano(conversa.companyId, conversa.id);
     const primeira = await prisma.conversation.findUniqueOrThrow({ where: { id: conversa.id } });
 
-    const ganhouDeNovo = await marcarAguardandoHumano(conversa.id);
+    const ganhouDeNovo = await marcarAguardandoHumano(conversa.companyId, conversa.id);
 
     expect(ganhouDeNovo).toBe(false);
-    const ativos = await prisma.user.count({ where: { ativo: true } });
-    expect(await notificacoesDaConversa(conversa.id)).toHaveLength(ativos);
+    const esperados = await destinatariosEsperados(conversa.companyId);
+    expect(await notificacoesDaConversa(conversa.id)).toHaveLength(esperados);
 
     // E não reescreve o instante: quem espera há mais tempo continua no topo.
     const depois = await prisma.conversation.findUniqueOrThrow({ where: { id: conversa.id } });
@@ -175,19 +200,19 @@ describe("aviso de conversa aguardando humano", () => {
     const conversa = await criarConversaDeTeste();
 
     const resultados = await Promise.all([
-      marcarAguardandoHumano(conversa.id),
-      marcarAguardandoHumano(conversa.id),
-      marcarAguardandoHumano(conversa.id),
+      marcarAguardandoHumano(conversa.companyId, conversa.id),
+      marcarAguardandoHumano(conversa.companyId, conversa.id),
+      marcarAguardandoHumano(conversa.companyId, conversa.id),
     ]);
 
     expect(resultados.filter(Boolean)).toHaveLength(1);
-    const ativos = await prisma.user.count({ where: { ativo: true } });
-    expect(await notificacoesDaConversa(conversa.id)).toHaveLength(ativos);
+    const esperados = await destinatariosEsperados(conversa.companyId);
+    expect(await notificacoesDaConversa(conversa.id)).toHaveLength(esperados);
   });
 
   it("não notifica usuário inativo — inclusive o usuário de sistema do WhatsApp", async () => {
     const conversa = await criarConversaDeTeste();
-    await marcarAguardandoHumano(conversa.id);
+    await marcarAguardandoHumano(conversa.companyId, conversa.id);
 
     const avisos = await notificacoesDaConversa(conversa.id);
     const usuarios = await prisma.user.findMany({
@@ -197,16 +222,71 @@ describe("aviso de conversa aguardando humano", () => {
     expect(usuarios.every((u) => u.ativo)).toBe(true);
   });
 
+  // O entregável do reparo de tenancy. Antes, os destinatários vinham de
+  // `prisma.user.findMany({ where: { ativo: true } })` — sem empresa nenhuma —
+  // e cada aviso saía carimbado com o `companyId` DA CONVERSA. Resultado
+  // medido no banco de desenvolvimento: 11 linhas de `Notification` com
+  // `companyId: "company-migracao-1a"` e `userId` de usuários de 8 empresas de
+  // teste, cada uma carregando o rótulo do cliente ("Cliente ···4062") no
+  // payload. Rótulo de cliente de uma empresa entregue no sino de gente de
+  // outra — mesma família do vazamento já corrigido em `core/audit/alerta.ts`.
+  //
+  // A prova é a AUSÊNCIA DA LINHA, não "a função filtrou": conta as
+  // notificações do forasteiro no banco depois da chamada real.
+  it("usuário ativo de OUTRA empresa não recebe o aviso desta conversa", async () => {
+    const conversa = await criarConversaDeTeste();
+
+    const outraEmpresa = await prisma.company.create({
+      data: { nome: `${MARCA} Outra Empresa` },
+    });
+    const deOutraEmpresa = await prisma.user.create({
+      data: {
+        nome: `Ativo de outra empresa ${MARCA}`,
+        email: `ativo-outra-empresa-${MARCA.toLowerCase()}@teste.invalid`,
+        senhaHash: HASH_INERTE,
+        ativo: true,
+      },
+    });
+    await prisma.membership.create({
+      data: { userId: deOutraEmpresa.id, companyId: outraEmpresa.id, papel: "VENDEDOR" },
+    });
+
+    try {
+      await marcarAguardandoHumano(conversa.companyId, conversa.id);
+
+      const doForasteiro = await prisma.notification.findMany({
+        where: { userId: deOutraEmpresa.id, tipo: TIPO_CONVERSA_AGUARDANDO },
+      });
+      expect(doForasteiro).toHaveLength(0);
+
+      // A exclusão é por empresa, não uma falha geral de envio: a equipe da
+      // empresa da conversa continua sendo avisada.
+      const esperados = await destinatariosEsperados(conversa.companyId);
+      expect(esperados).toBeGreaterThan(0);
+      expect(await notificacoesDaConversa(conversa.id)).toHaveLength(esperados);
+    } finally {
+      // Nesta ordem: as notificações (FK `Notification_userId_fkey` é
+      // RESTRICT) antes do `User`, o `User` — cujo cascade leva o
+      // `Membership` — antes da `Company`. Sem a primeira linha, o `delete`
+      // do usuário falha e o arquivo deixa usuário E empresa para trás no
+      // banco compartilhado; é exatamente o quadro que envenenou
+      // `users-service.test.ts`.
+      await prisma.notification.deleteMany({ where: { userId: deOutraEmpresa.id } });
+      await prisma.user.delete({ where: { id: deOutraEmpresa.id } });
+      await prisma.company.delete({ where: { id: outraEmpresa.id } });
+    }
+  });
+
   it("limpar zera o campo e deixa a conversa pronta para marcar de novo", async () => {
     const conversa = await criarConversaDeTeste();
-    await marcarAguardandoHumano(conversa.id);
-    await limparAguardandoHumano(conversa.id);
+    await marcarAguardandoHumano(conversa.companyId, conversa.id);
+    await limparAguardandoHumano(conversa.companyId, conversa.id);
 
     const depois = await prisma.conversation.findUniqueOrThrow({ where: { id: conversa.id } });
     expect(depois.aguardandoHumanoDesde).toBeNull();
 
     // O ciclo fecha e reabre: o cliente voltou, ninguém respondeu, avisa de novo.
-    expect(await marcarAguardandoHumano(conversa.id)).toBe(true);
+    expect(await marcarAguardandoHumano(conversa.companyId, conversa.id)).toBe(true);
   });
 
   it("listarConversas põe quem aguarda no topo, mais antiga primeiro", async () => {
@@ -231,7 +311,9 @@ describe("aviso de conversa aguardando humano", () => {
       data: { iaAtiva: true },
     });
 
-    const lista = await listarConversas();
+    // `listarConversas` passou a exigir `companyId` no Ciclo 1d. A empresa é
+    // a única do seed — a mesma em que `criarConversaDeTeste` cria as linhas.
+    const lista = await listarConversas(await companyIdSemeada());
     const posicao = (id: string) => lista.findIndex((c) => c.id === id);
 
     // `findIndex` devolve -1 para quem não está na lista (ex.: caiu fora do

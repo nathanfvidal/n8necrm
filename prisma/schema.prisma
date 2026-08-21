@@ -47,28 +47,141 @@ enum WhatsappTipo {
   OUTRO
 }
 
+/// Qual tecnologia atende o WhatsApp desta conexão.
+///
+/// `META_CLOUD` nasce declarado SEM nenhum código que o aceite: nesta Task 1
+/// não existe fábrica de gateway por conexão ainda — ela é a Task 3 do mesmo
+/// ciclo, e é lá que a recusa nomeada e o caso de teste dela nascem. Este
+/// parágrafo descreve contrato acordado, não código medido; enquanto a Task 3
+/// não chega, o valor simplesmente não tem escritor.
+///
+/// O precedente é literal nesta mesma base: `WhatsappAutor.HUMANO`, cujo
+/// comentário diz "o valor já existe no enum agora para não exigir uma
+/// migração de enum quando essa fatia chegar". Aqui é a mesma coisa: o Ciclo
+/// 2b (Meta Cloud API) troca uma recusa por uma implementação em vez de
+/// acrescentar um valor e uma migração.
+enum CanalConexao {
+  EVOLUTION
+  META_CLOUD
+}
+
+// NÃO recebe `companyId`. A mesma pessoa pode ter `Membership` em VÁRIAS
+// empresas (ADMIN na própria, VENDEDOR na de um cliente que ela atende) —
+// empresa é atributo do VÍNCULO, não da pessoa. `email` continua único
+// GLOBALMENTE, de propósito: é o mesmo login em qualquer empresa a que a
+// pessoa esteja vinculada.
+//
+// `papel` NÃO é coluna de `User`, e a ausência é o desenho: papel é atributo
+// do VÍNCULO (`Membership.papel`), porque a mesma pessoa pode ser ADMIN numa
+// empresa e VENDEDOR em outra. Uma coluna aqui só teria resposta certa
+// enquanto cada pessoa tivesse uma empresa só.
+//
+// A coluna existiu, e a história importa porque custou quatro tentativas. O
+// Ciclo 1a derrubou (`20260819130000_derruba_user_papel`) e RESTAUROU
+// (`20260819140000_restaura_user_papel_temporariamente`) na mesma tarefa: o
+// DROP passou na verificação de integridade dos dados, mas o typecheck do
+// repositório revelou um terceiro grupo de leitores. As três tentativas
+// mediram com um instrumento só, acharam um grupo e concluíram que era o
+// alcance total.
+//
+// O Ciclo 1f fechou o inventário medindo com DOIS instrumentos independentes,
+// e o que fechou de verdade foi o segundo: a varredura textual achou `papel`
+// escrito através de `.map()`, que o `tsc` deixa passar porque a checagem de
+// propriedade excedente só vale para literal fresco atribuído direto ao
+// parâmetro. Superfície real: 32 arquivos, 11 pontos de leitura e 42 de
+// escrita, nenhum leitor em `src/` — não os ~80 que este comentário afirmava
+// antes, número que contava prosa e `Membership.papel` junto. A medição
+// inteira está em `.superpowers/sdd/medicao-user-papel.md`; a coluna saiu em
+// `20260821130000_derruba_user_papel_de_vez`.
+//
+// O que impede a volta: `tests/unit/user-papel-nao-volta.test.ts` — lê ESTE
+// arquivo e reprova um campo `papel` dentro de `model User`, e varre o
+// repositório reprovando `papel` dentro de qualquer chamada a `prisma.user.*`.
+// A varredura textual é a metade que não depende do `tsc`, e é deliberado que
+// ela não dependa.
 model User {
-  id                 String         @id @default(cuid())
+  id                 String               @id @default(cuid())
   nome               String
-  email              String         @unique
+  email              String               @unique
   senhaHash          String
-  papel              Role
-  ativo              Boolean        @default(true)
-  criadoEm           DateTime       @default(now())
-  leadsAtribuidos    Lead[]         @relation("LeadResponsavel")
+  ativo              Boolean              @default(true)
+  criadoEm           DateTime             @default(now())
+  leadsAtribuidos    Lead[]               @relation("LeadResponsavel")
   tasks              Task[]
   notes              LeadNote[]
   notifications      Notification[]
   auditLogs          AuditLog[]
-  conversasPausadas  Conversation[] @relation("ConversasPausadas")
-  botConfigsEditadas BotConfig[]    @relation("BotConfigsEditadas")
+  conversasPausadas  Conversation[]       @relation("ConversasPausadas")
+  botConfigsEditadas BotConfig[]          @relation("BotConfigsEditadas")
+  memberships        Membership[]
+  configsEditadas    CompanyConfig[]      @relation("ConfigsEditadas")
+  segredosDeConexao  WhatsappConnection[] @relation("SegredosDeConexao")
+}
+
+/// A empresa — fronteira de tenancy. Cada linha de dado de tenant (`Contact`,
+/// `Lead`, etc.) pertence a exatamente uma `Company`, via `companyId`.
+///
+/// Ciclo 1a mantém a UI servindo uma empresa só (decisão 4 do spec de
+/// tenancy: "sem seletor, sem tela de empresas") — este modelo existe para
+/// que o BANCO já imponha a fronteira antes de a aplicação ganhar uma tela
+/// que crie a segunda empresa.
+model Company {
+  id           String   @id @default(cuid())
+  nome         String
+  criadoEm     DateTime @default(now())
+  atualizadoEm DateTime @updatedAt
+
+  memberships         Membership[]
+  contacts            Contact[]
+  pipelineStages      PipelineStage[]
+  leads               Lead[]
+  leadNotes           LeadNote[]
+  tasks               Task[]
+  notifications       Notification[]
+  conversations       Conversation[]
+  whatsappMessages    WhatsappMessage[]
+  auditLogs           AuditLog[]
+  // `BotConfig?`, não `BotConfig[]`: `@@unique([companyId])` em BotConfig
+  // torna a relação 1-para-1 aos olhos do Prisma.
+  botConfig           BotConfig?
+  // `CompanyConfig?` pelo mesmo motivo, e pela mesma constraint — ver o bloco
+  // do modelo, logo depois de `BotConfig`.
+  config              CompanyConfig?
+  whatsappConnections WhatsappConnection[]
+  turnoJobs           TurnoJob[]
+}
+
+/// Vínculo entre pessoa e empresa, e é ONDE O PAPEL VIVE.
+///
+/// Papel é relação, não atributo: a mesma pessoa pode ser ADMIN na própria
+/// empresa e VENDEDOR na de um cliente que ela atende. Enquanto `papel` era
+/// coluna de `User`, isso era inexprimível.
+///
+/// `@@unique([userId, companyId])` porque dois vínculos da mesma pessoa com a
+/// mesma empresa não significam nada — e permitir isso faria a resolução de
+/// "qual papel?" depender de qual linha o banco devolvesse primeiro.
+model Membership {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  companyId String
+  company   Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  papel     Role
+  criadoEm  DateTime @default(now())
+
+  @@unique([userId, companyId])
+  // `usuarioAtual()` busca por userId em toda requisição.
+  @@index([userId])
+  @@index([companyId])
 }
 
 model Contact {
-  id       String  @id @default(cuid())
-  nome     String
-  telefone String  @unique
-  email    String?
+  id        String  @id @default(cuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id])
+  nome      String
+  telefone  String
+  email     String?
 
   // ─── Cadastro de pessoa ───────────────────────────────────────────────
   //
@@ -95,7 +208,7 @@ model Contact {
 
   observacoes String?
 
-  criadoEm DateTime @default(now())
+  criadoEm     DateTime @default(now())
   // `@updatedAt`: o Prisma carimba sozinho a cada `update`. Fazer isso na mão
   // no serviço significa que a próxima escrita esquecida deixa a coluna
   // mentindo — e uma coluna de auditoria que mente é pior que não existir.
@@ -114,16 +227,43 @@ model Contact {
   conversations Conversation[]
   tasks         Task[]
 
+  /// Unicidade POR EMPRESA, não global (Ciclo 1e).
+  ///
+  /// Era `telefone String @unique`. Duas empresas atenderem o mesmo cliente é o
+  /// caso NORMAL de um CRM multi-empresa, e o único global tornava isso um
+  /// `P2002` — a segunda empresa a cadastrar o número era recusada, e
+  /// `core/leads/dedupe.ts` carregava um ramo inteiro só para explicar a
+  /// recusa. `Contact` tem exatamente uma coluna de posse (`companyId`), então
+  /// não há nível intermediário plausível para compor.
+  ///
+  /// Esta chave é a que o escopo já usa sem saber: `dedupe.ts` e
+  /// `contacts/service.ts` buscam por `telefone` num cliente escopado, ou seja
+  /// `WHERE "companyId" = $1 AND telefone = $2` — as duas colunas, nesta
+  /// ordem. É por isso que, depois desta linha, um `P2002` aqui SEMPRE tem dono
+  /// encontrável pela busca escopada (caso em
+  /// `tests/unit/contact-isolamento.test.ts`, "telefone ocupado DENTRO da
+  /// empresa continua nomeando o dono").
+  ///
+  /// NÃO deduz que `findUnique` por `companyId_telefone` virou legítimo em
+  /// `src/`: o escopo continua recusando operação por chave única em modelo de
+  /// tenant, e o motivo está em "Recusa, lançando" (`core/tenancy/escopo.ts`).
+  /// Só os seeds usam a chave composta diretamente, e eles rodam fora do escopo
+  /// por decisão registrada.
+  @@unique([companyId, telefone])
+
   // Ordenação padrão da agenda (`listarContatos`, `criadoEm desc`). NÃO há
   // índice de busca aqui: `ILIKE '%termo%'` não é servido por btree, e a
   // ferramenta certa (`pg_trgm` + GIN) o Prisma não representa — viraria drift
   // em todo `migrate diff`. Gatilho para reabrir: a agenda passar de alguns
   // milhares de linhas e a busca ficar lenta de verdade, medida.
   @@index([criadoEm])
+  @@index([companyId])
 }
 
 model PipelineStage {
   id        String  @id @default(cuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id])
   nome      String
   ordem     Int
   cor       String
@@ -131,7 +271,28 @@ model PipelineStage {
   ehPerdido Boolean @default(false)
   leads     Lead[]
 
-  @@unique([ordem])
+  /// Unicidade POR EMPRESA (Ciclo 1e). Era `@@unique([ordem])`, GLOBAL.
+  ///
+  /// A auditoria que o comentário anterior exigia está feita, e está na §4.2.1
+  /// do spec do Ciclo 1e: as nove consultas que tocam `ordem`, uma a uma. Ela
+  /// ficou barata porque o Ciclo 1d converteu `pipeline/` inteiro para
+  /// `prismaDaEmpresa` — as seis consultas de `src/` já carregavam `companyId`,
+  /// e as três que não carregavam são de seed.
+  ///
+  /// A composição CORRIGE um defeito vivo, e não só destrava a segunda empresa:
+  /// `criarEtapa` calcula `max(ordem DA EMPRESA) + 1` (correto desde o Ciclo
+  /// 1d), e com a unicidade global esse valor podia já estar ocupado por outra
+  /// empresa — `P2002` na tela `/etapas`, apontando para uma etapa que a pessoa
+  /// não pode ver. Caso em `tests/unit/pipeline-isolamento.test.ts`
+  /// ("`criarEtapa` na B cai em `max(ordem da B) + 1` mesmo com a A já ocupando
+  /// esse número").
+  ///
+  /// `ORDEM_ESTACIONAMENTO = -1` (`core/pipeline/service.ts`) CONTINUA
+  /// necessário: o Postgres verifica índice único a cada `UPDATE`, e a colisão
+  /// que o estacionamento evita é entre duas etapas da MESMA empresa. O que
+  /// mudou é que `-1` deixou de ser disputado ENTRE empresas.
+  @@unique([companyId, ordem])
+  @@index([companyId])
 }
 
 // TRÊS COLUNAS RESERVADAS, sem código que as leia ou escreva hoje: `itemId`,
@@ -151,6 +312,8 @@ model PipelineStage {
 // reaproveitar sem esse contexto é como herdar significado que nunca existiu.
 model Lead {
   id                String         @id @default(cuid())
+  companyId         String
+  company           Company        @relation(fields: [companyId], references: [id])
   contactId         String?
   contact           Contact?       @relation(fields: [contactId], references: [id])
   itemId            String?
@@ -181,16 +344,19 @@ model Lead {
   @@index([stageId, responsavelId])
   @@index([criadoEm])
   @@index([arquivadoEm])
+  @@index([companyId])
 }
 
 model LeadNote {
-  id       String   @id @default(cuid())
-  leadId   String
-  lead     Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
-  autorId  String
-  autor    User     @relation(fields: [autorId], references: [id])
-  texto    String
-  criadoEm DateTime @default(now())
+  id        String    @id @default(cuid())
+  companyId String
+  company   Company   @relation(fields: [companyId], references: [id])
+  leadId    String
+  lead      Lead      @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  autorId   String
+  autor     User      @relation(fields: [autorId], references: [id])
+  texto     String
+  criadoEm  DateTime  @default(now())
   // Marca que o texto foi corrigido depois de escrito. Sem isto o histórico
   // mente por omissão: o texto muda e nada indica que mudou.
   editadoEm DateTime?
@@ -202,10 +368,13 @@ model LeadNote {
   // dizer isso em vez de fingir ganho: é seguro barato numa tabela que só
   // cresce.
   @@index([leadId, criadoEm])
+  @@index([companyId])
 }
 
 model Task {
   id            String    @id @default(cuid())
+  companyId     String
+  company       Company   @relation(fields: [companyId], references: [id])
   titulo        String
   descricao     String?
   vencimento    DateTime
@@ -237,25 +406,31 @@ model Task {
   // contato nesta branch, e índice sem consulta é peso morto na escrita.
   @@index([responsavelId, concluidaEm, vencimento])
   @@index([leadId, concluidaEm])
+  @@index([companyId])
 }
 
 model Notification {
-  id       String    @id @default(cuid())
-  userId   String
-  user     User      @relation(fields: [userId], references: [id])
-  tipo     String
-  payload  Json
-  lidaEm   DateTime?
-  criadoEm DateTime  @default(now())
+  id        String    @id @default(cuid())
+  companyId String
+  company   Company   @relation(fields: [companyId], references: [id])
+  userId    String
+  user      User      @relation(fields: [userId], references: [id])
+  tipo      String
+  payload   Json
+  lidaEm    DateTime?
+  criadoEm  DateTime  @default(now())
 
   // Task 19: listarNotificacoesNaoLidas (core/notifications/dispatch.ts) e o
   // sino de PainelNav consultam exatamente este par em toda navegação sob
   // (painel)/layout.tsx — ver o comentário lá sobre a decisão de custo.
   @@index([userId, lidaEm])
+  @@index([companyId])
 }
 
 model AuditLog {
   id         String   @id @default(cuid())
+  companyId  String
+  company    Company  @relation(fields: [companyId], references: [id])
   userId     String
   user       User     @relation(fields: [userId], references: [id])
   acao       String
@@ -271,6 +446,7 @@ model AuditLog {
   // a única do CRM sem índice numa tabela que só cresce. Igualdade antes de
   // faixa: `userId = ?` depois `criadoEm >= ?`.
   @@index([userId, criadoEm])
+  @@index([companyId])
 }
 
 model RateLimit {
@@ -299,7 +475,9 @@ model RateLimit {
  */
 model Conversation {
   id                    String            @id @default(cuid())
-  waId                  String            @unique
+  companyId             String
+  company               Company           @relation(fields: [companyId], references: [id])
+  waId                  String
   telefone              String?
   contactId             String?
   contact               Contact?          @relation(fields: [contactId], references: [id])
@@ -311,12 +489,69 @@ model Conversation {
   criadoEm              DateTime          @default(now())
   atualizadoEm          DateTime          @updatedAt
   mensagens             WhatsappMessage[]
+  turnoJobs             TurnoJob[]
   iaAtiva               Boolean           @default(true)
   iaPausadaEm           DateTime?
   iaPausadaPorId        String?
   iaPausadaPor          User?             @relation("ConversasPausadas", fields: [iaPausadaPorId], references: [id])
   aguardandoHumanoDesde DateTime?
 
+  /// Por qual conexão esta conversa entrou — e, portanto, por qual ela é
+  /// respondida. NULA para conversa criada antes do Ciclo 2a; o envio trata a
+  /// nula caindo na única conexão ativa da empresa e RECUSA se houver mais de
+  /// uma (`ConexaoAmbiguaError`). Sem esta coluna, "multi-instância" seria
+  /// mentira: com duas conexões na mesma empresa, "por qual respondo?" não tem
+  /// resposta, e o erro seria responder o cliente pelo número errado.
+  connectionId String?
+  connection   WhatsappConnection? @relation(fields: [connectionId], references: [id])
+
+  /// Uma conversa por número, POR EMPRESA (Ciclo 1e). Era `waId @unique`,
+  /// GLOBAL.
+  ///
+  /// ## O que a global custava
+  ///
+  /// Enquanto `EVOLUTION_COMPANY_ID` era constante de deploy, a segunda empresa
+  /// era inalcançável e o defeito era teoria. O Ciclo 2a matou a variável: o
+  /// webhook passou a resolver a empresa pela CONEXÃO, e o mesmo número
+  /// atendido por duas empresas colidia em `P2002` → 500 → a Evolution
+  /// reentregava para sempre. O `catch` de `ingest.ts` diz "o retry acerta,
+  /// porque na segunda vez o `findFirst` encontra a conversa" — verdade para a
+  /// corrida dentro da mesma empresa, falso entre empresas, porque aquele
+  /// `findFirst` é escopado. Com esta chave, só sobra o caso em que a frase é
+  /// verdadeira. Fonte: `docs/auditorias/2026-08-20-ciclo-2a-cofre-credenciais.md`,
+  /// §6 e ⚠️ D4.
+  ///
+  /// ## Por que `connectionId` NÃO entra na chave — é decisão de PRODUTO
+  ///
+  /// Uma empresa com dois números recebendo o mesmo cliente tem UMA conversa,
+  /// não duas. `Conversation` carrega estado (`iaAtiva`, `iaPausadaPor`,
+  /// `aguardandoHumanoDesde`, `contactId`, `leadId`), e duplicá-la duplica a
+  /// pausa da IA: a atendente assume o atendimento numa linha e o bot continua
+  /// respondendo a mesma pessoa na outra, ao mesmo tempo, na mesma tela do
+  /// WhatsApp dela.
+  ///
+  /// Há um segundo motivo, mecânico: `connectionId` é `String?`, e no Postgres
+  /// NULL é distinto de NULL num índice único — a mesma armadilha que
+  /// `@@unique([companyId, canal, instancia])` documenta em
+  /// `WhatsappConnection`, mas ali ela é o comportamento desejado e aqui seria
+  /// o contrário. Com `connectionId` na chave, duas linhas com o mesmo `waId` e
+  /// `connectionId` nulo ambas passariam.
+  ///
+  /// ## O que a escolha custa, e está declarado
+  ///
+  /// A resposta sai por `Conversation.connectionId` — a conexão que ABRIU a
+  /// conversa, não necessariamente aquela para a qual o cliente escreveu por
+  /// último. É ⚠️ D3-a do spec do Ciclo 1e
+  /// (`docs/superpowers/specs/2026-08-20-ciclo-1e-unicidades-globais-design.md`,
+  /// §4.3.4), com o conserto já nomeado — atualizar `connectionId` a cada
+  /// mensagem de ENTRADA, como já se faz com `nomeExibicao` — e deixado para o
+  /// dono decidir.
+  ///
+  /// As duas metades estão travadas em `tests/unit/whatsapp-isolamento.test.ts`,
+  /// no `describe` "o mesmo número em duas empresas": duas empresas com o mesmo
+  /// `waId` coexistem, E um segundo `create` com o mesmo `waId` DENTRO da mesma
+  /// empresa continua sendo `P2002`.
+  @@unique([companyId, waId])
   // turno.ts faz UPDATE ... WHERE "processandoAte" IS NULL OR "processandoAte" < now()
   // a cada job de fila — sem índice, essa checagem varreria a tabela inteira
   // conforme o número de conversas ativas cresce.
@@ -324,20 +559,125 @@ model Conversation {
   // A lista de conversas ordena por este campo em toda navegação para
   // /conversas — mesmo raciocínio do índice em `processandoAte`.
   @@index([aguardandoHumanoDesde])
+  @@index([companyId])
+  @@index([connectionId])
 }
 
-/// Configuração do agente de IA — LINHA ÚNICA, id fixo `bot-config`.
+/// A FILA de turnos de conversa — a tabela que substituiu o Vercel Queues no
+/// Ciclo 2d, depois de o dono decidir, em 2026-08-21, não usar a Vercel
+/// (`docs/superpowers/specs/2026-08-21-ciclo-2d-fila-em-postgres-design.md`,
+/// §1 e §5.1).
 ///
-/// A unicidade é imposta pelo banco, não por convenção: `id` tem valor default
-/// constante, então um segundo `create` sem id explícito colide na chave
-/// primária. Nenhum código precisa perguntar "qual das linhas é a certa".
+/// ## Por que ela é modelo de TENANT, e não infraestrutura como `RateLimit`
+///
+/// `RateLimit` não tem `companyId`: é defesa global, consultada antes de
+/// existir sessão. Esta tabela tem dono — cada linha pertence à empresa da
+/// conversa —, e três dos quatro caminhos que a tocam JÁ têm o `companyId` na
+/// mão antes de falar com o banco: publicar (vem do job, resolvido pela
+/// conexão no webhook), concluir e podar (vêm do `RETURNING` da
+/// reivindicação). Os três usam `prismaDaEmpresa(companyId)`.
+///
+/// O quarto — reivindicar — é cross-tenant POR CONSTRUÇÃO: o consumidor roda
+/// sem sessão e a pergunta que ele faz é "qual o próximo job de QUALQUER
+/// empresa está pronto". `prismaDaEmpresa` exigiria como parâmetro exatamente
+/// o valor que o `UPDATE ... RETURNING "companyId"` devolve — a mesma
+/// circularidade que já isenta `core/auth/session.ts`,
+/// `core/auth/credenciais.ts` e `core/users/empresa.ts` na
+/// `EXCECAO_PERMANENTE` do `eslint.config.mjs`.
+///
+/// A alternativa recusada foi guardar a empresa num `Json` ou numa coluna com
+/// outro nome: isso PASSARIA na trava de deriva de
+/// `tests/unit/escopo-empresa.test.ts` (que procura o escalar `companyId`) sem
+/// estar protegida — contornar a trava, não satisfazê-la.
+///
+/// ## Por que não há coluna de estado
+///
+/// `mortoEm IS NULL` = vivo. "Pendente" e "reivindicado" já são deduzidos de
+/// `disponivelEm` e `leaseAte`; um enum diria a mesma coisa num segundo lugar,
+/// que é onde a deriva nasce. E `mortoEm` precisa ser DATA de qualquer jeito,
+/// porque é ela que a poda por retenção lê.
+///
+/// ## Por que a morte é GRAVADA e não recalculada
+///
+/// Se a condição de morte fosse `tentativasEntrega >= MAX_TENTATIVAS_ENTREGA`
+/// lida a cada reivindicação, subir a constante RESSUSCITARIA jobs mortos
+/// antigos sem ninguém pedir. `mortoEm` gravado é decisão tomada.
+///
+/// ## Job concluído é APAGADO
+///
+/// A fila é lista de trabalho, não livro-razão: o histórico que importa está em
+/// `WhatsappMessage.processadoEm` e em `AuditLog`. Uma coluna `concluidoEm`
+/// exigiria um SEGUNDO mecanismo para tirar a linha — e foi exatamente esse
+/// segundo mecanismo que nunca existiu no caso do `RateLimit` ("nada nunca
+/// apagava linha desta tabela"). Só o job MORTO fica, com `ultimoErro`, por 7
+/// dias: apagá-lo em silêncio apagaria a única evidência de que uma conversa
+/// nunca foi respondida.
+model TurnoJob {
+  id                     String  @id @default(cuid())
+  companyId              String
+  company                Company @relation(fields: [companyId], references: [id])
+
+  /// O job é um PONTEIRO para uma conversa, e o ponteiro não pode sobreviver ao
+  /// alvo: sem a FK em cascata, apagar uma conversa deixaria jobs que
+  /// reivindicam, falham no `claimLease` de `modules/whatsapp/turno.ts`,
+  /// reagendam até o teto e desistem — barulho por minutos, para nada.
+  conversationId         String
+  conversation           Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  seq                    Int
+  tentativaReagendamento Int          @default(0)
+
+  /// `conv:seq` na publicação original, `conv:seq:rN` no reagendamento — a
+  /// mesma forma que a `idempotencyKey` do adaptador da Vercel usava, e pelo
+  /// mesmo motivo: sem o sufixo, o reagendamento colidiria consigo mesmo.
+  chaveIdempotencia      String
+
+  /// Quando o job pode ser entregue. É o `delaySeconds` da interface
+  /// `OpcoesPublicacao` (`modules/whatsapp/fila/tipos.ts`) virado data: 8s no
+  /// caso comum (a janela de buffer), 5s no reagendamento. A reivindicação só
+  /// enxerga `disponivelEm <= agora`.
+  disponivelEm           DateTime
+
+  /// O lease do JOB. NULL = livre. O valor devolvido pela reivindicação é o
+  /// FENCING TOKEN — `concluirJob`/`falharJob` só agem quando ele ainda é este
+  /// mesmo valor, igual a `liberarLease` em `modules/whatsapp/turno.ts`.
+  leaseAte               DateTime?
+
+  /// Incrementa na REIVINDICAÇÃO, não na conclusão. É o que faz um job que MATA
+  /// o processo morrer também, em vez de girar para sempre.
+  tentativasEntrega      Int          @default(0)
+
+  mortoEm                DateTime?
+  ultimoErro             String?
+  criadoEm               DateTime     @default(now())
+
+  @@unique([companyId, chaveIdempotencia])
+  // O índice que a REIVINDICAÇÃO usa: ela filtra por `mortoEm IS NULL` e
+  // ordena/corta por `disponivelEm`.
+  @@index([mortoEm, disponivelEm])
+  @@index([companyId])
+  @@index([conversationId])
+}
+
+
+/// Configuração do agente de IA — uma linha POR EMPRESA.
+///
+/// Era linha única, id fixo `bot-config`: um segundo `create` sem id
+/// explícito colidia na chave primária, e nenhum código precisava perguntar
+/// "qual das linhas é a certa". Config por empresa quebra esse truque —
+/// passariam a existir várias linhas legítimas, uma por `companyId`. A
+/// unicidade continua imposta pelo BANCO, não por convenção: agora é
+/// `@@unique([companyId])` em vez de PK constante — uma config por empresa,
+/// pelo mesmo motivo, por outro caminho.
 ///
 /// Semeada por `prisma/seed.ts` a partir de `config/bot.ts`. Em runtime a
 /// verdade é ESTA tabela — `config/bot.ts` só é lido pelo seed e pela ação
 /// explícita de restaurar ao padrão do fork, nunca no caminho de resposta ao
 /// cliente.
 model BotConfig {
-  id              String   @id @default("bot-config")
+  id              String   @id @default(cuid())
+  companyId       String
+  company         Company  @relation(fields: [companyId], references: [id])
   ativo           Boolean  @default(true)
   personaNome     String
   personaPapel    String
@@ -346,16 +686,156 @@ model BotConfig {
   atualizadoEm    DateTime @updatedAt
   atualizadoPorId String?
   atualizadoPor   User?    @relation("BotConfigsEditadas", fields: [atualizadoPorId], references: [id])
+
+  @@unique([companyId])
+}
+
+/// A metade de `config/client.ts` que NÃO pode ser a mesma para duas empresas
+/// no mesmo banco: a marca e os módulos. Ciclo 1c
+/// (`docs/superpowers/specs/2026-08-20-ciclo-1c-config-no-banco-design.md`,
+/// seção 4).
+///
+/// **A linha é OPCIONAL, e isso é decisão do spec, não um `?` por descuido.**
+/// Empresa sem linha usa os padrões do arquivo versionado — é o que resolve o
+/// ovo-e-galinha do layout raiz, que envolve `/login`, onde ainda não existe
+/// sessão e portanto não existe empresa. A leitura que materializa esse
+/// fallback é a Task 3 deste mesmo ciclo (`src/core/config/leitura.ts`), em
+/// cima da fusão pura da Task 2 (`src/core/config/schema.ts`, onde
+/// `mesclarConfig` decide campo a campo quem vence); ela ainda NÃO existe
+/// quando este bloco é escrito, então o parágrafo descreve contrato acordado,
+/// não código medido.
+///
+/// **Colunas TIPADAS e não uma coluna `Json`.** A varredura de escopo recusa
+/// `companyId` divergente em qualquer profundidade de `data`, inclusive dentro
+/// de coluna `Json` — falso positivo DECLARADO em `src/core/tenancy/escopo.ts`
+/// ("Falsos positivos conhecidos", nº 1), com caso de teste vivo em
+/// `tests/unit/escopo-empresa.test.ts`. Um documento de configuração que um dia
+/// ganhasse uma chave `companyId` (ou `company`, o outro nome que a varredura
+/// persegue) seria recusado na escrita com uma mensagem sobre tenancy que não
+/// tem relação com o defeito.
+///
+/// **Nulo significa "não decidi, usa o arquivo"** em `corPrimaria`, `fonte`,
+/// `logoClaro` e `logoEscuro`. `modulos` não tem esse estado, e o motivo é do
+/// Prisma: lista escalar é tipada `string[]`, não `string[] | null`
+/// (`node_modules/.prisma/client/index.d.ts`, tipo `CompanyConfig`, conferido
+/// depois de `prisma generate` nesta árvore) — ausência vira `[]`. Então a
+/// regra dela é outra e vive na leitura da Task 2: se a linha existe, `modulos`
+/// manda, inclusive vazia. Empresa que não decidiu módulos é empresa SEM LINHA.
+///
+/// `logoClaro` e `logoEscuro` são pensados como os dois ou nenhum — logo
+/// monocromático some no fundo da mesma cor. A regra é cobrada na LEITURA (Task
+/// 2), e não por `CHECK` no Postgres, por dois motivos: o Prisma não modela
+/// `CHECK`, e o efeito de `prisma migrate dev` sobre um `CHECK` escrito à mão
+/// (tratar como deriva e propor reset do banco) NÃO foi medido neste ambiente —
+/// é NV2 do spec. Desenhar migração sobre comportamento não medido é o oposto
+/// do que este programa faz.
+model CompanyConfig {
+  id              String   @id @default(cuid())
+  companyId       String
+  company         Company  @relation(fields: [companyId], references: [id])
+  corPrimaria     String?
+  fonte           String?
+  logoClaro       String?
+  logoEscuro      String?
+  modulos         String[]
+  atualizadoEm    DateTime @updatedAt
+  atualizadoPorId String?
+  atualizadoPor   User?    @relation("ConfigsEditadas", fields: [atualizadoPorId], references: [id])
+
+  @@unique([companyId])
+}
+
+/// Uma conexão de canal de WhatsApp, POR EMPRESA, com a credencial CIFRADA.
+///
+/// ## Por que a credencial é cifrada aqui e nenhuma outra coluna deste banco é
+///
+/// O Prisma conecta como DONO da tabela e ignora RLS — `CLAUDE.md` registra a
+/// armadilha, e a migração `20260730212500_enable_rls_and_revoke_anon_grants`
+/// diz por escrito que `FORCE ROW LEVEL SECURITY` não está ligada, de
+/// propósito. Três caminhos entregam esta coluna a quem não deveria vê-la:
+/// `pg_dump`/backup, vazamento da `service_role`, e qualquer consulta pelo
+/// caminho do Prisma. A cifra é a ÚNICA defesa que sobrevive aos três, e a
+/// chave mestra é a única peça que continua fora do banco.
+///
+/// ## Colunas TIPADAS, nunca `Json`
+///
+/// `dominio`/`instancia` são da Evolution e ficam nulas em outros canais. A
+/// varredura de escopo do Ciclo 1d recusa `companyId` dentro de coluna `Json`
+/// (ver "Falsos positivos conhecidos" em `core/tenancy/escopo.ts`), e um
+/// `Json` de configuração é exatamente onde `companyId` acaba parando. O Ciclo
+/// 2b acrescenta as colunas nulas da Meta (`phoneNumberId`, `wabaId`) e uma
+/// SEGUNDA coluna cifrada (a Meta tem dois segredos: access token e app
+/// secret) — nenhuma delas nasce aqui, porque coluna sem escritor é dado morto
+/// com aparência de recurso.
+///
+/// ## `segredoUltimos4` é texto puro, e é escolha
+///
+/// A tela mostra `••••••••1a2b` para a pessoa reconhecer qual chave está lá. A
+/// alternativa — decifrar a cada renderização da lista — poria texto claro na
+/// memória do processo a cada carregamento de tela sem ganhar nada. É o mesmo
+/// trade de `sk_live_…abcd`. O que se revela são 4 caracteres; ver D3 do spec.
+///
+/// ## `webhookTokenHash`, não o token
+///
+/// Cofre para o que precisa ser LIDO de volta; hash para o que só precisa ser
+/// CONFERIDO. O token do webhook nunca é usado, só comparado — então um dump
+/// do banco não entrega uma URL de webhook funcional. O `@unique` é GLOBAL de
+/// propósito, e isso NÃO é a mesma coisa que `Conversation.waId` (⚠️ R2): ali
+/// o valor é compartilhável entre empresas e a unicidade global ERA o defeito —
+/// a Task 3 do Ciclo 1e a compôs em `@@unique([companyId, waId])`. Aqui o valor
+/// é um segredo de 256 bits e duas empresas com o mesmo token é estado que deve
+/// ser impossível, então esta linha fica como está e NÃO acompanha as quatro
+/// daquele ciclo (§9.5 do spec dele diz isso por escrito). Há caso de teste
+/// amarrando esta linha
+/// (`tests/unit/escopo-empresa.test.ts`, "`webhookTokenHash` é `@unique`
+/// GLOBAL"), para que a decisão não se desfaça num `prisma format` distraído.
+model WhatsappConnection {
+  id        String       @id @default(cuid())
+  companyId String
+  company   Company      @relation(fields: [companyId], references: [id])
+  canal     CanalConexao
+  /// Rótulo humano ("Comercial", "Suporte") — é como a pessoa distingue duas
+  /// conexões da mesma empresa numa lista.
+  nome      String
+  /// Interruptor do OPERADOR. NÃO é o estado de pareamento do WhatsApp — esse
+  /// depende do evento `connection.update`, que a rota descarta hoje, e é o
+  /// Ciclo 2c (QR Code). Mostrar "conectado" a partir daqui seria inventar um
+  /// estado que ninguém mede.
+  ativa     Boolean      @default(true)
+
+  dominio   String?
+  instancia String?
+
+  segredoCifrado         String
+  segredoUltimos4        String
+  segredoAtualizadoEm    DateTime
+  segredoAtualizadoPorId String?
+  segredoAtualizadoPor   User?    @relation("SegredosDeConexao", fields: [segredoAtualizadoPorId], references: [id])
+
+  webhookTokenHash String @unique
+
+  criadoEm     DateTime @default(now())
+  atualizadoEm DateTime @updatedAt
+
+  conversas Conversation[]
+
+  /// A mesma instância cadastrada duas vezes na mesma empresa não significa
+  /// nada. `instancia` nula não colide, porque o Postgres trata NULL como
+  /// distinto — que é o comportamento desejado para canal sem instância.
+  @@unique([companyId, canal, instancia])
+  @@index([companyId])
 }
 
 /**
  * Uma mensagem individual (recebida ou enviada) dentro de uma `Conversation`.
  * `idExterno` é o id que a Evolution atribui à mensagem (`data.key.id` no
- * payload do webhook) — é a chave de idempotência que faz uma redelivery do
- * mesmo webhook (retry da própria Evolution, ou reenvio manual) não duplicar
- * a mensagem no banco: `ingest.ts` trata a violação dessa constraint UNIQUE
- * exatamente como `encontrarOuCriarContact` trata a corrida em
- * `Contact.telefone` (core/leads/dedupe.ts) — "alguém já gravou isso,
+ * payload do webhook) — e, desde o Ciclo 1e, compõe
+ * `@@unique([companyId, idExterno])`: é a chave de idempotência que faz uma
+ * redelivery do mesmo webhook (retry da própria Evolution, ou reenvio manual)
+ * não duplicar a mensagem no banco, DENTRO da empresa, que é a unidade em que a
+ * reentrega acontece. `ingest.ts` trata a violação dessa constraint UNIQUE
+ * exatamente como `encontrarOuCriarContact` trata a corrida em `Contact`
+ * (`[companyId, telefone]`, core/leads/dedupe.ts) — "alguém já gravou isso,
  * devolve sem duplicar" em vez de deixar o erro cru do Postgres subir.
  * `processadoEm` marca quando esta mensagem ENTRADA foi incluída numa
  * resposta gerada por `turno.ts` — mensagens SAIDA já nascem com
@@ -365,9 +845,11 @@ model BotConfig {
  */
 model WhatsappMessage {
   id             String          @id @default(cuid())
+  companyId      String
+  company        Company         @relation(fields: [companyId], references: [id])
   conversationId String
   conversation   Conversation    @relation(fields: [conversationId], references: [id], onDelete: Cascade)
-  idExterno      String          @unique
+  idExterno      String
   direcao        WhatsappDirecao
   autor          WhatsappAutor
   tipo           WhatsappTipo
@@ -375,7 +857,52 @@ model WhatsappMessage {
   processadoEm   DateTime?
   criadoEm       DateTime        @default(now())
 
+  /// Idempotência POR EMPRESA (Ciclo 1e). Era `idExterno @unique`, GLOBAL.
+  ///
+  /// ## Por que `companyId`, e não `conversationId`
+  ///
+  /// A chave tem de casar com a consulta que a lê. O `catch` de `P2002` em
+  /// `ingest.ts` faz `whatsappMessage.findFirst({ where: { idExterno } })` num
+  /// cliente ESCOPADO — ou seja, `WHERE "companyId" = $1 AND "idExterno" = $2`,
+  /// que é exatamente esta chave. Uma chave por `conversationId` deixaria o
+  /// mesmo `idExterno` existir duas vezes dentro da mesma empresa, aquele
+  /// `findFirst` devolveria uma linha ARBITRÁRIA entre as duas, e o
+  /// `findFirstOrThrow` seguinte devolveria a conversa errada para o job de
+  /// fila. Dedup "funcionando" com roteamento quebrado é pior que dedup
+  /// falhando alto.
+  ///
+  /// ## Por que não continuar global
+  ///
+  /// A unidade de reentrega é a ENTREGA, e a entrega se resolve em empresa: o
+  /// webhook chega por uma `WhatsappConnection`, que tem `companyId`. Global
+  /// significava que o id de uma mensagem da empresa B bloqueava a gravação de
+  /// uma mensagem da A — e `gateway/evolution.ts` chega a inventar
+  /// `evolution-sem-id-<uuid>` quando o payload não traz `key.id`, então
+  /// confiar em unicidade global de um id de terceiro é a suposição que este
+  /// ciclo existe para desfazer.
+  ///
+  /// ## As duas metades, e onde cada uma mora
+  ///
+  /// `tests/unit/whatsapp-isolamento.test.ts`, `describe` "o mesmo número em
+  /// duas empresas": duas empresas com o mesmo `idExterno` coexistem, E a
+  /// segunda gravação do mesmo `idExterno` DENTRO da mesma empresa continua
+  /// sendo `P2002`. No nível da FUNÇÃO — reentrega devolvendo `duplicada: true`
+  /// sem incrementar `bufferSeq` — a prova é
+  /// `tests/unit/whatsapp-ingest.test.ts` ("idempotência: o MESMO idExterno
+  /// submetido duas vezes…"), que monta contexto de conexão de verdade.
+  @@unique([companyId, idExterno])
   // turno.ts filtra por (conversationId, direcao=ENTRADA, processadoEm=null)
   // a cada job — mesmo raciocínio do índice em Conversation.processandoAte.
+  //
+  // `companyId` NÃO entra como primeira coluna deste índice composto, e é
+  // decisão, não esquecimento: toda chamada real (turno.ts) já filtra por
+  // `conversationId`, uma FK de cardinalidade alta — cada conversa é UMA
+  // linha de Conversation, então `conversationId` sozinho já é mais seletivo
+  // do que `companyId` (que agrupa todas as conversas da empresa inteira)
+  // poderia ser como prefixo. Prefixar com `companyId` aqui não serviria
+  // nenhuma consulta existente, só engordaria o índice. `companyId` recebe o
+  // índice PRÓPRIO abaixo — é o que serve uma futura consulta que filtre por
+  // empresa sem passar por `conversationId`.
   @@index([conversationId, direcao, processadoEm])
+  @@index([companyId])
 }

@@ -21,6 +21,7 @@ vi.mock("server-only", () => ({}));
 
 import { prisma } from "../../src/lib/prisma";
 import { criarLead, moverEtapa } from "../../src/core/leads/service";
+import { usuarioDoSeed } from "./helpers/usuarios-do-seed";
 
 // Telefones JÁ NORMALIZADOS que este arquivo grava (o que `criarLead` →
 // `encontrarOuCriarContact` efetivamente persiste em `Contact.telefone`).
@@ -79,15 +80,14 @@ describe("movimentação de lead entre etapas", () => {
   beforeAll(async () => {
     await limparDadosDeTeste();
 
-    // `ativo: true` não é enfeite: o seed cria um "Atendente WhatsApp
-    // (sistema)" com papel ADMIN e `ativo: false`, e ele é o primeiro ADMIN
-    // que `findFirstOrThrow` devolve. Sem o filtro, este teste criava leads
-    // com dono que não consegue entrar no sistema — e passava, porque nada
-    // recusava. `criarLead` passou a recusar (auditoria de segurança), e foi
-    // assim que o problema apareceu. Mesmo filtro nos outros arquivos que
-    // buscam usuário do seed.
-    const usuario = await prisma.user.findFirstOrThrow({ where: { papel: "ADMIN", ativo: true } });
-    autorId = usuario.id;
+    // O `ativo: true` que este arquivo trazia escrito à mão virou parte do
+    // helper, e a história dele foi para lá inteira: o seed cria um "Atendente
+    // WhatsApp (sistema)" ADMIN e `ativo: false`, e ele era o primeiro ADMIN
+    // que a busca devolvia — leads nasciam com dono que não consegue entrar no
+    // sistema, e passavam, porque nada recusava. `criarLead` passou a recusar
+    // (auditoria de segurança), e foi assim que apareceu. Deixar a regra num
+    // comentário de um arquivo era o que permitia os outros seis esquecerem.
+    autorId = (await usuarioDoSeed("ADMIN")).id;
     const etapas = await prisma.pipelineStage.findMany({ orderBy: { ordem: "asc" } });
     etapaOrigemId = etapas[0].id;
     etapaDestinoId = etapas[1].id;

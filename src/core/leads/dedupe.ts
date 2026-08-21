@@ -1,7 +1,7 @@
 import { Prisma } from "@prisma/client";
 import type { Contact } from "@prisma/client";
 
-import { prisma } from "@/lib/prisma";
+import { prismaDaEmpresa } from "@/core/tenancy/escopo";
 
 /**
  * Normaliza um telefone brasileiro para a forma canônica usada como chave de
@@ -10,7 +10,8 @@ import { prisma } from "@/lib/prisma";
  *
  * Existe porque a mesma pessoa acaba digitada de formas diferentes em dias
  * diferentes — "11999998888", "(11) 99999-8888", "+55 11 99999-8888",
- * "11 9 9999-8888" — e `Contact.telefone` é UNIQUE no schema. Sem normalizar
+ * "11 9 9999-8888" — e `Contact` tem `@@unique([companyId, telefone])` no
+ * schema (Ciclo 1e). Sem normalizar
  * antes de comparar/gravar, cada variação de formatação cria uma pessoa nova
  * no banco (a constraint UNIQUE não pega isso, porque as strings são
  * literalmente diferentes) — exatamente a duplicação que esta função existe
@@ -51,8 +52,9 @@ export function normalizarTelefone(telefone: string): string {
   // definir", string vazia), ou algo curto/incompleto demais para ter DDD —
   // não é um telefone de verdade e não deve virar chave de dedupe: duas
   // pessoas diferentes cadastradas sem telefone (ou com lixo no campo)
-  // colidiriam na constraint UNIQUE de `Contact.telefone` e virariam UM
-  // contato só, fundindo o histórico de duas pessoas distintas — o mesmo
+  // colidiriam em `Contact_companyId_telefone_key` (a chave composta do Ciclo
+  // 1e) e virariam UM contato só dentro da empresa, fundindo o histórico de
+  // duas pessoas distintas — o mesmo
   // tipo de dano (fusão irreversível) que a regra do 9º dígito abaixo evita
   // no lado do celular/fixo. Preferimos rejeitar alto e cedo, com uma
   // mensagem clara, a deixar isso silenciosamente virar dedupe key.
@@ -144,9 +146,9 @@ function unificarNonoDigitoCelular(digitos: string): string {
  * ## Concorrência
  *
  * Duas chamadas simultâneas para o mesmo telefone podem ambas passar pelo
- * `findUnique` abaixo antes de qualquer uma criar a linha (nenhuma ainda viu
+ * `findFirst` abaixo antes de qualquer uma criar a linha (nenhuma ainda viu
  * o registro da outra) e ambas tentarem `create`. O Postgres permite só uma:
- * a segunda colide na constraint UNIQUE de `Contact.telefone` e o Prisma
+ * a segunda colide em `Contact_companyId_telefone_key` e o Prisma
  * traduz isso em `PrismaClientKnownRequestError` código `P2002`. Em vez de
  * propagar esse erro pra quem chamou — que veria uma falha na criação do
  * lead por causa de uma corrida interna irrelevante pra ela — tratamos como
@@ -161,20 +163,61 @@ export async function encontrarOuCriarContact(dados: {
   nome: string;
   telefone: string;
   email?: string;
+  /**
+   * `Contact.companyId` é `NOT NULL` desde a Task 1 do Ciclo 1a. Parâmetro
+   * novo, e não uma resolução própria aqui dentro: os dois chamadores
+   * (`criarLead`/`criarLeadDeWhatsapp`, `core/leads/service.ts`) já resolvem
+   * a empresa do autor para o PRÓPRIO `Lead` que estão criando — pedir de
+   * novo aqui seria uma segunda consulta para chegar no mesmo valor, e um
+   * contato deduplicado dentro da criação de um lead pertence à empresa
+   * DAQUELE lead, não a uma nova derivação independente.
+   */
+  companyId: string;
 }): Promise<Contact> {
   const telefone = normalizarTelefone(dados.telefone);
+  const db = prismaDaEmpresa(dados.companyId);
 
-  const existente = await prisma.contact.findUnique({ where: { telefone } });
+  // `findFirst`, e não `findUnique`. Os dois motivos, na ordem em que pesam:
+  //
+  // 1. O escopo RECUSA `findUnique` em modelo de tenant, lançando — o `where`
+  //    dela só aceita campo único e `companyId` não é único em `Contact`
+  //    (ver "Recusa, lançando" em `core/tenancy/escopo.ts`).
+  // 2. Antes disso a consulta era GLOBAL: um telefone já cadastrado na empresa
+  //    B era devolvido para quem criava um lead na empresa A, e o lead da A
+  //    nascia apontando para o `Contact` da B. Contato de um cliente ligado ao
+  //    funil de outro — o vazamento mais silencioso desta superfície, porque
+  //    nada na tela denuncia de qual empresa aquele contato veio.
+  const existente = await db.contact.findFirst({ where: { telefone } });
   if (existente) return existente;
 
   try {
-    return await prisma.contact.create({
-      data: { nome: dados.nome, telefone, email: dados.email },
+    return await db.contact.create({
+      data: { companyId: dados.companyId, nome: dados.nome, telefone, email: dados.email },
     });
   } catch (erro) {
     if (erro instanceof Prisma.PrismaClientKnownRequestError && erro.code === "P2002") {
-      const contatoDaCorrida = await prisma.contact.findUnique({ where: { telefone } });
+      const contatoDaCorrida = await db.contact.findFirst({ where: { telefone } });
       if (contatoDaCorrida) return contatoDaCorrida;
+
+      // Chegou aqui, e desde o Ciclo 1e isto NÃO significa mais "o telefone
+      // está em outra empresa". A chave é `@@unique([companyId, telefone])`, e
+      // as duas colunas dela são exatamente as que o `findFirst` acima filtra
+      // (o escopo injeta `where.companyId`). Se o banco disse "já existe", a
+      // busca escopada encontra — o caso está exercitado em
+      // `tests/unit/contact-isolamento.test.ts` ("telefone ocupado DENTRO da
+      // empresa continua nomeando o dono").
+      //
+      // O que sobra é uma janela estreita e real: quem venceu a corrida APAGOU
+      // o contato entre a colisão e esta releitura. Continua lançando de
+      // propósito — devolver `undefined` daqui faria a criação de lead seguir
+      // apontando para um contato que não existe, que é o tipo de falha que só
+      // aparece três telas adiante.
+      throw new Error(
+        `Colisão em Contact sem dono encontrável: o banco recusou o telefone ` +
+          `${JSON.stringify(telefone)} na empresa ${JSON.stringify(dados.companyId)} por violação de ` +
+          `\`Contact_companyId_telefone_key\`, mas a busca escopada não achou a linha. O caso esperado ` +
+          `é o contato ter sido APAGADO entre a colisão e esta leitura. Tente de novo.`
+      );
     }
     throw erro;
   }

@@ -1,9 +1,9 @@
-import { prisma } from "@/lib/prisma";
 import { usuarioAtualOuLogin } from "@/core/auth/session";
 import { hasPermission } from "@/core/auth/permissions";
 import { LeadForm } from "@/components/leads/lead-form";
 import { LeadTable, type LeadLinha } from "@/components/leads/lead-table";
 import { listarLeads } from "@/core/leads/queries";
+import { listarUsuarios } from "@/core/users/queries";
 import { LIMITE_LISTAGEM } from "@/core/listagem";
 import { EmptyState } from "@/components/empty-state";
 import { buttonVariants } from "@/components/ui/button";
@@ -33,43 +33,46 @@ export default async function LeadsPage({
 
 
   /**
-   * As três de uma vez, e não em fila.
+   * A sessão vem PRIMEIRO, sozinha, e isso mudou no Ciclo 1a (Task 4).
    *
-   * Nenhuma delas depende do resultado das outras: a lista de vendedores e a
-   * de leads não olham para `usuario`. Enfileiradas, esta página pagava três
-   * viagens até o Postgres em sequência.
+   * Antes as três saíam numa `Promise.all` só, `usuarioAtualOuLogin()`
+   * inclusive — e o comentário anterior registrava a troca consciente de que
+   * duas consultas COMEÇAVAM antes de a sessão estar confirmada. Não dá mais,
+   * e a troca também deixou de ser necessária: as duas consultas viraram
+   * consultas escopadas por empresa, e a única origem legítima do escopo é
+   * `UsuarioAtivo.companyId`, que só existe depois que a sessão resolve.
+   * Consulta de tenant que começa antes de a empresa ser conhecida é, por
+   * definição, consulta sem escopo.
    *
-   * Medido contra o build de produção, com login real, antes e depois:
-   * `/leads` e `/tasks` emitem exatamente as MESMAS 6 consultas, e `/tasks`
-   * levava 403 ms contra 1002 ms daqui. A única diferença estrutural entre as
-   * duas telas era este `Promise.all`, que `tasks/page.tsx` já tinha. A
-   * mediana de uma consulta é 85 ms — o tempo é viagem de rede até
-   * `sa-east-1`, não trabalho de banco, então o que importa é quantas
-   * acontecem ao mesmo tempo.
-   *
-   * ## O que isto muda para a segurança, dito na cara
-   *
-   * As duas consultas passam a COMEÇAR antes de a sessão estar confirmada.
-   * Nada vaza: `usuarioAtualOuLogin()` chama `redirect()`, que lança antes de
-   * qualquer render, e o `src/proxy.ts` já barrou quem não tem cookie nenhum.
-   * O que muda é que uma requisição com cookie de usuário DESATIVADO passa a
-   * executar dois `SELECT` inócuos antes de ser mandada ao login — trabalho
-   * jogado fora, não dado entregue. Troca consciente, registrada aqui para a
-   * Fase 1 da auditoria olhar de frente em vez de descobrir.
+   * O que se perde é uma rodada de espera. A medição antiga (`/leads` a
+   * 1002 ms contra 403 ms de `/tasks`, mediana de 85 ms por consulta contra
+   * `sa-east-1`) é o que justificava o `Promise.all`, e as duas consultas que
+   * sobraram continuam em paralelo entre si. `usuarioAtual()` é memoizada por
+   * requisição com `cache()` (`core/auth/session.ts`) e `(painel)/layout.tsx`
+   * já a chamou, então esta espera costuma cair em cima de uma promessa em
+   * voo — isso é o contrato de `cache()`, não medição feita aqui.
    */
-  const [usuario, vendedores, { itens: leads, truncado }] = await Promise.all([
-    usuarioAtualOuLogin(),
+  const usuario = await usuarioAtualOuLogin();
+
+  const [equipe, { itens: leads, truncado }] = await Promise.all([
     // Lista para TODO papel, sem gate — mesma consulta e mesmo motivo de
     // `leads/[id]/page.tsx`. Lead é colaborativo: qualquer vendedor atende o
-    // cliente de qualquer colega, e agora também cadastra em nome dele. Só
-    // usuários ATIVOS, e `criarLead` recusa responsável desativado — tela e
-    // servidor concordam. `select` explícito para `senhaHash` nunca sair do
-    // banco só para preencher um `<select>`.
-    prisma.user.findMany({
-      where: { ativo: true },
-      select: { id: true, nome: true },
-      orderBy: { nome: "asc" },
-    }),
+    // cliente de qualquer colega, e agora também cadastra em nome dele.
+    //
+    // Era `prisma.user.findMany({ where: { ativo: true } })` — TODA pessoa
+    // ativa do banco, de qualquer empresa. Com uma empresa só isso não se via;
+    // com duas, o `<select>` de responsável ofereceria gente de fora, e
+    // escolher uma delas gravava o lead no nome de alguém de outro cliente.
+    // `listarUsuarios` (`core/users/queries.ts`) parte de `Membership`, que é
+    // o que define "pessoa desta empresa", e já traz a projeção segura de
+    // `User` (sem `senhaHash`) e a ordem certa (ativos primeiro, depois por
+    // nome — então o `filter` abaixo preserva a ordem alfabética).
+    //
+    // Corrigir a tela NÃO substitui corrigir o serviço: `criarLead` e
+    // `atualizarLead` (`core/leads/service.ts`) exigem vínculo do responsável
+    // por conta própria, porque Server Action é endpoint HTTP público e não
+    // passa por este `<select>`. São as duas coisas, não uma.
+    listarUsuarios(usuario.companyId),
     // Fix round 1/5: a versão original desta página restringia `listarLeads`
     // por `responsavelId` para quem não tem `ver_dashboard_geral` (VENDEDOR).
     // O revisor achou que essa restrição era genuína dentro de `/leads`, mas
@@ -83,8 +86,16 @@ export default async function LeadsPage({
     // histórico de um lead que "pertence" a outro para atender um cliente que
     // chegou na loja. `listarLeads()` voltou a listar todo lead para todo
     // papel — mesmo comportamento do kanban, sem escopo por responsável.
-    listarLeads({ incluirArquivados: mostrarArquivados }),
+    listarLeads(usuario.companyId, { incluirArquivados: mostrarArquivados }),
   ]);
+
+  // O `<select>` mostra só quem está ATIVO — e `criarLead` recusa responsável
+  // desativado, então tela e servidor concordam. Contas de sistema (o bot do
+  // WhatsApp) já ficam de fora por `listarUsuarios`, que as exclui por id em
+  // vez de depender de elas serem `ativo: false`.
+  const vendedores = equipe
+    .filter((pessoa) => pessoa.ativo)
+    .map((pessoa) => ({ id: pessoa.id, nome: pessoa.nome }));
 
   // `GET /export/leads` (Task 21) já checa `exportar_leads` no servidor
   // independente do que acontece aqui — este flag só decide se o botão

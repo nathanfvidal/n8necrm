@@ -1,0 +1,39 @@
+-- Ciclo 1f, Task 2: "User"."papel" passa a aceitar NULO.
+--
+-- Metade da EXPANSÃO de um expand/contract. Sozinha, esta migração não muda
+-- comportamento nenhum: nenhuma linha vira nula, nenhum leitor perde valor,
+-- nenhum escritor precisa mudar. O que ela muda é o que passa a ser LEGAL.
+--
+-- Por que ela é obrigatória, e por que vem antes e não junto do DROP:
+-- a coluna foi restaurada por 20260819140000_restaura_user_papel_temporariamente
+-- como NOT NULL SEM DEFAULT (a entrada dela em PERDOADAS, em
+-- tests/unit/migracoes-seguras.test.ts, explica por que um DEFAULT ali seria
+-- pior que a janela que evitaria: atribuiria papel de AUTORIZAÇÃO em silêncio a
+-- todo INSERT que esquecesse a coluna). Enquanto for NOT NULL sem DEFAULT,
+-- tirar `papel` de qualquer `user.create` produz 23502 em tempo de execução --
+-- que é exatamente o incidente de 20260813200000_contato_cadastro_completo,
+-- chegando pela porta oposta. Com a coluna nula-aceita, os escritores podem
+-- sair um lote por vez, cada commit com a árvore compilando e a suíte verde.
+--
+-- Por que não derrubar de uma vez aqui: já foi tentado. O Ciclo 1a aplicou
+-- 20260819130000_derruba_user_papel e teve de revertê-lo com uma segunda
+-- migração no mesmo dia, porque o typecheck revelou um grupo de leitores DEPOIS
+-- de a coluna já estar fora do banco. A medição de 2026-08-21
+-- (.superpowers/sdd/medicao-user-papel.md) já rodou esse experimento num
+-- worktree DESCARTÁVEL, com linha de base de `tsc` comprovadamente zerada: o
+-- inventário dos 62 erros está no plano deste ciclo, e não custou nenhuma
+-- cicatriz no histórico de migrações.
+--
+-- Esta migração NÃO aciona tests/unit/migracoes-seguras.test.ts: o analisador
+-- de lá vigia `ADD COLUMN ... NOT NULL` e `ALTER COLUMN ... SET NOT NULL`, e
+-- `DROP NOT NULL` é o oposto dos dois. Isso não é leitura de código, é caso de
+-- teste executado -- ver "DROP COLUMN não é violação" naquele arquivo.
+--
+-- Conferido antes de aplicar (2026-08-21, banco de desenvolvimento): nenhuma
+-- linha de "User" diverge do papel do vínculo e nenhuma está sem "Membership"
+-- (LEFT JOIN com `m.id IS NULL OR m.papel <> u.papel` devolveu [] sobre 6
+-- linhas). É a última janela barata para achar divergência entre as duas
+-- colunas enquanto as duas ainda existem -- o risco R4 da auditoria do Ciclo 1a.
+
+-- AlterTable
+ALTER TABLE "User" ALTER COLUMN "papel" DROP NOT NULL;

@@ -12,15 +12,22 @@ vi.mock("server-only", () => ({}));
 
 import { prisma } from "../../src/lib/prisma";
 import { lerConfigBot, salvarConfigBot, restaurarConfigPadrao } from "../../src/modules/whatsapp/agente";
-import { BOT_CONFIG_ID, botConfig } from "../../config/bot";
-import { idsDeUsuariosSemeados } from "./helpers/whatsapp";
+import { botConfig } from "../../config/bot";
+import { companyIdSemeada, idsDeUsuariosSemeados } from "./helpers/whatsapp";
 
 describe("restaurar ao padrão do fork", () => {
   let ID_DO_ADMIN: string;
+  // A EMPRESA, e não mais o usuário: desde o Ciclo 1d as três funções de
+  // config recebem `companyId` explícito (era `usuarioId`, e elas resolviam
+  // a empresa por dentro pela ponte `companyIdDoUsuario`). A origem em
+  // produção é `usuarioAtual().companyId`; aqui é a empresa única do seed,
+  // mesma suposição que `criarConversation` já fazia.
+  let COMPANY_ID: string;
   let linhaOriginal: Awaited<ReturnType<typeof lerConfigBot>>;
 
   beforeAll(async () => {
     ({ ID_DO_ADMIN } = await idsDeUsuariosSemeados());
+    COMPANY_ID = await companyIdSemeada();
     // Capturada ANTES de qualquer teste mexer na linha, para o `afterAll`
     // devolver exatamente o que estava aqui — não uma suposição sobre o que
     // "deveria" estar. Rodada de correção 1, achado M1: a versão anterior
@@ -29,7 +36,7 @@ describe("restaurar ao padrão do fork", () => {
     // esta tarefa protege), rodar esta suíte religava o bot sozinha — o
     // mesmo problema que `restaurarConfigPadrao` existe para evitar em
     // produção, só que cometido pelo próprio teste.
-    linhaOriginal = await lerConfigBot();
+    linhaOriginal = await lerConfigBot(COMPANY_ID);
   });
 
   // `BotConfig` é linha única, compartilhada por todo o banco de
@@ -52,9 +59,18 @@ describe("restaurar ao padrão do fork", () => {
   // teste, não do arquivo inteiro. Restaura para `linhaOriginal` (capturada
   // no `beforeAll` acima), não para `botConfig`/valores fixos -- mesmo
   // cuidado de tests/unit/bot-config-seed.test.ts.
+  //
+  // `where: { companyId: linhaOriginal.companyId }`, não mais
+  // `{ id: BOT_CONFIG_ID }`: `BotConfig` deixou de ter id constante (Task 1
+  // do Ciclo 1a — uma linha por empresa, `@@unique([companyId])`), e
+  // `BOT_CONFIG_ID` ("bot-config") não é mais um id válido para buscar em
+  // runtime (mesmo raciocínio documentado em
+  // `src/modules/whatsapp/turno.ts`) — o `update` lançava
+  // `PrismaClientKnownRequestError` (linha não encontrada) a cada chamada,
+  // achado rodando a suíte, não pego pelo `tsc`.
   async function restaurarLinhaOriginal(): Promise<void> {
     await prisma.botConfig.update({
-      where: { id: BOT_CONFIG_ID },
+      where: { companyId: linhaOriginal.companyId },
       data: {
         personaNome: linhaOriginal.personaNome,
         personaPapel: linhaOriginal.personaPapel,
@@ -68,13 +84,14 @@ describe("restaurar ao padrão do fork", () => {
   it("volta a persona, as regras e a FAQ para o conteúdo de config/bot.ts", async () => {
     try {
       await salvarConfigBot(
+        COMPANY_ID,
         { ativo: false, personaNome: "X", personaPapel: "Y", regras: ["z"], faq: "w" },
         ID_DO_ADMIN
       );
 
-      await restaurarConfigPadrao(ID_DO_ADMIN);
+      await restaurarConfigPadrao(COMPANY_ID, ID_DO_ADMIN);
 
-      const linha = await lerConfigBot();
+      const linha = await lerConfigBot(COMPANY_ID);
       expect(linha.personaNome).toBe(botConfig.persona.nome);
       expect(linha.regras).toEqual(botConfig.regras);
       expect(linha.faq).toBe(botConfig.faq);
@@ -89,11 +106,12 @@ describe("restaurar ao padrão do fork", () => {
   it("não religa o interruptor global", async () => {
     try {
       await salvarConfigBot(
+        COMPANY_ID,
         { ativo: false, personaNome: "X", personaPapel: "Y", regras: ["z"], faq: "w" },
         ID_DO_ADMIN
       );
-      await restaurarConfigPadrao(ID_DO_ADMIN);
-      expect((await lerConfigBot()).ativo).toBe(false);
+      await restaurarConfigPadrao(COMPANY_ID, ID_DO_ADMIN);
+      expect((await lerConfigBot(COMPANY_ID)).ativo).toBe(false);
     } finally {
       await restaurarLinhaOriginal();
     }

@@ -41,6 +41,61 @@ const PERDOADAS: Record<string, string> = {
     "20260813210000_contato_atualizadoem_com_default, que acrescentou o DEFAULT. " +
     "Fica na lista, e não some do histórico, porque a janela de quebra existiu " +
     "de verdade — apagar o registro seria fingir que não.",
+
+  // Ciclo 1a, Task 2: restaura "User"."papel" (ADD COLUMN nullable -> UPDATE
+  // a partir de Membership -> SET NOT NULL, sem DEFAULT — o mesmo padrão do
+  // incidente que esta regra existe para pegar). Isenção deliberada, não um
+  // afrouxamento da regra:
+  //
+  // - POR QUE É SEGURO AQUI: este projeto não tem deploy nenhum publicado
+  //   (ver docs/superpowers/plans do ciclo). A janela que o incidente
+  //   descreve — código ANTIGO rodando contra schema NOVO, inserindo sem a
+  //   coluna que acabou de virar NOT NULL — não existe neste repositório,
+  //   porque migração e código sobem juntos (mesmo commit, mesmo deploy).
+  //   Sem essa janela, não há INSERT concorrente para falhar com 23502.
+  //
+  // - POR QUE NÃO RESOLVEMOS COM DEFAULT (a correção que a regra pede): um
+  //   DEFAULT em "papel" sobreviveria à migração e passaria a atribuir, em
+  //   silêncio, um papel de autorização a todo INSERT em "User" que não
+  //   informasse a coluna explicitamente — de um `Role` inventado (que valor
+  //   seria "seguro" por padrão? nenhum: VENDEDOR sub-provisiona quem devia
+  //   ser ADMIN, ADMIN super-provisiona o inverso). `User.papel` é
+  //   exatamente a coluna que `hasPermission` lê — um DEFAULT aqui é menos
+  //   óbvio que o de `companyId`, mas do mesmo gênero: atribuição silenciosa
+  //   do lado errado de um controle de acesso. Pior ainda por esta migração
+  //   ser NOMEADAMENTE temporária (ver o comentário do próprio arquivo): o
+  //   plano é que uma tarefa futura corrija os leitores restantes
+  //   (`core/audit/alerta.ts` e os testes listados) e DERRUBE "papel" de
+  //   novo — um DEFAULT que sobrevivesse ficaria pendurado até lá, mascarando
+  //   qualquer `User.create` que uma tarefa futura esquecesse de popular.
+  //
+  // - ISTO JÁ DEIXOU DE VALER, em 2026-08-21. O Ciclo 1f derrubou
+  //   "User"."papel" de novo (20260821130000_derruba_user_papel_de_vez), que
+  //   era o objetivo declarado desta migração ponte, depois de converter os
+  //   53 pontos que a liam ou escreviam. A entrada continua na lista porque
+  //   ela é HISTÓRIA -- a janela de quebra existiu, e apagar o registro seria
+  //   fingir que não. Mas ela não protege nada mais: qualquer NOT NULL futuro,
+  //   nesta ou em outra tabela viva, precisa da regra sem isenção. A isenção
+  //   sempre foi desta migração específica, nunca da regra.
+  //
+  // Alternativa considerada — DEFAULT acrescentado e DERRUBADO na mesma
+  // migração, depois do backfill (o mesmo padrão que
+  // 20260813210000_contato_atualizadoem_com_default usa, mas com um DROP
+  // DEFAULT extra ao final) — reportada mas NÃO implementada aqui: exige
+  // editar o SQL de uma migração já aplicada no banco de desenvolvimento
+  // (checksum já gravado em `_prisma_migrations`), o que está fora do que
+  // esta tarefa está autorizada a fazer sem aprovação explícita (ver
+  // relatório desta tarefa, seção do item 1).
+  "20260819140000_restaura_user_papel_temporariamente":
+    "Restaura 'User'.'papel' (bridge temporária, Ciclo 1a Task 2) via " +
+    "ADD COLUMN nullable -> UPDATE a partir de Membership -> SET NOT NULL, " +
+    "sem DEFAULT. Sem janela de deploy neste projeto (migração e código " +
+    "sobem juntos) para o 23502 que a regra evita, e um DEFAULT aqui " +
+    "atribuiria papel de autorização em silêncio a qualquer INSERT futuro " +
+    "que esquecesse a coluna — pior que a janela que estaria evitando. " +
+    "Isenção desta migração, não da regra: volta a valer no dia do deploy " +
+    "publicado, e a tarefa que derrubar 'papel' de novo (o objetivo desta " +
+    "ponte) não herda a isenção.",
 };
 
 /** Comentário de SQL fala de `NOT NULL` em prosa; a regra vale para código. */
@@ -161,6 +216,43 @@ describe("migrações", () => {
       ALTER TABLE "Novidade" ADD COLUMN "extra" TEXT NOT NULL;
     `;
     expect(analisar("teste", nova)).toHaveLength(0);
+  });
+
+  it("DROP COLUMN não é violação — é o oposto do que a regra vigia", () => {
+    // O Ciclo 1f derrubou `User.papel` em duas migrações
+    // (`20260821120000_user_papel_aceita_nulo` e
+    // `20260821130000_derruba_user_papel_de_vez`), as duas mexendo na
+    // nulidade de uma coluna de uma tabela VIVA — exatamente o vizinho do
+    // incidente que originou esta regra (ver o cabeçalho deste arquivo). O
+    // plano do ciclo não tem licença para LER o analisador e concluir que ele
+    // não morde; a conclusão vira este caso executado.
+    //
+    // Por que não morde, e por que isso é correto e não uma brecha: a regra
+    // protege o INSERT do código antigo contra uma coluna que passou a exigir
+    // valor (o `23502` do incidente). `DROP NOT NULL` e `DROP COLUMN` removem
+    // exigência em vez de criá-la. O INSERT antigo que ainda informasse a
+    // coluna derrubada quebraria por outro motivo — coluna inexistente — e é
+    // por isso que o Ciclo 1f limpa TODOS os escritores ANTES de derrubar, em
+    // vez de confiar nesta guarda para pegá-los.
+    const doCiclo1f = `
+      ALTER TABLE "User" ALTER COLUMN "papel" DROP NOT NULL;
+      ALTER TABLE "User" DROP COLUMN "papel";
+    `;
+    expect(analisar("teste", doCiclo1f)).toEqual([]);
+  });
+
+  it("SET NOT NULL continua sendo violação mesmo colado num DROP NOT NULL", () => {
+    // A metade que impede o caso acima de virar brecha: se alguém escrever uma
+    // migração que afrouxa uma coluna e endurece outra no mesmo arquivo, a
+    // segunda ainda precisa do DEFAULT. Sem esta asserção, "DROP COLUMN não é
+    // violação" poderia ser lido como "migração que mexe em nulidade passa".
+    const misturado = `
+      ALTER TABLE "User" ALTER COLUMN "papel" DROP NOT NULL;
+      ALTER TABLE "User" ADD COLUMN "apelido" TEXT;
+      UPDATE "User" SET "apelido" = nome;
+      ALTER TABLE "User" ALTER COLUMN "apelido" SET NOT NULL;
+    `;
+    expect(analisar("teste", misturado)).toHaveLength(1);
   });
 
   it("prosa em comentário não conta como SQL", () => {

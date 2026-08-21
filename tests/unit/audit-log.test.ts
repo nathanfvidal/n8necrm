@@ -21,6 +21,7 @@ vi.mock("server-only", () => ({}));
 import { Prisma } from "@prisma/client";
 import { prisma } from "../../src/lib/prisma";
 import { registrarAuditoria } from "../../src/core/audit/log";
+import { IP_DESCONHECIDO } from "../../src/lib/ip";
 
 // AuditLog.userId é FK obrigatória para User — precisamos de um usuário real
 // no Postgres. Criamos um usuário com prefixo "teste-" e removemos, junto
@@ -28,26 +29,53 @@ import { registrarAuditoria } from "../../src/core/audit/log";
 // padrão: apagar o usuário antes dos logs falharia).
 describe("registrarAuditoria", () => {
   let userId: string;
+  let companyId: string;
 
+  // O vínculo continua na fixture, mas o que o exige mudou no Ciclo 1d:
+  // `registrarAuditoria` deixou de DEDUZIR a empresa de `companyIdDoUsuario(
+  // userId)` e passou a recebê-la em `ParamsDeAuditoria.companyId`. Quem lê
+  // `Membership` agora é só a busca de destinatários do alerta de rajada
+  // (`core/audit/alerta.ts`), que roda depois da gravação.
+  //
+  // A empresa é criada aqui, e não reaproveitada do seed, para o teste não
+  // depender do que já está no banco de desenvolvimento compartilhado: o
+  // `afterAll` apaga exatamente o que este arquivo criou.
   beforeAll(async () => {
+    const empresa = await prisma.company.create({
+      data: { nome: "Empresa de teste (audit log)" },
+    });
+    companyId = empresa.id;
+
     const usuario = await prisma.user.create({
       data: {
         nome: "Usuário de teste (audit log)",
         email: "teste-audit-log@teste.local",
         senhaHash: "hash-fake-nao-usado-em-login",
-        papel: "VENDEDOR",
+        memberships: { create: { companyId, papel: "VENDEDOR" } },
       },
     });
     userId = usuario.id;
   });
 
+  // Ordem obrigatória: as linhas de auditoria e as notificações referenciam o
+  // usuário e a empresa, e o vínculo referencia os dois. Apagar a empresa
+  // primeiro esbarraria em chave estrangeira.
+  //
+  // `Notification` está aqui pelo mesmo motivo de `users-service.test.ts`:
+  // `Notification.userId` é RESTRICT, e uma única linha sobrando trava o
+  // `delete` do usuário — o arquivo deixa usuário e empresa para trás no
+  // banco compartilhado, e a execução seguinte quebra no `beforeAll` por
+  // e-mail duplicado (`teste-audit-log@teste.local` é fixo).
   afterAll(async () => {
+    await prisma.notification.deleteMany({ where: { userId } });
     await prisma.auditLog.deleteMany({ where: { userId } });
     await prisma.user.delete({ where: { id: userId } });
+    await prisma.company.delete({ where: { id: companyId } });
   });
 
   it("grava antes/depois e permite ler de volta os valores gravados", async () => {
     await registrarAuditoria({
+      companyId,
       userId,
       acao: "criar_lead",
       entidade: "Lead",
@@ -69,6 +97,34 @@ describe("registrarAuditoria", () => {
     expect(registro?.ip).toBe("127.0.0.1");
   });
 
+  it("a sentinela de \"sem borda confiável\" grava a coluna `ip` NULA, não a string", async () => {
+    // Ciclo 2d: `obterIpDaRequisicao` devolve `IP_DESCONHECIDO` quando
+    // `IP_CABECALHO_CONFIAVEL` não nomeia cabeçalho nenhum. Ela existe porque a
+    // chave de rate limit precisa de uma `string`; a coluna, não — é anulável.
+    // Gravá-la deixaria o log indistinguível de um IP real vindo de uma máquina
+    // chamada "desconhecido", e coluna preenchida com o que não é um IP é pior
+    // que coluna vazia: vazio é ausência de informação, sentinela parece dado.
+    //
+    // O caso roda contra o Postgres de verdade porque o que se afirma é o
+    // conteúdo da COLUNA depois de gravada, não o argumento passado adiante.
+    await registrarAuditoria({
+      companyId,
+      userId,
+      acao: "criar_lead",
+      entidade: "Lead",
+      entidadeId: "teste-lead-sem-borda",
+      ip: IP_DESCONHECIDO,
+    });
+
+    const registro = await prisma.auditLog.findFirst({
+      where: { userId, entidadeId: "teste-lead-sem-borda" },
+      orderBy: { criadoEm: "desc" },
+    });
+
+    expect(registro).not.toBeNull();
+    expect(registro?.ip).toBeNull();
+  });
+
   it("coage Date para string ISO e Decimal do Prisma para string, e descarta campos undefined", async () => {
     const dataCriacao = new Date("2026-01-15T10:00:00.000Z");
     const leadFalso = {
@@ -80,6 +136,7 @@ describe("registrarAuditoria", () => {
     };
 
     await registrarAuditoria({
+      companyId,
       userId,
       acao: "mover_estagio",
       entidade: "Lead",

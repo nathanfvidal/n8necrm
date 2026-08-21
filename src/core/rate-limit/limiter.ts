@@ -84,8 +84,9 @@ export async function checarRateLimit(
  *
  * **Invariante que sustenta a segurança da poda:** este valor precisa ser
  * MAIOR que a maior `janelaMs` usada por qualquer política do sistema (hoje
- * 1h, do export de leads — ver `./export-leads.ts`; o login usa 10min e o
- * webhook 1min). Dentro dessa folga não existe janela viva que a poda possa
+ * 1h, empatada entre o export de leads — `./export-leads.ts` — e o teto de IA
+ * por empresa — `./ia-whatsapp.ts`; o login usa 10min e o webhook 1min).
+ * Dentro dessa folga não existe janela viva que a poda possa
  * alcançar, e apagar linha já expirada é inócuo: a janela é FIXA, então a
  * próxima chamada daquela chave reescreveria `janelaInicio` e zeraria a
  * contagem de qualquer jeito. A poda só chega ao mesmo estado mais cedo.
@@ -122,12 +123,17 @@ export async function podarRateLimitExpirado(
  * Chance de uma chamada qualquer de `checarRateLimit` também podar.
  *
  * Poda probabilística (o padrão que sessões de PHP e a limpeza do Django
- * usam) em vez de cron agendado, por uma razão concreta deste projeto: um
- * cron exigiria rota nova (superfície nova, que precisaria do próprio
- * segredo) e configuração no painel da Vercel. Correção que só funciona
- * depois de alguém configurar algo é correção que pode nunca entrar em
- * vigor — e o deploy deste projeto já deu trabalho. Assim a limpeza passa a
- * valer sozinha, sem configuração nenhuma.
+ * usam) em vez de cron agendado. O argumento original citava "configuração no
+ * painel da Vercel"; a Vercel saiu no Ciclo 2d e o argumento SOBREVIVE à troca,
+ * porque ele nunca foi sobre AQUELA plataforma: um cron exigiria rota nova
+ * (superfície nova, que precisaria do próprio segredo) e alguém configurando
+ * um agendador — e correção que só entra em vigor depois de alguém configurar
+ * algo é correção que pode nunca entrar em vigor.
+ *
+ * Depois do Ciclo 2d existe um laço NOSSO (`npm run fila:worker`) que PODERIA
+ * hospedar esta limpeza. A decisão fica como está de propósito: esta poda vale
+ * sozinha, sem ninguém ligar nada, e é exatamente isso que a distingue do
+ * drenador da fila — que, esse sim, não funciona até alguém ligá-lo.
  *
  * 1% mantém a tabela pequena com folga (o login sozinho já produz muito mais
  * que 100 chamadas por dia) e deixa 99 de cada 100 requisições sem custo

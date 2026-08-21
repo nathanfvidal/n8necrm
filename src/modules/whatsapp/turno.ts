@@ -1,18 +1,57 @@
 import "server-only";
 
-import { DuplicateMessageError } from "@vercel/queue";
-
-import { BOT_CONFIG_ID } from "../../../config/bot";
-import { prisma } from "@/lib/prisma";
+import {
+  checarLimiteIaDaEmpresa,
+  LIMITE_RESPOSTAS_IA_POR_EMPRESA,
+} from "@/core/rate-limit/ia-whatsapp";
+import { prismaDaEmpresa } from "@/core/tenancy/escopo";
 
 import { publicarTurno, type TurnoJob } from "./fila";
-import { whatsappGateway } from "./gateway";
+import { gatewayDaConversa } from "./gateway/fabrica";
 import { llmProvider } from "./llm";
 import type { AutorMensagemContexto } from "./llm/tipos";
 import { limparAguardandoHumano, marcarAguardandoHumano } from "./notificacoes";
 import { montarPromptSistema } from "./prompt";
 
 export type { TurnoJob } from "./fila";
+
+/** O cliente já amarrado a uma empresa — o único caminho deste módulo ao banco. */
+type ClienteDaEmpresa = ReturnType<typeof prismaDaEmpresa>;
+
+/**
+ * ## De onde vem o `companyId` deste módulo, e por que ele viaja no JOB
+ *
+ * `turno.ts` roda fora de qualquer requisição de usuário: é um consumidor de
+ * fila. Não há sessão, não há `usuarioAtual()`, e o `conversationId` chega do
+ * payload do job. Havia duas saídas:
+ *
+ * 1. Ler a `Conversation` sem escopo para descobrir a empresa dela. Isso exige
+ *    o `prisma` cru — ou seja, manteria este arquivo na exceção do lint, que é
+ *    exatamente o que a conversão veio fechar.
+ * 2. Fazer a empresa viajar no job, resolvida por quem TEM origem sã para ela:
+ *    `ingerirMensagem` (`ingest.ts`), que a recebe no contexto montado pela
+ *    rota do webhook a partir da CONEXÃO resolvida pelo token (Ciclo 2a; até
+ *    ali ela saía de `EVOLUTION_COMPANY_ID`, uma constante do deploy).
+ *
+ * É a 2, e a escolha não é só de conveniência: `claimLease` é a PRIMEIRA
+ * operação do turno e é `$queryRaw`, que o escopo não alcança por construção.
+ * O `WHERE "companyId"` dele é escrito à mão, e escrever à mão exige ter o
+ * valor ANTES de tocar o banco. A saída 1 não tem como ter.
+ *
+ * O `companyId` do payload não é entrada de usuário: a rota consumidora
+ * (`api/queues/whatsapp-turn/route.ts`) valida um segredo compartilhado antes
+ * de chamar aqui, e quem publica é o nosso próprio webhook. E se ainda assim
+ * ele vier errado, o sistema falha FECHADO: o `claimLease` escopado não
+ * encontra a linha, devolve `null`, e o turno reagenda até desistir com log —
+ * nenhuma leitura e nenhuma escrita na empresa errada.
+ *
+ * **Custo de migração, registrado porque ele é real:** jobs publicados ANTES
+ * deste commit não carregam `companyId`. O `zod` da rota consumidora recusa o
+ * payload, o handler lança, e a fila reentrega até esgotar. É perda de turno
+ * (a mensagem do cliente continua gravada e visível em `/conversas`), barulhenta
+ * e limitada à janela de deploy — o oposto de um `companyId` opcional, que
+ * passaria calado e leria a empresa errada.
+ */
 
 // Fix round 1/5, achado CRÍTICO do revisor (C1): o valor original (25_000)
 // já era menor que o próprio pior caso documentado aqui ("pode levar de 5 a
@@ -50,14 +89,23 @@ const HISTORICO_MAX_MENSAGENS = 20;
 const MAX_CARACTERES_POR_MENSAGEM_CONTEXTO = 2000;
 
 // Fix round 1/5, achado CRÍTICO do revisor (C2): reagendar com
-// `delaySeconds: 5` usando a MESMA `idempotencyKey` do job original
-// (`${conversationId}:${seq}`) colidia com a janela de dedupe do Vercel
-// Queues (até 24h) — `publicarTurno` lançava `DuplicateMessageError` em TODA
-// ocorrência de lease ocupado, o handler 500ava, e quem de fato reentregava
-// a mensagem era o retry padrão da fila (`retryAfterSeconds: 30` em
-// vercel.json), não o reagendamento de 5s pretendido. `tentativaReagendamento`
-// dá a cada republish uma `idempotencyKey` própria (ver fila.ts) — sem essa
-// contagem, o job reagendado colidiria consigo mesmo na segunda vez também.
+// `delaySeconds: 5` usando a MESMA chave de idempotência do job original
+// (`${conversationId}:${seq}`) fazia a republicação COLIDIR com a publicação
+// que ainda estava pendente — `publicarTurno` lançava `DuplicateMessageError`
+// em TODA ocorrência de lease ocupado, o handler 500ava, e quem de fato
+// reentregava a mensagem era o retry padrão da fila, não o reagendamento de 5s
+// pretendido. `tentativaReagendamento` dá a cada republish uma chave própria
+// (ver `fila/postgres.ts#chaveIdempotencia`) — sem essa contagem, o job
+// reagendado colidiria consigo mesmo na segunda vez também.
+//
+// A JANELA em que a colisão acontece mudou no Ciclo 2d, e a necessidade da
+// contagem NÃO. Na Vercel a chave ficava reservada por `min(retenção, 24h)`,
+// muito além dos 5s do reagendamento. Em Postgres ela vale enquanto a LINHA
+// existir — e a linha do job original existe exatamente durante o
+// reagendamento, porque quem está reagendando é o turno que ainda a segura. O
+// que mudou é o DESFECHO da colisão: `skipDuplicates` a torna no-op silencioso
+// em vez de exceção. Sem a contagem, esse silêncio seria pior que a exceção
+// antiga — o reagendamento sumiria sem ninguém notar.
 // Um teto evita reagendar para sempre se algo ficar genuinamente preso (ex.:
 // uma conversa cujo lease nunca é liberado por um bug futuro) — 30 tentativas
 // de 5s é ~2,5min de espera antes de desistir e logar, generoso o bastante
@@ -75,10 +123,16 @@ const MAX_TENTATIVAS_REAGENDAMENTO = 30;
 // 20 é generoso para qualquer troca legítima de uma revenda (mesmo uma
 // negociação longa não chega a 20 idas e vindas numa hora), apertado o
 // bastante para conter um cliente em loop (ou um número comprometido
-// mandando mensagem em massa) de esgotar o orçamento de OpenAI sozinho. Um
-// teto de GASTO mensal configurado no painel da OpenAI continua sendo o
-// único backstop real contra um vazamento fora deste padrão — isso é
-// configuração humana, não algo que este código possa impor.
+// mandando mensagem em massa) de esgotar o orçamento de OpenAI sozinho.
+//
+// Este comentário dizia, até a Fase 2 da auditoria de 2026-08-21, que "um teto
+// de GASTO mensal configurado no painel da OpenAI continua sendo o único
+// backstop real". Era verdade e virou o achado 24: um controle que mora fora
+// do sistema, que ninguém aqui opera, e que a própria Fase 1 listou entre os
+// itens NÃO VERIFICADOS. Deixou de ser o único — `checarLimiteIaDaEmpresa`
+// (`core/rate-limit/ia-whatsapp.ts`) é o teto por EMPRESA, dentro do sistema,
+// aplicado logo antes da chamada ao modelo. O teto do painel continua sendo a
+// última rede, e continua sendo configuração humana.
 const TETO_RESPOSTAS_IA_POR_HORA = 20;
 
 const FALLBACK_MIDIA_NAO_SUPORTADA =
@@ -112,8 +166,9 @@ const FALLBACK_MIDIA_NAO_SUPORTADA =
  *
  * Quando a reivindicação falha (0 linhas afetadas — lease genuinamente
  * ocupado), reagenda o MESMO job com `delaySeconds: 5` — mas com uma
- * `idempotencyKey` NOVA a cada tentativa (ver `MAX_TENTATIVAS_REAGENDAMENTO`
- * acima e `fila.ts`), não descarta a mensagem: outro processo pode estar
+ * chave de idempotência NOVA a cada tentativa (ver
+ * `MAX_TENTATIVAS_REAGENDAMENTO` acima e `fila/postgres.ts`), não descarta a
+ * mensagem: outro processo pode estar
  * processando um turno anterior da mesma conversa, e este job ainda precisa
  * rodar depois.
  *
@@ -131,7 +186,8 @@ const FALLBACK_MIDIA_NAO_SUPORTADA =
  * mensagens fragmentadas virarem uma resposta só.
  */
 export async function processarTurno(job: TurnoJob): Promise<void> {
-  const lease = await claimLease(job.conversationId);
+  const db = prismaDaEmpresa(job.companyId);
+  const lease = await claimLease(job.companyId, job.conversationId);
   if (!lease) {
     const tentativa = (job.tentativaReagendamento ?? 0) + 1;
     if (tentativa > MAX_TENTATIVAS_REAGENDAMENTO) {
@@ -142,26 +198,18 @@ export async function processarTurno(job: TurnoJob): Promise<void> {
       );
       return;
     }
-    try {
-      await publicarTurno({ ...job, tentativaReagendamento: tentativa }, { delaySeconds: 5 });
-    } catch (erro) {
-      // Re-revisão da leva de fixes: entrega "pelo menos uma vez" significa
-      // que a fila pode reentregar o MESMO job (mesmo `seq`, mesma
-      // `tentativaReagendamento`) quando a confirmação de um handler que já
-      // rodou com sucesso se perde. Nesse caso o reagendamento desta
-      // tentativa JÁ foi publicado, sua `idempotencyKey` já está na janela de
-      // dedupe, e `send()` recusa a republicação.
-      //
-      // Sem este catch o erro sobe, o handler responde 500, a fila reentrega
-      // e o ciclo se repete até esgotar as tentativas de entrega — a MESMA
-      // classe do achado C2, só que disparada por um caminho raro em vez de
-      // sempre. E é um alarme falso: o job reagendado correto já está na fila
-      // fazendo o trabalho, então "já existe" é exatamente o resultado
-      // desejado, não uma falha. Mesmo tratamento que a rota do webhook já dá
-      // a este erro (`api/whatsapp/evolution/[token]/route.ts`).
-      if (erro instanceof DuplicateMessageError) return;
-      throw erro;
-    }
+    // Sem `try/catch` de duplicata desde o Ciclo 2d, e a razão está em
+    // `fila/postgres.ts`: republicar a MESMA chave é um `INSERT` com
+    // `skipDuplicates`, ou seja, no-op — não lança mais. O motivo por que ela
+    // lançava antes fica registrado aqui porque o CASO continua acontecendo:
+    // entrega "pelo menos uma vez" significa que a fila pode reentregar o mesmo
+    // job (mesmo `seq`, mesma `tentativaReagendamento`) quando a confirmação de
+    // um handler que já rodou se perde — e a reivindicação por lease de
+    // `fila/postgres.ts` tem exatamente a mesma propriedade. O reagendamento
+    // daquela tentativa já está gravado, e "já existe" é o resultado desejado,
+    // não uma falha. O que mudou é que agora isso é silêncio, em vez de exceção
+    // traduzida em dois lugares diferentes.
+    await publicarTurno({ ...job, tentativaReagendamento: tentativa }, { delaySeconds: 5 });
     return;
   }
 
@@ -172,14 +220,19 @@ export async function processarTurno(job: TurnoJob): Promise<void> {
       return;
     }
 
-    await processarMensagensPendentes(job.conversationId, lease.processandoAte);
+    await processarMensagensPendentes(db, job.companyId, job.conversationId, lease.processandoAte);
   } finally {
-    await liberarLease(job.conversationId, lease.processandoAte);
+    await liberarLease(job.companyId, job.conversationId, lease.processandoAte);
   }
 }
 
-async function processarMensagensPendentes(conversationId: string, meuToken: Date): Promise<void> {
-  const pendentes = await prisma.whatsappMessage.findMany({
+async function processarMensagensPendentes(
+  db: ClienteDaEmpresa,
+  companyId: string,
+  conversationId: string,
+  meuToken: Date
+): Promise<void> {
+  const pendentes = await db.whatsappMessage.findMany({
     where: { conversationId, direcao: "ENTRADA", processadoEm: null },
     orderBy: { criadoEm: "asc" },
   });
@@ -194,21 +247,36 @@ async function processarMensagensPendentes(conversationId: string, meuToken: Dat
   // Mesmo tratamento que o teto de respostas por hora logo abaixo: as
   // pendentes são marcadas como processadas SEM resposta ("persiste mas para
   // de responder", nunca "descarta calado").
-  const configBot = await prisma.botConfig.findUniqueOrThrow({ where: { id: BOT_CONFIG_ID } });
-  const conversaAtual = await prisma.conversation.findUniqueOrThrow({
+  //
+  // `conversaAtual` vem ANTES de `configBot`, e não por acaso: `BotConfig`
+  // deixou de ter id constante (Task 1 do Ciclo 1a — uma linha por empresa,
+  // `@@unique([companyId])`) e `BOT_CONFIG_ID` ("bot-config") não é mais um id
+  // válido para buscar em runtime — `findUnique({ where: { id: BOT_CONFIG_ID
+  // } })` continuava COMPILANDO e passava a devolver `null` sempre, o tipo de
+  // bug que o compilador não pega (ver `config/bot.ts`). A `Conversation` já
+  // está em mãos aqui — é a origem da empresa, e a busca de `BotConfig` passa
+  // a ser por `companyId`.
+  // `findFirstOrThrow` nas duas: o escopo recusa `findUniqueOrThrow` em modelo
+  // de tenant. Em `BotConfig` a troca é maior que sintaxe — `@@unique([companyId])`
+  // faria `findUnique({ where: { companyId } })` funcionar, e o escopo recusa
+  // mesmo assim, por uniformidade (o porquê está em `core/tenancy/escopo.ts`,
+  // bloco "Recusa, lançando"). O `where` some inteiro: a empresa entra pelo
+  // cliente, e `BotConfig` tem uma linha por empresa.
+  const conversaAtual = await db.conversation.findFirstOrThrow({
     where: { id: conversationId },
-    select: { iaAtiva: true },
+    select: { iaAtiva: true, companyId: true },
   });
+  const configBot = await db.botConfig.findFirstOrThrow({});
 
   if (!configBot.ativo || !conversaAtual.iaAtiva) {
     const motivo = !configBot.ativo ? "interruptor global desligado" : "IA pausada nesta conversa";
     console.info(`Conversa ${conversationId}: ${motivo} — pendentes marcadas sem resposta automática.`);
-    await marcarPendentesComoProcessadas(pendentes);
+    await marcarPendentesComoProcessadas(db, pendentes);
     // Depois de marcar as pendentes, não antes: se isto lançasse primeiro, o
     // turno lançaria e o job seria reentregue com a conversa já sinalizada
     // por um trabalho que não terminou (ver docstring de
     // `marcarPendentesComoProcessadas` para os quatro pontos irmãos deste).
-    await marcarAguardandoHumano(conversationId);
+    await marcarAguardandoHumano(companyId, conversationId);
     return;
   }
 
@@ -223,13 +291,13 @@ async function processarMensagensPendentes(conversationId: string, meuToken: Dat
   // automática — "persiste mas para de responder", não "descarta calado":
   // um humano que abrir a conversa no painel vê as mensagens do cliente
   // esperando, mesmo sem a IA ter respondido.
-  if (await respostasIaNaUltimaHoraAtingiuTeto(conversationId)) {
+  if (await respostasIaNaUltimaHoraAtingiuTeto(db, conversationId)) {
     console.warn(
       `Conversa ${conversationId} atingiu o teto de ${TETO_RESPOSTAS_IA_POR_HORA} respostas de IA na ` +
         `última hora — pendentes marcadas como processadas sem resposta automática.`
     );
-    await marcarPendentesComoProcessadas(pendentes);
-    await marcarAguardandoHumano(conversationId);
+    await marcarPendentesComoProcessadas(db, pendentes);
+    await marcarAguardandoHumano(companyId, conversationId);
     return;
   }
 
@@ -245,7 +313,39 @@ async function processarMensagensPendentes(conversationId: string, meuToken: Dat
     // fallback única, sem chamar o modelo.
     respostas = [FALLBACK_MIDIA_NAO_SUPORTADA];
   } else {
-    const historicoAnterior = await buscarHistorico(conversationId, pendentes[0]!.criadoEm);
+    // Teto de IA por EMPRESA — achado 24 da Fase 1
+    // (`docs/auditorias/2026-08-21-fase1-seguranca-branch-tenancy.md`). O teto
+    // por CONVERSA acima contém um cliente em loop e não vê N conversas: cem
+    // números diferentes, cada um dentro dos seus 20/h, dão 2000 chamadas numa
+    // hora e nada as enxerga como um conjunto. O número e o raciocínio estão em
+    // `core/rate-limit/ia-whatsapp.ts`; o mecanismo é o `checarRateLimit`
+    // atômico que o projeto já usa (login, export de leads), não um segundo.
+    //
+    // **Aqui dentro do `else`, e não junto do teto por conversa**, de
+    // propósito: `checarRateLimit` CONSOME uma unidade a cada chamada, e o ramo
+    // de cima (só mídia) responde com texto fixo sem tocar a OpenAI. Checar
+    // antes do `if` faria uma rajada de áudios queimar a cota de uma empresa
+    // sem gastar um centavo de modelo — e deixaria as conversas de texto
+    // legítimas sem resposta por causa disso. A cota conta o que custa.
+    if (!(await checarLimiteIaDaEmpresa(companyId))) {
+      // Mesmo tratamento do teto por conversa, e é a razão de ele estar escrito
+      // igual: "persiste mas para de responder", nunca "descarta calado". As
+      // pendentes ficam marcadas como processadas (visíveis no inbox humano em
+      // `/conversas`) e `marcarAguardandoHumano` acende o sino — o cliente do
+      // outro lado não fica no silêncio, alguém da equipe é chamado para
+      // responder à mão. Ver `marcarPendentesComoProcessadas` para os pontos
+      // irmãos.
+      console.warn(
+        `Empresa ${companyId} atingiu o teto de ${LIMITE_RESPOSTAS_IA_POR_EMPRESA} respostas de IA na ` +
+          `última hora (conversa ${conversationId}) — pendentes marcadas como processadas sem ` +
+          `resposta automática.`
+      );
+      await marcarPendentesComoProcessadas(db, pendentes);
+      await marcarAguardandoHumano(companyId, conversationId);
+      return;
+    }
+
+    const historicoAnterior = await buscarHistorico(db, conversationId, pendentes[0]!.criadoEm);
     // Fragmentos de texto pendentes são unidos numa única mensagem "CLIENTE"
     // no contexto — é literalmente o comportamento que o plano da Fatia 1
     // pede: "as mensagens fragmentadas juntadas numa resposta só". Cada
@@ -277,7 +377,7 @@ async function processarMensagensPendentes(conversationId: string, meuToken: Dat
   // `finally` de `processarTurno`) continua sendo a segunda camada: mesmo
   // que este check e o envio corram entre si de alguma forma, o release só
   // afeta a linha se o token ainda bater.
-  const motivoAborto = await confirmarTitularidadeLease(conversationId, meuToken);
+  const motivoAborto = await confirmarTitularidadeLease(companyId, conversationId, meuToken);
   if (motivoAborto === "lease-perdido") {
     console.warn(
       `Turno da conversa ${conversationId} abortado antes de enviar: outro processador assumiu o ` +
@@ -290,12 +390,33 @@ async function processarMensagensPendentes(conversationId: string, meuToken: Dat
       `Turno da conversa ${conversationId} abortado antes de enviar: um humano assumiu a conversa ` +
         `enquanto o modelo respondia. Resposta gerada descartada.`
     );
-    await marcarPendentesComoProcessadas(pendentes);
-    await marcarAguardandoHumano(conversationId);
+    await marcarPendentesComoProcessadas(db, pendentes);
+    await marcarAguardandoHumano(companyId, conversationId);
     return;
   }
 
-  const conversation = await prisma.conversation.findUniqueOrThrow({ where: { id: conversationId } });
+  const conversation = await db.conversation.findFirstOrThrow({ where: { id: conversationId } });
+
+  // ## De onde sai a conexão do envio (Ciclo 2a, Tarefa 8)
+  //
+  // Era `whatsappGateway`, um singleton por PROCESSO com a credencial de
+  // `EVOLUTION_*`. Ele morava em `gateway/index.ts` e foi apagado de lá pela
+  // Tarefa 10, junto com as variáveis. Um processo serve várias empresas, e
+  // uma empresa pode ter mais de uma conexão (decisão travada 4 do
+  // `CLAUDE.md`): com credencial por empresa, aquele singleton responderia o
+  // cliente da empresa B pela instância da A.
+  //
+  // Resolvido UMA vez por turno, fora do laço: a conexão não muda no meio de
+  // um turno, e resolver dentro faria uma consulta ao banco e uma decifragem
+  // AES-GCM por mensagem enviada sem nada em troca. Tem caso de teste
+  // contando as chamadas ("resolve o gateway UMA vez por turno").
+  //
+  // `conversation` vem do `findFirstOrThrow` acima SEM `select`, então
+  // `connectionId` está em mãos. Se ele for nulo (conversa anterior ao Ciclo
+  // 2a — não houve backfill, decisão registrada na Tarefa 1), a fábrica cai
+  // em `credencialAtivaUnica` e RECUSA se houver mais de uma ativa:
+  // responder pelo número errado é pior que não responder.
+  const gateway = await gatewayDaConversa(companyId, conversation);
 
   // Fix round 1/5, achado do revisor (I4): antes, `pendentes` só era marcado
   // `processadoEm` depois que TODAS as `respostas` terminavam de enviar. Se
@@ -311,9 +432,13 @@ async function processarMensagensPendentes(conversationId: string, meuToken: Dat
   // duplicar não é.
   let pendentesMarcadas = false;
   for (const texto of respostas) {
-    const envio = await whatsappGateway.enviarTexto(conversation.waId, texto);
-    await prisma.whatsappMessage.create({
+    const envio = await gateway.enviarTexto(conversation.waId, texto);
+    // `WhatsappMessage.companyId` é `NOT NULL` desde a Task 1. `conversation`
+    // já está em mãos, linha inteira (sem `select` no fetch acima) — usa o
+    // `companyId` dela, sem sessão nenhuma envolvida.
+    await db.whatsappMessage.create({
       data: {
+        companyId: conversation.companyId,
         conversationId,
         idExterno: envio.idExterno,
         direcao: "SAIDA",
@@ -325,11 +450,11 @@ async function processarMensagensPendentes(conversationId: string, meuToken: Dat
     });
 
     if (!pendentesMarcadas) {
-      await marcarPendentesComoProcessadas(pendentes);
+      await marcarPendentesComoProcessadas(db, pendentes);
       // A IA falou com o cliente — ninguém está mais esperando um humano.
       // Depois de marcar as pendentes, mesmo raciocínio dos outros três
       // pontos: nunca sinalizar (aqui, limpar) antes do trabalho concluir.
-      await limparAguardandoHumano(conversationId);
+      await limparAguardandoHumano(companyId, conversationId);
       pendentesMarcadas = true;
     }
   }
@@ -358,16 +483,22 @@ async function processarMensagensPendentes(conversationId: string, meuToken: Dat
  * não de `marcarAguardandoHumano`: marcar aqui encheria o sino de conversas
  * que a IA está atendendo normalmente, e a equipe pararia de olhar o sino.
  */
-async function marcarPendentesComoProcessadas(pendentes: Array<{ id: string }>): Promise<void> {
-  await prisma.whatsappMessage.updateMany({
+async function marcarPendentesComoProcessadas(
+  db: ClienteDaEmpresa,
+  pendentes: Array<{ id: string }>
+): Promise<void> {
+  await db.whatsappMessage.updateMany({
     where: { id: { in: pendentes.map((mensagem) => mensagem.id) } },
     data: { processadoEm: new Date() },
   });
 }
 
-async function respostasIaNaUltimaHoraAtingiuTeto(conversationId: string): Promise<boolean> {
+async function respostasIaNaUltimaHoraAtingiuTeto(
+  db: ClienteDaEmpresa,
+  conversationId: string
+): Promise<boolean> {
   const umaHoraAtras = new Date(Date.now() - 60 * 60 * 1000);
-  const contagem = await prisma.whatsappMessage.count({
+  const contagem = await db.whatsappMessage.count({
     where: { conversationId, direcao: "SAIDA", autor: "IA", criadoEm: { gte: umaHoraAtras } },
   });
   return contagem >= TETO_RESPOSTAS_IA_POR_HORA;
@@ -405,10 +536,15 @@ export type MotivoAborto = "lease-perdido" | "ia-pausada" | null;
  * temporização real entre chamadas concorrentes a `processarTurno`.
  */
 export async function confirmarTitularidadeLease(
+  companyId: string,
   conversationId: string,
   token: Date
 ): Promise<MotivoAborto> {
-  const conversation = await prisma.conversation.findUnique({
+  // `findFirst` e não `findUnique`: recusado pelo escopo em modelo de tenant.
+  // O `null` que a busca pode devolver já era tratado (`?.`), e agora ele cobre
+  // um caso a mais — conversa de outra empresa —, com o mesmo desfecho:
+  // "lease-perdido", que aborta antes de enviar qualquer coisa ao cliente.
+  const conversation = await prismaDaEmpresa(companyId).conversation.findFirst({
     where: { id: conversationId },
     select: { processandoAte: true, iaAtiva: true },
   });
@@ -424,15 +560,29 @@ export async function confirmarTitularidadeLease(
  * reivindicação falha (lease genuinamente ocupado por outro processador).
  */
 export async function claimLease(
+  companyId: string,
   conversationId: string
 ): Promise<{ bufferSeq: number; processandoAte: Date } | null> {
   const agora = new Date();
   const ateLease = new Date(agora.getTime() + LEASE_DURACAO_MS);
 
-  const linhas = await prisma.$queryRaw<Array<{ bufferSeq: number; processandoAte: Date }>>`
+  // `WHERE "companyId"` escrito À MÃO, e a redundância é APARENTE: o cliente é
+  // escopado, mas `$queryRaw` NÃO passa por `$allModels` — o escopo não o
+  // alcança por construção (`core/tenancy/escopo.ts`, "Não alcança de jeito
+  // nenhum"). Este é o ponto mais fácil de errar do módulo, porque `db` está
+  // ali do lado e parece cobrir tudo.
+  //
+  // Quem cobra é a Parte 2b de `tests/unit/catraca-prisma-cru.test.ts`: ela lê
+  // o TEXTO do template de todo `$queryRaw`/`$executeRaw` de arquivo já
+  // convertido, e reprova o que citar tabela de tenant sem `companyId`. Passou
+  // a valer para este arquivo no instante em que ele saiu da fila.
+  const linhas = await prismaDaEmpresa(companyId).$queryRaw<
+    Array<{ bufferSeq: number; processandoAte: Date }>
+  >`
     UPDATE "Conversation"
     SET "processandoAte" = ${ateLease}::timestamp(3)
     WHERE "id" = ${conversationId}
+      AND "companyId" = ${companyId}
       AND ("processandoAte" IS NULL OR "processandoAte" < ${agora}::timestamp(3))
     RETURNING "bufferSeq", "processandoAte"
   `;
@@ -447,19 +597,27 @@ export async function claimLease(
  * por outro processador, este UPDATE afeta 0 linhas — de propósito: liberar
  * o lease de outro processador seria exatamente o bug que este fix corrige.
  */
-export async function liberarLease(conversationId: string, token: Date): Promise<void> {
-  await prisma.$executeRaw`
+export async function liberarLease(
+  companyId: string,
+  conversationId: string,
+  token: Date
+): Promise<void> {
+  // `companyId` à mão pelo mesmo motivo de `claimLease` — ver lá.
+  await prismaDaEmpresa(companyId).$executeRaw`
     UPDATE "Conversation"
     SET "processandoAte" = NULL
-    WHERE "id" = ${conversationId} AND "processandoAte" = ${token}::timestamp(3)
+    WHERE "id" = ${conversationId}
+      AND "companyId" = ${companyId}
+      AND "processandoAte" = ${token}::timestamp(3)
   `;
 }
 
 async function buscarHistorico(
+  db: ClienteDaEmpresa,
   conversationId: string,
   antesDe: Date
 ): Promise<Array<{ autor: AutorMensagemContexto; texto: string }>> {
-  const mensagens = await prisma.whatsappMessage.findMany({
+  const mensagens = await db.whatsappMessage.findMany({
     where: {
       conversationId,
       tipo: "TEXTO",

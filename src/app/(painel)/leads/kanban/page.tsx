@@ -1,3 +1,4 @@
+import { usuarioAtualOuLogin } from "@/core/auth/session";
 import { listarEtapas } from "@/core/pipeline/stages";
 import { listarLeadsPorEtapa } from "@/core/leads/queries";
 import { LIMITE_LISTAGEM } from "@/core/listagem";
@@ -6,12 +7,20 @@ import { KanbanBoard } from "@/components/leads/kanban-board";
 /**
  * `(painel)/layout.tsx` já chama `usuarioAtual()` e redireciona para
  * `/login` quando ela rejeita (sessão ausente OU usuário desativado) — esta
- * página não repete essa checagem, só busca o que o quadro precisa.
+ * página não repete essa checagem por segurança.
+ *
+ * Ela chama `usuarioAtualOuLogin()` por outro motivo, introduzido no Ciclo 1a
+ * (Task 4): `listarLeadsPorEtapa` agora exige o escopo de empresa, e a única
+ * origem legítima dele é `UsuarioAtivo.companyId`. Por isso a sessão resolve
+ * ANTES do `Promise.all` — uma consulta de tenant que começa antes de a
+ * empresa ser conhecida é, por definição, uma consulta sem escopo.
  */
 export default async function KanbanPage() {
+  const usuario = await usuarioAtualOuLogin();
+
   const [etapas, { porEtapa, truncado }] = await Promise.all([
-    listarEtapas(),
-    listarLeadsPorEtapa(),
+    listarEtapas(usuario.companyId),
+    listarLeadsPorEtapa(usuario.companyId),
   ]);
 
   return (

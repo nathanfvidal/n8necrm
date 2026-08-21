@@ -1,6 +1,6 @@
 import { Menu } from "lucide-react";
 
-import { moduloAtivo } from "@/lib/module-gate";
+import type { ModuloNome } from "@/core/config/modulos";
 import { hasPermission } from "@/core/auth/permissions";
 import { sairAction } from "@/core/auth/actions";
 import { Marca } from "@/components/marca";
@@ -21,22 +21,43 @@ const GRUPO_TRABALHO: LinkDoPainel[] = [
 
 /**
  * `PainelNav` continua SÍNCRONA e sem Prisma — é o que a deixa testável com
- * `render(<PainelNav />)` sem nenhum mock de banco. Quem busca notificação é
- * `(painel)/layout.tsx`, e o valor chega por prop.
+ * `render(<PainelNav ... />)` sem nenhum mock de banco. Quem busca notificação
+ * é `(painel)/layout.tsx`, e o valor chega por prop.
+ *
+ * `modulosAtivos` e `nomeMarca` chegam pela mesma porta desde o Ciclo 1c, e
+ * pelo mesmo motivo: os dois passaram a vir do BANCO, por empresa, e uma
+ * leitura assíncrona aqui dentro tornaria este componente impossível de
+ * renderizar sem mock de Postgres. São OBRIGATÓRIAS — um padrão silencioso
+ * (`= []`, `= "CRM"`) esconderia o dia em que o layout esquecesse de passá-las,
+ * e o sintoma seria a barra sem nome ou o menu sem módulo, sem erro nenhum.
+ * O `= {}` que a assinatura tinha saiu junto: com prop obrigatória, um render
+ * sem argumento nenhum precisa ser erro de tipo, não objeto vazio.
+ *
+ * O import de `ModuloNome` é `import type` de propósito: `@/core/config/modulos`
+ * puxa `next/navigation` e, por baixo, a leitura do banco. Um import de VALOR
+ * daqui arrastaria isso para o grafo de um componente que existe justamente
+ * para não ter banco — o mesmo cuidado que `components/automation/fluxos-table.tsx`
+ * documenta para `server-only`. `import type` é apagado na compilação.
  */
 export function PainelNav({
   notificacoesNaoLidas = [],
   nomeUsuario,
   papelUsuario,
+  modulosAtivos,
+  nomeMarca,
+  logo,
 }: {
   notificacoesNaoLidas?: NotificacaoApresentada[];
   nomeUsuario?: string;
   papelUsuario?: Role;
-} = {}) {
-  // Segundo grupo: módulo e administração. Pode ficar VAZIO — vendedor num
-  // fork sem whatsapp. `NavLinks` é quem trata a régua nesse caso.
+  modulosAtivos: ModuloNome[];
+  nomeMarca: string;
+  logo?: { claro: string; escuro: string };
+}) {
+  // Segundo grupo: módulo e administração. Pode ficar VAZIO — vendedor numa
+  // empresa sem whatsapp. `NavLinks` é quem trata a régua nesse caso.
   const grupoExtra: LinkDoPainel[] = [
-    ...(moduloAtivo("whatsapp")
+    ...(modulosAtivos.includes("whatsapp")
       ? [{ href: "/conversas", label: "Conversas", icone: "conversas" as const }]
       : []),
     ...(papelUsuario && hasPermission(papelUsuario, "gerenciar_usuarios")
@@ -44,6 +65,31 @@ export function PainelNav({
       : []),
     ...(papelUsuario && hasPermission(papelUsuario, "gerenciar_funil")
       ? [{ href: "/etapas", label: "Etapas", icone: "etapas" as const }]
+      : []),
+    // Módulo E permissão — as duas, não uma ou outra. `modulosAtivos` sozinho
+    // mostraria o link para VENDEDOR (a página faz `notFound()`, mas exibir
+    // um link que sempre dá 404 é ruído); `hasPermission` sozinho mostraria
+    // o link numa empresa sem o módulo `automation` ligado. `ver_fluxos`
+    // (ADMIN e GESTOR), não `gerenciar_fluxos` — esconder o link nunca é o
+    // gate de verdade (a página e as actions são), só evita ruído no menu.
+    ...(modulosAtivos.includes("automation") && papelUsuario && hasPermission(papelUsuario, "ver_fluxos")
+      ? [{ href: "/fluxos", label: "Fluxos", icone: "fluxos" as const }]
+      : []),
+    // Aponta para `/configuracoes` (que redireciona para a primeira seção), e
+    // não direto para `/configuracoes/conexoes`: assim o item de menu não
+    // precisa mudar quando houver uma segunda seção.
+    //
+    // A condição é `gerenciar_conexoes` porque hoje ela é a permissão da ÚNICA
+    // seção. Quando a segunda existir com outra permissão, isto vira um OU —
+    // está escrito para não parecer esquecimento. Esconder o link nunca é o
+    // gate de verdade (a página e as actions são), só evita ruído no menu.
+    //
+    // Sem portão de MÓDULO, ao contrário de "Fluxos" e "Conversas": conexão de
+    // canal é administração do núcleo, e uma empresa precisa poder cadastrar a
+    // credencial ANTES de o módulo `whatsapp` estar ligado — exigir o módulo
+    // aqui esconderia a tela justamente de quem vai ligá-lo.
+    ...(papelUsuario && hasPermission(papelUsuario, "gerenciar_conexoes")
+      ? [{ href: "/configuracoes", label: "Configurações", icone: "configuracoes" as const }]
       : []),
   ];
 
@@ -68,7 +114,7 @@ export function PainelNav({
     return (
       <div className="flex h-full flex-col gap-4 p-3">
         <div className="px-2 py-1">
-          <Marca />
+          <Marca nome={nomeMarca} logo={logo} />
         </div>
 
         <div className="flex-1">
@@ -138,7 +184,7 @@ export function PainelNav({
             `<NotificationBell>` visível nesta largura — a gaveta não tem a
             dela (ver o comentário de `conteudo`). */}
         <NotificationBell notificacoes={notificacoesNaoLidas} />
-        <Marca />
+        <Marca nome={nomeMarca} logo={logo} />
       </div>
     </>
   );

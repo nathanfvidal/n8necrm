@@ -64,6 +64,18 @@ ciclos que dependem dela.
    muda no Ciclo 0 é que `@vercel/queue` deixa de ser importado direto e passa a
    ser **um adaptador atrás de uma interface**, para a VPS continuar sendo uma
    opção barata depois. Nada de comportamento muda.
+
+> **Adendo de 2026-08-21 — a decisão 6 foi REABERTA.** O dono decidiu não usar
+> a Vercel. A fila passou a ser uma tabela do Postgres (`TurnoJob`) e a
+> hospedagem voltou a ficar em aberto, com o app agnóstico. **Nenhuma palavra
+> do texto acima foi alterada** — ele registra o que foi decidido em
+> 2026-08-19, e continua sendo o registro correto daquela data. O que passou a
+> valer está em
+> `docs/superpowers/specs/2026-08-21-ciclo-2d-fila-em-postgres-design.md`.
+> Este adendo existe porque um leitor que encontrasse a decisão original sem
+> descobrir que ela foi revertida agiria com base nela — que é o mesmo dano que
+> a proibição de reescrever documento histórico tenta evitar, só que pelo outro
+> lado.
 7. **Cópia do repositório: histórico completo, sem vínculo de fork.**
    Só `main` + tags. As branches de feature em aberto **não** são copiadas.
 8. **Identidade do produto: em aberto.** `config/client.ts` fica genérico. Isto é
@@ -79,17 +91,26 @@ depois como surpresa.
 
 ## 4. Arquitetura do programa
 
-### Os cinco ciclos
+### Os ciclos
 
 | Ciclo | Entrega | Depende de |
 | --- | --- | --- |
 | **0 — Fundação** | Repo copiado, Supabase migrado, app subindo, testes verdes, fila neutra | — |
 | **4 — Fluxos n8n** | Painel via API + editor em iframe | 0 |
-| **1 — Multi-empresa por baixo** | `Company`, `companyId`, escopo de query, RLS, emissão de JWT | 0 |
-| **2 — Conexões Evolution** | Tela de Conexões, QR ao vivo, ciclo de vida, webhook por instância | 1 |
+| **1a — Tenancy** | `Company`, `Membership`, `companyId`, papel no vínculo, escopo obrigatório de query | 0 |
+| **1b — JWT e isolamento** | Emissão do JWT do Supabase pelo Auth.js, testes de isolamento entre empresas | 1a |
+| **1c — Config no banco** | Entidade, funil e marca saem de `config/client.ts` para tabela por empresa | 1a |
+| **2 — Conexões** | Tela de Conexões: Evolution (QR) **e WhatsApp oficial (Meta Cloud API)**, ciclo de vida, webhook por conexão | 1 |
 | **3 — Chat ao vivo** | Realtime na thread e na inbox | 1, melhor depois de 2 |
 
-### Ordem de execução: 0 → 4 → 1 → 2 → 3
+### Ordem de execução: 0 → 4 → 1a → 1b → 1c → 2 → 3
+
+O Ciclo 1 foi decomposto em 2026-08-19, depois de medir o tamanho real do
+que as decisões dele implicavam: 26 chamadas a `hasPermission`, 25 arquivos
+tocando `.papel`, 14 importando `config/client`. Três subsistemas
+independentes num ciclo só, e o mais arriscado deles — mover o papel é
+refatoração de autorização, e errar não dá erro de compilação, dá permissão
+errada em silêncio — merece revisão própria.
 
 O Ciclo 4 é o único totalmente independente dos outros e o mais visível, então
 sobe cedo sem custar dívida a ninguém.
@@ -155,6 +176,42 @@ abrir uma exceção nomeada dentro dela**, e a forma é obrigatória:
 
 Descartar essa blindagem por conveniência anularia o motivo de o RLS estar no
 Ciclo 1.
+
+### Ciclo 2 acrescentado: WhatsApp oficial ao lado da Evolution
+
+Pedido do dono em 2026-08-19, depois do Ciclo 4: além das instâncias da
+Evolution, o CRM precisa conectar o **WhatsApp oficial (Meta Cloud API)**, e o
+chat ao vivo tem que funcionar igual nos dois.
+
+**A base já foi desenhada para isso**, e isso muda o tamanho do trabalho. A
+interface `WhatsappGateway` (`src/modules/whatsapp/gateway/tipos.ts:34`) diz,
+por escrito, que um adapter da Meta Cloud API implementa **a mesma interface,
+sem tocar em `ingest.ts`, `turno.ts` nem nas rotas**. Não é reescrita; é um
+segundo adapter ao lado de `evolution.ts`.
+
+Três diferenças concretas que o Ciclo 2 vai ter que absorver, e que o
+comentário de `verificarOrigem` (`gateway/tipos.ts:52`) já antecipa:
+
+1. **Autenticidade do webhook é outra.** A Evolution self-hosted não assina
+   nada — a defesa é o token imprevisível no path mais a conferência do campo
+   `instance`. A Cloud API faz handshake `hub.challenge` na assinatura e assina
+   cada entrega com `X-Hub-Signature-256` (HMAC sobre o corpo **cru**). Por isso
+   `verificarOrigem` recebe o corpo já parseado e a rota decide como lê-lo:
+   a Cloud API precisa do corpo cru para conferir o HMAC.
+2. **Não existe QR Code.** O pareamento da Evolution é escanear um código; o da
+   Cloud API é cadastro no Meta Business, número verificado e token de acesso.
+   A tela de Conexões precisa de **dois fluxos de conexão diferentes**, não de
+   um só com um campo a mais.
+3. **Janela de 24h e templates.** A Cloud API só permite mensagem livre dentro
+   de 24h da última mensagem do cliente; fora disso, só template aprovado pela
+   Meta. A Evolution não tem essa restrição. Isso afeta o chat ao vivo do
+   Ciclo 3 diretamente: o campo de resposta precisa saber se a janela está
+   aberta, e dizer isso a quem está atendendo — em vez de deixar a mensagem
+   falhar no envio sem explicação.
+
+O modelo `Connection` do Ciclo 2 nasce, portanto, com um discriminador de
+provedor, e a tela de Conexões com dois caminhos. O resto do módulo continua
+conhecendo só a interface.
 
 ### Dívida declarada: configuração de cliente em arquivo
 

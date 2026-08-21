@@ -65,7 +65,11 @@ export async function criarMinhaTaskAction(input: {
 }): Promise<ResultadoAcao> {
   try {
     const autor = await usuarioAtual();
-    await criarTask({ ...input, responsavelId: autor.id });
+    // `companyId` da SESSÃO, nunca de `input`: o objeto vem do formulário e
+    // Server Action é endpoint HTTP público. Antes o serviço deduzia a empresa
+    // de `companyIdDoUsuario(responsavelId)`, que pega um vínculo arbitrário de
+    // quem tem dois; `usuarioAtual()` já sabe qual é a empresa desta sessão.
+    await criarTask({ ...input, companyId: autor.companyId, responsavelId: autor.id });
   } catch (erro) {
     return paraResultadoErro(erro, "Não foi possível salvar a tarefa. Tente novamente em instantes.");
   }
@@ -106,7 +110,7 @@ export async function concluirMinhaTaskAction(taskId: string): Promise<Resultado
     // vazamento do funil, e a regra da casa passou a ser: só atravessa o que
     // a tela usa. `ResultadoAcao` continua honrando isso: `{ ok: true }` e
     // nada mais.
-    const concluida = await concluirTask({ taskId, autorId: autor.id });
+    const concluida = await concluirTask({ companyId: autor.companyId, taskId, autorId: autor.id });
     leadIdParaRevalidar = concluida.leadId;
   } catch (erro) {
     return paraResultadoErro(erro, "Não foi possível concluir a tarefa. Tente novamente em instantes.");
@@ -198,7 +202,7 @@ export async function editarTaskAction(dados: {
 }): Promise<ResultadoAcao> {
   try {
     const autor = await usuarioAtual();
-    await editarTask({ ...dados, autorId: autor.id });
+    await editarTask({ ...dados, companyId: autor.companyId, autorId: autor.id });
   } catch (erro) {
     return paraResultadoErro(erro, "Falha ao salvar a tarefa. Tente novamente.");
   }
@@ -223,7 +227,7 @@ export async function reabrirTaskAction(dados: {
 }): Promise<ResultadoAcao> {
   try {
     const autor = await usuarioAtual();
-    await reabrirTask({ taskId: dados.taskId, autorId: autor.id });
+    await reabrirTask({ companyId: autor.companyId, taskId: dados.taskId, autorId: autor.id });
   } catch (erro) {
     return paraResultadoErro(erro, "Falha ao reabrir a tarefa. Tente novamente.");
   }
@@ -241,7 +245,7 @@ export async function excluirTaskAction(dados: {
 }): Promise<ResultadoAcao> {
   try {
     const autor = await usuarioAtual();
-    await excluirTask({ taskId: dados.taskId, autorId: autor.id });
+    await excluirTask({ companyId: autor.companyId, taskId: dados.taskId, autorId: autor.id });
   } catch (erro) {
     return paraResultadoErro(erro, "Falha ao excluir a tarefa. Tente novamente.");
   }

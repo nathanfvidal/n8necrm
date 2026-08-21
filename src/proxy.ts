@@ -113,6 +113,11 @@ import { auth } from "@/lib/auth";
  * - **`connect-src 'self'`.** Chamadas à OpenAI e à Evolution saem do
  *   SERVIDOR, nunca do navegador. Se algum dia um script no cliente tentar
  *   mandar dado de lead para fora, o navegador barra.
+ * - **`frame-src https://n8n.nateksoft.com`**: única origem que o CRM pode
+ *   embutir num iframe — o editor do n8n em `/fluxos/[id]?aba=editar`. Não é
+ *   o mesmo eixo de `frame-ancestors` logo abaixo: uma diretiva controla o
+ *   que ESTE site pode embutir, a outra controla quem pode embutir ESTE
+ *   site — as duas convivem porque respondem perguntas opostas.
  * - **`frame-ancestors 'none'`** e **`form-action 'self'`**: ninguém embute
  *   o CRM num iframe, e nenhum formulário daqui posta para fora — o que
  *   fecha o caminho de roubar credencial redirecionando o POST do login.
@@ -130,6 +135,14 @@ function montarCsp(nonce: string): string {
     "img-src 'self' blob: data:",
     "font-src 'self'",
     "connect-src 'self'",
+    // O editor do n8n é embutido num iframe na tela /fluxos. `frame-src` é a
+    // diretiva que permite ISSO — não confundir com `frame-ancestors`, que diz
+    // quem pode embutir O CRM e continua `'none'`.
+    //
+    // A origem é fixa e única de propósito: um `frame-src` amplo permitiria a
+    // qualquer script já presente na página embutir conteúdo de terceiro.
+    // `script-src` não é tocado.
+    "frame-src https://n8n.nateksoft.com",
     "object-src 'none'",
     "base-uri 'self'",
     "form-action 'self'",
@@ -180,27 +193,35 @@ export const config = {
    *   endpoint do Auth.js, mas todas ficariam públicas por engano. Mesmo
    *   raciocínio aplicado a _next/static e _next/image por consistência.
    * - api/whatsapp (Fatia 1 do atendente de WhatsApp): o webhook público da
-   *   Evolution (`/api/whatsapp/evolution/[token]/route.ts`) é chamado pela
+   *   Evolution (`/api/whatsapp/evolution/[companyId]/[token]/route.ts`) é
+   *   chamado pela
    *   própria Evolution, sem sessão de usuário nenhuma — sem esta exceção,
    *   este proxy redirecionaria toda chamada da Evolution para `/login`
    *   (confirmado empiricamente: `/api/whatsapp/evolution/tok123` batia no
    *   matcher ANTES desta exceção existir) e o bot nunca receberia mensagem
-   *   nenhuma. A rota já se autentica sozinha (token no path comparado com
-   *   `timingSafeEqual`, ver o comentário lá) — não depende deste proxy pra
+   *   nenhuma. A rota já se autentica sozinha (token no path resolvido como
+   *   `sha256` contra `WhatsappConnection.webhookTokenHash` desde o Ciclo 2a,
+   *   ver o comentário lá) — não depende deste proxy pra
    *   segurança. **Invariante que este subdiretório carrega**: tudo sob
    *   `/api/whatsapp/*` é público por definição, então toda rota nova
    *   criada ali precisa se autenticar sozinha, e NENHUMA rota que leia
    *   dado do CRM (lead, contato, conversa, etc.) pode morar ali — só
    *   ingestão/saída de WhatsApp.
-   * - api/queues (mesma fatia): consumidor da fila
-   *   (`/api/queues/whatsapp-turn/route.ts`), invocado pela infraestrutura
-   *   de fila da Vercel, também sem sessão de usuário. Confirmado
+   * - api/queues: o TICK da fila (`/api/queues/whatsapp-turn/route.ts`), que
+   *   drena os turnos pendentes. Não tem sessão de usuário. Confirmado
    *   empiricamente que o proxy também interceptava este path antes desta
-   *   exceção (mesmo teste de regex acima). Seguro mesmo sem token
-   *   próprio — ao contrário de `/api/whatsapp/*`, este path não tem
-   *   nenhum ponto de entrada alcançável de fora (não está atrás de nenhum
-   *   link, formulário ou documentação pública; só a própria Vercel invoca
-   *   -- ver plano da Fatia 1, seção "Verificação").
+   *   exceção (mesmo teste de regex acima). Até o Ciclo 2d ele era um
+   *   consumidor de push do Vercel Queues e a garantia era de REDE — a
+   *   plataforma mantinha a rota air-gapped da internet, e este comentário
+   *   dizia que "só a própria Vercel invoca". Fora da Vercel essa garantia não
+   *   existe mais, e a frase teria virado mentira no mesmo commit. Hoje a rota
+   *   **se autentica sozinha**, com um segredo em cabeçalho comparado em tempo
+   *   constante (`@/lib/segredo`), e responde 404 a quem não tem — mesma
+   *   resposta que o webhook dá, pelo mesmo motivo.
+   *
+   *   **Invariante que este subdiretório passa a carregar**, igual ao de
+   *   `/api/whatsapp/*`: tudo sob `/api/queues/*` é público por definição, e
+   *   toda rota nova criada ali precisa se autenticar sozinha.
    * - _next/static, _next/image: assets internos do Next.
    * - arquivos estáticos de primeiro nível (favicon.ico, public/*.svg
    *   etc.): usa `[^/]+\.ext$`, não `.*\.ext$`. `.*` combina com qualquer

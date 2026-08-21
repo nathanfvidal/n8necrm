@@ -4,7 +4,7 @@ import { notFound } from "next/navigation";
 import { usuarioAtualOuLogin } from "@/core/auth/session";
 import { hasPermission } from "@/core/auth/permissions";
 import { buscarContatoComHistorico } from "@/core/contacts/queries";
-import { moduloAtivo } from "@/lib/module-gate";
+import { moduloAtivo } from "@/core/config/modulos";
 import { listarConversasDoContato } from "@/modules/whatsapp/queries";
 import { ContactForm } from "@/components/contacts/contact-form";
 import { EmptyState } from "@/components/empty-state";
@@ -22,9 +22,11 @@ import { formatarDataHoraBR } from "@/lib/date";
  * lados, e é o lugar certo para costurar os dois.
  *
  * O import de `@/modules/whatsapp/queries` é ESTÁTICO e a chamada é
- * condicional. Num fork com o módulo desligado, o código continua no bundle
- * do servidor mas a tabela nunca é consultada e a seção não aparece — que é o
- * comportamento que importa. Import dinâmico só para evitar código morto no
+ * condicional. Numa empresa com o módulo desligado (`CompanyConfig.modulos`,
+ * Ciclo 1c), o código continua no bundle do servidor mas a tabela nunca é
+ * consultada e a seção não aparece — que é o comportamento que importa. Import
+ * dinâmico não é alternativa aqui nem em teoria: o módulo ligado ou desligado
+ * passou a ser dado de requisição, não de build. Import dinâmico só para evitar código morto no
  * servidor não pagaria a complexidade.
  */
 export default async function ContatoPage({ params }: { params: Promise<{ id: string }> }) {
@@ -36,16 +38,27 @@ export default async function ContatoPage({ params }: { params: Promise<{ id: st
   const podeVerDocumento = hasPermission(usuario.papel, "ver_documento_contato");
 
   const { id } = await params;
-  const contato = await buscarContatoComHistorico(id, { incluirDocumento: podeVerDocumento });
+  // `usuario.companyId` e não o id da rota como única chave: `id` vem da URL e
+  // é forjável. As duas travas são INDEPENDENTES — `podeVerDocumento` decide
+  // se o CPF/CNPJ sai dentro da empresa, e `companyId` decide se o contato é
+  // alcançável. Contato de outra empresa devolve `null` mesmo para quem tem a
+  // permissão, e a página cai no mesmo `notFound()` de um id inexistente.
+  const contato = await buscarContatoComHistorico(usuario.companyId, id, {
+    incluirDocumento: podeVerDocumento,
+  });
   if (!contato) notFound();
 
-  const mostrarConversas = moduloAtivo("whatsapp");
-  const conversas = mostrarConversas ? await listarConversasDoContato(contato.id) : [];
+  const mostrarConversas = await moduloAtivo(usuario.companyId, "whatsapp");
+  const conversas = mostrarConversas ? await listarConversasDoContato(usuario.companyId, contato.id) : [];
 
   return (
     <div className="space-y-6 p-6">
       <div>
-        <Link href="/contatos" className="text-sm text-muted-foreground hover:underline">
+        {/* `prefetch={false}` vale para TODO `<Link>` do painel, não só para os
+            de `<nav>`: a pré-busca leva o cookie de sessão ao servidor e o
+            Auth.js o reemite, que é o defeito de logout de `0a81737`
+            (AGENTS.md). Cobrado por `tests/unit/prefetch-do-painel.test.ts`. */}
+        <Link href="/contatos" prefetch={false} className="text-sm text-muted-foreground hover:underline">
           ← Contatos
         </Link>
         <h1 className="text-xl font-semibold">{contato.nome}</h1>
@@ -86,7 +99,7 @@ export default async function ContatoPage({ params }: { params: Promise<{ id: st
               {contato.leads.map((lead) => (
                 <tr key={lead.id} className="border-b hover:bg-muted/40">
                   <td className="py-2">
-                    <Link href={`/leads/${lead.id}`} className="text-primary underline">
+                    <Link href={`/leads/${lead.id}`} prefetch={false} className="text-primary underline">
                       {lead.etapaNome}
                     </Link>
                     {/* Sem esta marca a pessoa vê um lead que não existe mais
@@ -119,7 +132,11 @@ export default async function ContatoPage({ params }: { params: Promise<{ id: st
             <ul className="space-y-1 text-sm">
               {conversas.map((conversa) => (
                 <li key={conversa.id} className="flex items-center gap-3 border-b py-2">
-                  <Link href={`/conversas/${conversa.id}`} className="text-primary underline">
+                  <Link
+                    href={`/conversas/${conversa.id}`}
+                    prefetch={false}
+                    className="text-primary underline"
+                  >
                     {/* Mesma cadeia de fallback da inbox: a Evolution nem
                         sempre manda o nome do perfil, e o telefone só é
                         gravado quando o número é reconhecido como brasileiro. */}

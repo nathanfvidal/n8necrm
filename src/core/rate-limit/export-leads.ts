@@ -28,7 +28,10 @@ import { checarRateLimit } from "./limiter";
  *
  * Exportar é ato deliberado que termina numa planilha aberta na mão de
  * alguém — não existe consumidor automático legítimo: a suíte e2e não toca
- * esta rota e `vercel.json` não declara nenhum cron que a chame. A maior
+ * esta rota e não há agendador nenhum apontado para ela. O único gatilho
+ * automático deste projeto é o da fila de turnos
+ * (`/api/queues/whatsapp-turn`, drenado por `npm run fila:worker` ou por um
+ * agendador que o dono ligue), e ele não exporta lead nenhum. A maior
  * rajada legítima imaginável é alguém exportar, ver que filtrou errado e
  * exportar de novo; isso é um punhado, não uma dezena.
  *

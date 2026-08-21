@@ -16,6 +16,7 @@ vi.mock("server-only", () => ({}));
 import { prisma } from "../../src/lib/prisma";
 import { criarTask, concluirTask } from "../../src/core/tasks/service";
 import { listarTasksPendentesDoLead } from "../../src/core/tasks/queries";
+import { usuarioDoSeed } from "./helpers/usuarios-do-seed";
 
 const PREFIXO_TESTE = "[teste-task-queries] ";
 
@@ -27,19 +28,24 @@ describe("listarTasksPendentesDoLead", () => {
   let adminId: string;
   let vendedorId: string;
   let leadId: string;
+  let companyId: string;
 
   beforeAll(async () => {
     await limparDadosDeTeste();
 
-    const admin = await prisma.user.findFirstOrThrow({ where: { papel: "ADMIN", ativo: true } });
-    adminId = admin.id;
-    const vendedor = await prisma.user.findFirstOrThrow({ where: { papel: "VENDEDOR", ativo: true } });
-    vendedorId = vendedor.id;
+    adminId = (await usuarioDoSeed("ADMIN")).id;
+    vendedorId = (await usuarioDoSeed("VENDEDOR")).id;
 
     // Lead real do seed — não criamos um lead novo aqui pelo mesmo motivo
     // documentado em tasks.test.ts.
+    // A empresa do lead do seed. As sete funcoes publicas de `tasks/` passaram a
+    // receber `companyId` no Ciclo 1d, e a origem em producao e sempre
+    // `usuarioAtual().companyId` (`core/tasks/actions.ts`). Aqui ela vem do
+    // proprio dado da fixture, que e o equivalente honesto: o admin e o
+    // vendedor do seed tem `Membership` nesta mesma empresa.
     const lead = await prisma.lead.findFirstOrThrow();
     leadId = lead.id;
+    companyId = lead.companyId;
   });
 
   afterAll(limparDadosDeTeste);
@@ -50,19 +56,21 @@ describe("listarTasksPendentesDoLead", () => {
       "já tinha um lembrete agendado para o mesmo lead (risco de contato duplicado com o cliente)",
     async () => {
       const doAdmin = await criarTask({
+        companyId,
         titulo: `${PREFIXO_TESTE}Ligar para Fernanda às 15h`,
         vencimento: new Date(Date.now() + 86_400_000),
         responsavelId: adminId,
         leadId,
       });
       const doVendedor = await criarTask({
+        companyId,
         titulo: `${PREFIXO_TESTE}Enviar proposta`,
         vencimento: new Date(Date.now() + 86_400_000),
         responsavelId: vendedorId,
         leadId,
       });
 
-      const tarefas = await listarTasksPendentesDoLead(leadId);
+      const tarefas = await listarTasksPendentesDoLead(companyId, leadId);
       const ids = tarefas.map((t) => t.id);
 
       expect(ids).toContain(doAdmin.id);
@@ -72,13 +80,14 @@ describe("listarTasksPendentesDoLead", () => {
 
   it("cada tarefa vem com `responsavel` (id/nome) incluído — é o que permite a UI mostrar de quem é cada uma", async () => {
     const task = await criarTask({
+      companyId,
       titulo: `${PREFIXO_TESTE}Tarefa com responsavel incluido`,
       vencimento: new Date(Date.now() + 86_400_000),
       responsavelId: vendedorId,
       leadId,
     });
 
-    const tarefas = await listarTasksPendentesDoLead(leadId);
+    const tarefas = await listarTasksPendentesDoLead(companyId, leadId);
     const encontrada = tarefas.find((t) => t.id === task.id);
 
     expect(encontrada?.responsavel).toBeTruthy();
@@ -91,27 +100,29 @@ describe("listarTasksPendentesDoLead", () => {
 
   it("não devolve tarefa já concluída", async () => {
     const task = await criarTask({
+      companyId,
       titulo: `${PREFIXO_TESTE}Tarefa que será concluída`,
       vencimento: new Date(Date.now() + 86_400_000),
       responsavelId: adminId,
       leadId,
     });
-    await concluirTask({ taskId: task.id, autorId: adminId });
+    await concluirTask({ companyId, taskId: task.id, autorId: adminId });
 
-    const tarefas = await listarTasksPendentesDoLead(leadId);
+    const tarefas = await listarTasksPendentesDoLead(companyId, leadId);
     expect(tarefas.map((t) => t.id)).not.toContain(task.id);
   });
 
   it("não devolve tarefa vinculada a OUTRO lead", async () => {
     const outroLead = await prisma.lead.findFirstOrThrow({ where: { id: { not: leadId } } });
     const taskDeOutroLead = await criarTask({
+      companyId,
       titulo: `${PREFIXO_TESTE}Tarefa de outro lead`,
       vencimento: new Date(Date.now() + 86_400_000),
       responsavelId: adminId,
       leadId: outroLead.id,
     });
 
-    const tarefas = await listarTasksPendentesDoLead(leadId);
+    const tarefas = await listarTasksPendentesDoLead(companyId, leadId);
     expect(tarefas.map((t) => t.id)).not.toContain(taskDeOutroLead.id);
   });
 });

@@ -13,7 +13,7 @@ import bcrypt from "bcryptjs";
 
 import { prisma } from "../src/lib/prisma";
 import { client } from "../config/client";
-import { BOT_CONFIG_ID, botConfig } from "../config/bot";
+import { botConfig } from "../config/bot";
 import { ID_SISTEMA_WHATSAPP } from "../src/core/users/sistema";
 
 // Id estável e legível (não um cuid gerado) — Fatia 1 do WhatsApp
@@ -64,18 +64,67 @@ const CORES = ["#94a3b8", "#60a5fa", "#fbbf24", "#f97316", "#22c55e"];
  *   etapa ficou com `ehGanho: true` (fix round 1/5: encolher o funil sem
  *   isso deixava a etapa removida órfã com `ehGanho: true` para sempre,
  *   fazendo `ehGanho` apontar para duas etapas ao mesmo tempo).
+ * - CompanyConfig: uma linha por empresa, criada só quando não existe
+ *   (`Company` não tem chave natural, então também não há `upsert` aqui). Nasce
+ *   com `modulos` e com as colunas de marca NULAS — ver o comentário no corpo.
  * - User: upsert por `email` (único no schema). `senhaHash` só é regravado
  *   numa reexecução quando `SEED_PASSWORD` está explicitamente definida (ver
  *   comentário junto a `senhaPlanoExplicita` abaixo) — fix round 1/5: antes
  *   `update: {}` nunca regravava o hash, então `SEED_PASSWORD` definida
  *   depois do primeiro seed não tinha efeito nenhum e a senha antiga
  *   continuava válida.
- * - Contact: upsert por `telefone` (único no schema).
+ * - Contact: upsert por `[companyId, telefone]` (a chave composta do Ciclo 1e).
  * - Lead: não tem chave natural única no schema. Para não duplicar a cada
  *   execução, só cria um Lead para o contato se ainda não existir nenhum
  *   apontando para ele.
  */
 export async function seed(): Promise<void> {
+  // Empresa única do Ciclo 1a (a UI continua servindo uma empresa só — ver
+  // decisão 4 do spec de tenancy). `Company` não tem chave natural (nome não
+  // é `@unique` no schema — duas empresas podem legitimamente ter o mesmo
+  // nome), então não dá para fazer `upsert`. A idempotência aqui é "existe
+  // alguma? usa essa. não existe nenhuma? cria UMA" — mesmo padrão do funil
+  // logo abaixo (`quantasEtapasExistem === 0`): sem isso, rodar o seed duas
+  // vezes criaria uma segunda empresa a cada execução.
+  const empresaExistente = await prisma.company.findFirst();
+  const empresa = empresaExistente ?? (await prisma.company.create({ data: { nome: client.nome } }));
+
+  // A configuração por empresa nasce com os MÓDULOS e SÓ com eles.
+  //
+  // Mesma regra de instalação de `semearBotConfig` e do funil logo abaixo:
+  // existe? deixa como está. Não existe? cria UMA. O seed é SEMENTE, não
+  // reconciliador — o `upsert` por `ordem` que morava aqui para as etapas virou
+  // destrutivo no dia em que `/etapas` existiu, renomeando etapa criada pela
+  // tela. `tests/unit/seed.test.ts` ("é idempotente na config") grava uma cor
+  // entre duas execuções e exige que ela sobreviva à segunda.
+  //
+  // As colunas de MARCA ficam NULAS de propósito, e nulo significa "não decidi,
+  // usa o padrão de config/client.ts" (`mesclarConfig`, em
+  // src/core/config/schema.ts, sobrepõe campo a campo e ignora nulo). A decisão
+  // 8 do spec do programa mantém a identidade do produto EM ABERTO; gravar a
+  // cor atual do arquivo aqui congelaria essa não-decisão no banco, e a partir
+  // daí editar o arquivo deixaria de ter efeito para esta empresa, em silêncio.
+  //
+  // `modulos` é diferente porque não TEM estado nulo: lista escalar no Prisma
+  // nunca é nula (citação do client gerado em `LinhaDeConfig`,
+  // src/core/config/schema.ts), e por isso a regra dela é "se a linha existe,
+  // ela manda". Semear com `client.modulos` mantém o comportamento idêntico ao
+  // de antes deste ciclo e é o que põe o caminho de banco em uso de verdade na
+  // aplicação — em vez de deixar uma tabela criada e nunca lida.
+  //
+  // `findUnique` por `companyId`, e não `findFirst`: `@@unique([companyId])` no
+  // schema faz do campo uma chave única aos olhos do Prisma — é a mesma leitura
+  // que `semearBotConfig` faz sobre a mesma constraint, lá embaixo.
+  const configExistente = await prisma.companyConfig.findUnique({
+    where: { companyId: empresa.id },
+    select: { id: true },
+  });
+  if (!configExistente) {
+    await prisma.companyConfig.create({
+      data: { companyId: empresa.id, modulos: [...client.modulos] },
+    });
+  }
+
   // O funil só nasce do config na PRIMEIRA vez. Depois disso quem manda é o
   // banco, porque `/etapas` (ADMIN) cria, renomeia, recolore, reordena e
   // remove etapa.
@@ -85,11 +134,18 @@ export async function seed(): Promise<void> {
   // tela existiu: renomearia "Negociação" para "Fechado" e recoloriria por
   // índice. `client.funil` virou SEMENTE de instalação, e é isso que permite
   // um fork nascer com o funil dele.
+  // SEM `where: { companyId }`, e isso é dívida DECLARADA, não esquecimento:
+  // ⚠️ D2-a do spec do Ciclo 1e (§4.2.1, item 7). Este seed cria/encontra UMA
+  // empresa (`empresaExistente ?? create` acima), então "existe etapa no
+  // banco?" e "existe etapa desta empresa?" são hoje a mesma pergunta. No dia
+  // em que o seed semear uma segunda empresa, ele pulará o funil dela — e é
+  // esse dia o gatilho para escopar aqui.
   const quantasEtapasExistem = await prisma.pipelineStage.count();
   if (quantasEtapasExistem === 0) {
     for (const [index, nome] of client.funil.entries()) {
       await prisma.pipelineStage.create({
         data: {
+          companyId: empresa.id,
           nome,
           ordem: index,
           cor: CORES[index % CORES.length],
@@ -119,40 +175,69 @@ export async function seed(): Promise<void> {
   // passada — o objetivo é rotacionar a senha de verdade quando alguém pede
   // isso deliberadamente, sem reescrever o hash (com salt novo, toda vez)
   // numa reexecução comum onde ninguém pediu troca nenhuma.
-  const senhaPlanoExplicita = process.env.SEED_PASSWORD;
+  //
+  // `|| undefined`, não `??` (incidente registrado em
+  // docs/auditorias/2026-08-19-ciclo-0-fundacao.md): uma `SEED_PASSWORD=""`
+  // deixada num `.env` preenchido pela metade chega como string vazia
+  // DEFINIDA, e `??` só cai no fallback para `null`/`undefined` — o admin
+  // nasceria com `bcrypt("")` e uma reexecução de rotina regravaria a senha
+  // já rotacionada por esse hash. String vazia vinda do ambiente precisa
+  // contar como "não definida", nunca como "senha vazia deliberada".
+  const senhaPlanoExplicita = process.env.SEED_PASSWORD || undefined;
   const senhaPlano = senhaPlanoExplicita ?? "senha123";
   const senhaHash = await bcrypt.hash(senhaPlano, 10);
   const atualizarSenhaNaReexecucao = senhaPlanoExplicita !== undefined;
 
+  // O papel vai SÓ para `vincularAEmpresa`, que grava no `Membership`. A
+  // coluna espelho `User.papel` foi escrita aqui em dual-write entre
+  // 2026-08-19 e 2026-08-21, como ponte para leitores que o DROP do Ciclo 1a
+  // revelou tarde demais; o Ciclo 1f migrou todos e o seed é o último escritor
+  // a sair, junto com `core/users/service.ts`. O vínculo é a única fonte, e é
+  // de lá que aquele módulo e `usuarioAtual()` leem.
   const admin = await prisma.user.upsert({
     where: { email: "admin@exemplo.com" },
     update: atualizarSenhaNaReexecucao ? { senhaHash } : {},
-    create: { nome: "Admin Exemplo", email: "admin@exemplo.com", senhaHash, papel: "ADMIN" },
+    create: { nome: "Admin Exemplo", email: "admin@exemplo.com", senhaHash },
   });
+  await vincularAEmpresa(admin.id, empresa.id, "ADMIN");
 
   const vendedor = await prisma.user.upsert({
     where: { email: "vendedor@exemplo.com" },
     update: atualizarSenhaNaReexecucao ? { senhaHash } : {},
-    create: { nome: "Vendedor Exemplo", email: "vendedor@exemplo.com", senhaHash, papel: "VENDEDOR" },
+    create: { nome: "Vendedor Exemplo", email: "vendedor@exemplo.com", senhaHash },
   });
+  await vincularAEmpresa(vendedor.id, empresa.id, "VENDEDOR");
 
-  await semearUsuarioSistemaWhatsapp();
-  await semearBotConfig();
+  await semearUsuarioSistemaWhatsapp(empresa.id);
+  await semearBotConfig(empresa.id);
 
-  const primeiraEtapa = await prisma.pipelineStage.findFirstOrThrow({ orderBy: { ordem: "asc" } });
+  // `where: { companyId }`, e não a etapa de menor `ordem` do banco inteiro:
+  // desde o Ciclo 1e a `ordem` é única POR EMPRESA, então "a menor do banco"
+  // deixou de coincidir com "a menor desta empresa". Sem o filtro, os leads de
+  // demonstração nasceriam na etapa de outra empresa no dia em que existir uma.
+  const primeiraEtapa = await prisma.pipelineStage.findFirstOrThrow({
+    where: { companyId: empresa.id },
+    orderBy: { ordem: "asc" },
+  });
 
   const nomes = ["Carlos Silva", "Fernanda Lima", "João Pereira", "Marina Costa"];
   for (let i = 0; i < nomes.length; i++) {
     const contact = await prisma.contact.upsert({
-      where: { telefone: `1199999000${i}` },
+      // `companyId_telefone`, e não `telefone`: desde o Ciclo 1e a chave única
+      // é composta (`@@unique([companyId, telefone])`), e o `telefone` sozinho
+      // deixou de existir em `ContactWhereUniqueInput`. Prisma cru aqui é
+      // legítimo — `prisma/seed*.ts` está fora do alcance da catraca por
+      // decisão escrita (`tests/unit/catraca-prisma-cru.test.ts:71`).
+      where: { companyId_telefone: { companyId: empresa.id, telefone: `1199999000${i}` } },
       update: {},
-      create: { nome: nomes[i], telefone: `1199999000${i}` },
+      create: { companyId: empresa.id, nome: nomes[i], telefone: `1199999000${i}` },
     });
 
     const leadExistente = await prisma.lead.findFirst({ where: { contactId: contact.id } });
     if (!leadExistente) {
       await prisma.lead.create({
         data: {
+          companyId: empresa.id,
           contactId: contact.id,
           stageId: primeiraEtapa.id,
           responsavelId: i % 2 === 0 ? admin.id : vendedor.id,
@@ -163,6 +248,32 @@ export async function seed(): Promise<void> {
   }
 
   console.log("Seed concluído.");
+}
+
+/**
+ * Cria (ou confirma) o `Membership` de um usuário com a empresa semeada, com
+ * o `papel` que o chamador passa. O vínculo é a ÚNICA fonte do papel, então
+ * quem chama esta função decide o literal, em vez de reler a linha de `User`.
+ *
+ * A coluna `User.papel` foi derrubada no Ciclo 1a e RESTAURADA no mesmo ciclo,
+ * quando o DROP revelou leitores tarde demais; este docstring afirmava que ela
+ * já não existia e ficou errado nesse intervalo. O Ciclo 1f tirou o último
+ * escritor (nem este arquivo, nem `core/users/service.ts` a escrevem) e então
+ * a derrubou do banco e do schema, em
+ * `20260821130000_derruba_user_papel_de_vez`. A frase voltou a ser verdadeira,
+ * e agora é `tests/unit/user-papel-nao-volta.test.ts` quem a sustenta.
+ *
+ * `upsert` por `userId_companyId` (a chave de `@@unique([userId, companyId])`)
+ * em vez de "existe? não cria de novo": mesma forma que o resto deste arquivo
+ * usa para idempotência, e cobre o caso de alguém rodar o seed depois de MUDAR
+ * `papel` no código de um usuário de exemplo — o vínculo acompanha.
+ */
+async function vincularAEmpresa(userId: string, companyId: string, papel: "ADMIN" | "GESTOR" | "VENDEDOR"): Promise<void> {
+  await prisma.membership.upsert({
+    where: { userId_companyId: { userId, companyId } },
+    update: { papel },
+    create: { userId, companyId, papel },
+  });
 }
 
 /**
@@ -222,44 +333,62 @@ async function confirmarInvarianteEhGanho(): Promise<void> {
  * silenciosamente algo que dependesse dele permanecer estável entre
  * execuções (nada depende hoje, mas não há motivo para reescrever à toa).
  */
-async function semearUsuarioSistemaWhatsapp(): Promise<void> {
+async function semearUsuarioSistemaWhatsapp(companyId: string): Promise<void> {
   const existente = await prisma.user.findUnique({ where: { id: WHATSAPP_SYSTEM_USER_ID } });
-  if (existente) return;
+  if (existente) {
+    // Já existia (banco semeado antes desta tarefa, por exemplo): ainda
+    // assim precisa ter Membership, senão vira o único User sem vínculo —
+    // exatamente o estado que `usuarioAtual()` trata como sessão inválida.
+    // Este usuário nunca autentica (ver `ativo: false` abaixo), mas ficar sem
+    // Membership o deixaria fora da invariante que a migração da Task 2
+    // conferiu antes de derrubar `User.papel`. "ADMIN" é literal, não lido de
+    // `existente.papel` — mesmo a coluna tendo sido restaurada (dual-write,
+    // ver comentário acima), este sistema sempre foi ADMIN (docstring da
+    // constante em `sistema.ts`), e não há motivo para reler o que já se sabe.
+    await vincularAEmpresa(existente.id, companyId, "ADMIN");
+    return;
+  }
 
   const senhaAleatoriaDescartada = crypto.randomBytes(32).toString("hex");
   const senhaHash = await bcrypt.hash(senhaAleatoriaDescartada, 10);
 
-  await prisma.user.create({
+  const sistema = await prisma.user.create({
     data: {
       id: WHATSAPP_SYSTEM_USER_ID,
       nome: "Atendente WhatsApp (sistema)",
       email: "whatsapp-bot@sistema.invalid",
       senhaHash,
-      papel: "ADMIN",
       ativo: false,
     },
   });
+  await vincularAEmpresa(sistema.id, companyId, "ADMIN");
 }
 
 /**
- * Semeia a linha única de `BotConfig` a partir de `config/bot.ts`.
+ * Semeia a linha de `BotConfig` DESTA empresa a partir de `config/bot.ts`.
  *
- * Cria se não existe; NUNCA atualiza. O seed roda em todo deploy — um upsert
- * aqui desfaria, silenciosamente, toda edição feita pelo CRM desde o deploy
- * anterior. Mesmo raciocínio de `semearUsuarioSistemaWhatsapp` logo acima, e
- * deliberadamente DIFERENTE do upsert usado para `PipelineStage`: aquelas são
- * estrutura definida pelo fork, esta é conteúdo editável pelo usuário.
+ * Cria se não existe (para esta `companyId`); NUNCA atualiza. O seed roda em
+ * todo deploy — um upsert aqui desfaria, silenciosamente, toda edição feita
+ * pelo CRM desde o deploy anterior. Mesmo raciocínio de
+ * `semearUsuarioSistemaWhatsapp` logo acima, e deliberadamente DIFERENTE do
+ * upsert usado para `PipelineStage`: aquelas são estrutura definida pelo
+ * fork, esta é conteúdo editável pelo usuário.
+ *
+ * Busca por `companyId` (a chave de `@@unique([companyId])`), não mais por
+ * `id` — `BotConfig.id` deixou de ter valor constante nesta tarefa (Ciclo 1a:
+ * config por empresa quebra o truque de linha única por PK fixa). `BOT_CONFIG_ID`
+ * de `config/bot.ts` não é mais lido aqui.
  *
  * Para voltar ao conteúdo do arquivo existe um caminho explícito: o botão
  * "voltar ao padrão do fork" na tela do agente.
  */
-export async function semearBotConfig(): Promise<void> {
-  const existente = await prisma.botConfig.findUnique({ where: { id: BOT_CONFIG_ID } });
+export async function semearBotConfig(companyId: string): Promise<void> {
+  const existente = await prisma.botConfig.findUnique({ where: { companyId } });
   if (existente) return;
 
   await prisma.botConfig.create({
     data: {
-      id: BOT_CONFIG_ID,
+      companyId,
       personaNome: botConfig.persona.nome,
       personaPapel: botConfig.persona.papel,
       regras: botConfig.regras,

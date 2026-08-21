@@ -8,7 +8,7 @@
 // nenhum teste de status HTTP percebe. A única verificação que vale é abrir
 // cada página num navegador e ler o console.
 import "dotenv/config";
-import { PrismaClient } from "@prisma/client";
+import { type Prisma, PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { test, expect, type Page } from "@playwright/test";
 import { EMAIL_ADMIN_E2E, SESSAO_ADMIN, senhaE2e } from "./credenciais";
@@ -18,10 +18,54 @@ const prisma = new PrismaClient({
 });
 
 /**
- * Telefone exclusivo deste arquivo — não colide com nenhum outro prefixo em
- * uso (ver a lista em `tests/unit/stage-transition.test.ts`).
+ * Faixa de telefone reservada a este arquivo, e o telefone DESTE WORKER
+ * dentro dela.
+ *
+ * ## Por que não pode ser um literal
+ *
+ * `test.beforeAll` roda uma vez por WORKER, não por arquivo, e
+ * `playwright.config.ts` tem `fullyParallel: true` com `workers: 3`. Com
+ * telefone fixo, o segundo worker a chegar recebia:
+ *
+ *     Invalid `prisma.contact.create()` invocation
+ *     Unique constraint failed on the fields: (`telefone`)
+ *
+ * Não era instabilidade: `--workers=1` dava 22 verdes SEMPRE, e qualquer
+ * execução focada deste arquivo dava vermelho SEMPRE. Na suíte inteira o
+ * defeito ficava invisível porque a distribuição costumava concentrar os seis
+ * casos num worker só.
+ *
+ * ## E o Ciclo 1e NÃO tornou isto desnecessário
+ *
+ * O comentário anterior culpava `Contact.telefone` ser `@unique` GLOBAL. Desde
+ * o Ciclo 1e a chave é `@@unique([companyId, telefone])` — e os três workers
+ * gravam na MESMA empresa (a do seed). Um telefone literal colidiria
+ * exatamente igual. Reverter esta montagem para um literal reabre a quebra;
+ * esta seção existe para que ninguém "limpe" isso achando que a composição
+ * resolveu.
+ *
+ * ## Como o valor é montado
+ *
+ * `1193777` identifica o arquivo · `E2E_ID_EXECUCAO` (2 dígitos, posto por
+ * `global-setup.ts` no processo pai e herdado por todo worker) identifica a
+ * EXECUÇÃO · `TEST_PARALLEL_INDEX` (2 dígitos, posto pelo Playwright em cada
+ * worker — `node_modules/playwright/lib/worker/workerProcessEntry.js`)
+ * identifica o WORKER. Onze dígitos no total, o mesmo formato dos demais
+ * telefones de fixture.
+ *
+ * A faixa `1193333xxxx` que este arquivo usava ANTES não era exclusiva, ao
+ * contrário do que o comentário afirmava: `tests/unit/lead-isolamento.test.ts`
+ * grava `11933330001`, o mesmo valor, byte a byte. Vitest e Playwright não
+ * rodam juntos hoje (regra do projeto), então a colisão nunca se manifestou —
+ * mas a frase "não colide com nenhum outro prefixo em uso" era falsa quando
+ * foi escrita e apontava para um arquivo, `tests/unit/stage-transition.test.ts`,
+ * que não tem lista nenhuma. Ela foi trocada por esta faixa, verificada em
+ * 2026-08-20 contra todo `TELEFONE* = "..."` de `tests/`.
  */
-const TELEFONE_TESTE = "11933330001";
+const PREFIXO_TELEFONE = "1193777";
+const ID_DA_EXECUCAO = (process.env.E2E_ID_EXECUCAO ?? "00").padStart(2, "0").slice(-2);
+const SLOT_DO_WORKER = (process.env.TEST_PARALLEL_INDEX ?? "0").padStart(2, "0").slice(-2);
+const TELEFONE_TESTE = `${PREFIXO_TELEFONE}${ID_DA_EXECUCAO}${SLOT_DO_WORKER}`;
 const NOME_TESTE = "E2E CSP Detalhe";
 
 /**
@@ -46,15 +90,21 @@ const NOME_TESTE = "E2E CSP Detalhe";
  * motivo que não é o dele.
  */
 test.beforeAll(async () => {
+  await varrerResiduoDeExecucoesAnteriores();
   await limparDadosDeTeste();
 
   const etapa = await prisma.pipelineStage.findFirstOrThrow({ orderBy: { ordem: "asc" } });
   const responsavel = await prisma.user.findFirstOrThrow({ where: { email: EMAIL_ADMIN_E2E } });
+  // Empresa única do Ciclo 1a (mesma suposição de `prisma/seed.ts`, que
+  // criou tanto ela quanto o admin/vendedor de e2e usados aqui) — não há
+  // seletor de empresa na sessão e2e, então é a única Company do banco.
+  const empresa = await prisma.company.findFirstOrThrow();
   const contato = await prisma.contact.create({
-    data: { nome: NOME_TESTE, telefone: TELEFONE_TESTE },
+    data: { companyId: empresa.id, nome: NOME_TESTE, telefone: TELEFONE_TESTE },
   });
   await prisma.lead.create({
     data: {
+      companyId: empresa.id,
       contactId: contato.id,
       stageId: etapa.id,
       responsavelId: responsavel.id,
@@ -68,11 +118,45 @@ test.afterAll(async () => {
   await prisma.$disconnect();
 });
 
+/**
+ * Apaga o contato e o lead DESTE worker, e só eles.
+ *
+ * `afterAll` do Playwright roda mesmo quando um teste falha ou estoura o
+ * tempo — é a razão de a limpeza morar num hook e não num `finally` dentro do
+ * caso.
+ */
 async function limparDadosDeTeste(): Promise<void> {
-  const contato = await prisma.contact.findUnique({ where: { telefone: TELEFONE_TESTE } });
-  if (!contato) return;
+  await apagarContatos({ telefone: TELEFONE_TESTE });
+}
 
-  const leads = await prisma.lead.findMany({ where: { contactId: contato.id } });
+/**
+ * Apaga o que execuções ANTERIORES da suíte deixaram nesta faixa.
+ *
+ * A varredura é por prefixo do arquivo, EXCLUINDO o carimbo desta execução:
+ * qualquer linha `1193777…` que não seja desta execução é, por construção,
+ * resíduo de uma execução que morreu antes do `afterAll`. Sem o `NOT`, o
+ * `beforeAll` do segundo worker apagaria o contato que o primeiro acabou de
+ * criar e ainda está usando — trocaria um defeito de paralelismo por outro.
+ *
+ * Isto existe porque o telefone é único por execução: sem varredura, cada
+ * execução interrompida deixaria uma linha para sempre, e o banco de
+ * desenvolvimento é compartilhado.
+ */
+async function varrerResiduoDeExecucoesAnteriores(): Promise<void> {
+  await apagarContatos({
+    telefone: {
+      startsWith: PREFIXO_TELEFONE,
+      not: { startsWith: `${PREFIXO_TELEFONE}${ID_DA_EXECUCAO}` },
+    },
+  });
+}
+
+async function apagarContatos(onde: Prisma.ContactWhereInput): Promise<void> {
+  const contatos = await prisma.contact.findMany({ where: onde, select: { id: true } });
+  if (contatos.length === 0) return;
+  const contatoIds = contatos.map((contato) => contato.id);
+
+  const leads = await prisma.lead.findMany({ where: { contactId: { in: contatoIds } } });
   const leadIds = leads.map((lead) => lead.id);
 
   if (leadIds.length > 0) {
@@ -89,7 +173,7 @@ async function limparDadosDeTeste(): Promise<void> {
     await prisma.lead.deleteMany({ where: { id: { in: leadIds } } });
   }
 
-  await prisma.contact.deleteMany({ where: { telefone: TELEFONE_TESTE } });
+  await prisma.contact.deleteMany({ where: { id: { in: contatoIds } } });
 }
 
 const CREDENCIAIS = { email: EMAIL_ADMIN_E2E, senha: senhaE2e() };
