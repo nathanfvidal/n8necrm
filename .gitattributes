@@ -1,0 +1,12 @@
+# Tudo em deploy/ e consumido por um Linux, extraido por `git archive` numa
+# VPS. Um CR no fim da linha do shebang faz o kernel procurar um interpretador
+# chamado "bash\r" e responder "bad interpreter: /usr/bin/env bash^M" -- erro
+# que nao diz o que aconteceu e nao se reproduz em maquina nenhuma de
+# desenvolvimento.
+#
+# Hoje isto e redundante: `core.autocrlf=true` desta maquina ja normaliza para
+# LF na gravacao do blob (conferido em 2026-08-21 com `git cat-file -p`), e
+# `git archive` entrega o blob como esta. E redundancia barata contra uma
+# configuracao de git que ninguem lembra de conferir.
+deploy/** text eol=lf
+*.sh text eol=lf
