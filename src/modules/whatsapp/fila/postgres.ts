@@ -1,7 +1,8 @@
 // Sem `import "server-only"` aqui, de propósito — a marcação fica em
 // `./index.ts`, mesmo padrão de `gateway/evolution.ts` e do adaptador da Vercel
-// (`./vercel.ts`, que este substitui e que continua vivo até a tarefa de
-// contração). `tests/unit/fila-postgres.test.ts` importa deste arquivo direto,
+// que este substituiu (`./vercel.ts`, apagado na contração do Ciclo 2d — a
+// frase anterior dizia "continua vivo até a tarefa de contração", e a contração
+// aconteceu). `tests/unit/fila-postgres.test.ts` importa deste arquivo direto,
 // e o `server-only` aqui quebraria esse import sob Vitest — a mesma divisão que
 // `./tipos.ts` documenta para o contrato.
 import { prismaDaEmpresa } from "@/core/tenancy/escopo";

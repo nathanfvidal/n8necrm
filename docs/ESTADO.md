@@ -58,8 +58,8 @@ Entre em `http://localhost:3000/login`.
 
 | conta | senha |
 |---|---|
-| `admin@exemplo.com` | `uBT2XKTPNqYC3k40yYysFHXhDNpEOvEo` |
-| `vendedor@exemplo.com` | `+3wi9uKIrqw4KZYLO0OV+bsQQweLHhiM` |
+| `admin@exemplo.com` | `B8d9yeCA3rGvQ6QSsd0+A+CMcXHJvnlw` |
+| `vendedor@exemplo.com` | `/Z2xAFswuMXBmi83D4/7dvxAX3rVS486` |
 
 **Estas senhas são rotacionadas toda vez que a suíte roda**, porque o seed
 reescreve as duas. Se o login falhar, é isso — e a rotação é uma linha:

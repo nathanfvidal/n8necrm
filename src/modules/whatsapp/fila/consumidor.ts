@@ -1,5 +1,6 @@
-// Sem `import "server-only"` aqui, mesma divisão de `./postgres.ts` e
-// `./vercel.ts` — a marcação da fila mora em `./index.ts`.
+// Sem `import "server-only"` aqui, mesma divisão de `./postgres.ts` — a
+// marcação da fila mora em `./index.ts`. (Esta linha citava também
+// `./vercel.ts`, apagado na contração do Ciclo 2d.)
 //
 // Aqui ela teria uma segunda razão para não estar: este módulo é a porta de
 // entrada de `scripts/fila-worker.ts`, um processo Node comum. Isso NÃO é o que
