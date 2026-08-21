@@ -1,0 +1,54 @@
+# Vigia da fila. Pergunta AO BANCO se a fila esta andando.
+#
+# Nao pergunta ao systemd: `systemctl is-active n8necrm-worker` responde
+# `active` para um worker preso numa consulta que nao volta, e esse worker nao
+# drena nada. So o banco sabe a verdade.
+#
+# Type=oneshot: roda, responde com o codigo de saida, morre. Saida diferente de
+# 0 poe a unit em `failed`, entao `systemctl --failed` conta a historia sem
+# ninguem ter escrito integracao nenhuma. 0 saudavel, 1 fila parada, 2 nao
+# consegui nem perguntar.
+[Unit]
+Description=n8necrm - vigia da fila de turnos
+
+[Service]
+Type=oneshot
+User=n8necrm
+Group=n8necrm
+WorkingDirectory=/opt/n8necrm/current
+EnvironmentFile=/etc/n8necrm/n8necrm.env
+Environment=NODE_ENV=production
+
+# COM `--conditions=react-server`, e isso e a correcao de uma previsao errada.
+#
+# O plano de deploy dizia que a vigia dispensava a flag, porque
+# src/modules/whatsapp/fila/postgres.ts nao carrega `server-only` -- verdade
+# sobre aquele arquivo, e irrelevante: ele importa @/lib/prisma, e
+# src/lib/prisma.ts:9 e que carrega a marcacao. Medido em 2026-08-21, rodando
+# sem a flag:
+#
+#   $ npx tsx scripts/fila-saude.ts
+#   Error: This module cannot be imported from a Client Component module.
+#     at <anonymous> (src/lib/prisma.ts:9:8)
+#
+# O custo de errar aqui e pior que o de errar no worker: sem a flag o processo
+# sai com codigo 1, que e exatamente o codigo de "fila parada". A vigia
+# gritaria incendio a cada 5 minutos com a fila saudavel, e ensinaria quem le a
+# ignora-la.
+ExecStart=/opt/n8necrm/current/node_modules/.bin/tsx --conditions=react-server scripts/fila-saude.ts
+
+# Sem `Restart=`: e oneshot disparada por timer. Reiniciar sozinha faria a unit
+# sair de `failed` no caso em que a fila esta parada DE VERDADE, apagando o
+# sintoma que ela existe para mostrar.
+TimeoutStartSec=60
+MemoryMax=512M
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=n8necrm-saude
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/n8necrm

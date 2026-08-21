@@ -1,0 +1,27 @@
+# Dispara a vigia da fila. Sem este timer, n8necrm-saude.service e um script
+# que ninguem chama.
+[Unit]
+Description=n8necrm - dispara a vigia da fila a cada 5 minutos
+
+[Timer]
+# Explicito, embora o systemd ja derivasse o mesmo nome pelo do timer: nomear a
+# unit e o que faz um `mv` deste arquivo falhar alto em vez de silenciosamente
+# parar de disparar a vigia.
+Unit=n8necrm-saude.service
+
+# 2min depois do boot: da tempo de o worker subir, sem esconder o caso em que
+# ele NAO sobe.
+OnBootSec=2min
+OnUnitActiveSec=5min
+
+# Se a maquina estiver desligada na hora, roda assim que voltar. Sem isto, um
+# reboot de madrugada adia a verificacao -- justamente na janela em que o
+# worker pode nao ter subido.
+Persistent=true
+
+# Espalha ate 30s para nao bater no banco no mesmo segundo que outra coisa
+# agendada nesta maquina.
+RandomizedDelaySec=30
+
+[Install]
+WantedBy=timers.target

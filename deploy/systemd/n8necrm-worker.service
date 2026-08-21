@@ -1,0 +1,59 @@
+# Worker da fila de turnos do WhatsApp.
+#
+# ESTE E O PROCESSO QUE FAZ O WHATSAPP RESPONDER. Morto, nada acusa: mensagem
+# entra, vira linha em TurnoJob, e ninguem nunca responde -- sem erro em lugar
+# nenhum. Quem acusa e n8necrm-saude.timer, e ele existe por causa disto.
+[Unit]
+Description=n8necrm - worker da fila de turnos
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=n8necrm
+Group=n8necrm
+WorkingDirectory=/opt/n8necrm/current
+EnvironmentFile=/etc/n8necrm/n8necrm.env
+Environment=NODE_ENV=production
+
+# `--conditions=react-server` NAO E OPCIONAL E NAO E CONTORNO.
+#
+# node_modules/server-only/index.js e um throw de uma linha, e o campo
+# `exports` daquele pacote so desvia para o empty.js inofensivo sob essa
+# condicao. O Next a aplica em componente de servidor; o tsx, sozinho, nao
+# aplica nenhuma -- e src/modules/whatsapp/turno.ts carrega a marcacao. Sem a
+# flag o processo morre na PRIMEIRA linha importada. Medido no Ciclo 2d, e o
+# cabecalho de scripts/fila-worker.ts tem a saida do erro colada.
+ExecStart=/opt/n8necrm/current/node_modules/.bin/tsx --conditions=react-server scripts/fila-worker.ts
+
+Restart=always
+# 10s e nao 5s: se a causa da morte for o banco fora do ar, um laco mais lento
+# desperdica menos e ainda assim tenta 6 vezes por minuto.
+RestartSec=10
+# A LINHA MAIS IMPORTANTE DESTE ARQUIVO. O padrao do systemd (5 reinicios em
+# 10s, e a unit vai para `failed` para sempre) transformaria um soluco de 30
+# segundos no banco num WhatsApp permanentemente mudo, sem nada na tela dizendo
+# isso. Desligar o limite troca "desiste calado" por "insiste para sempre".
+StartLimitIntervalSec=0
+
+# O worker ja trata SIGTERM: para de pegar lote NOVO e termina o lote em curso
+# (ate 10 turnos de ate 60s). 90s cobre isso. Passando disso o systemd manda
+# SIGKILL, e ai o lease de 90s (JOB_LEASE_MS) devolve o job em curso para a
+# fila sozinho -- nenhum turno se perde, ele so e reentregue.
+KillSignal=SIGTERM
+TimeoutStopSec=90
+
+MemoryMax=1G
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=n8necrm-worker
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/n8necrm
+
+[Install]
+WantedBy=multi-user.target

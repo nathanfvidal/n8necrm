@@ -1,0 +1,69 @@
+# Servidor Next.js do n8necrm.
+#
+# A fonte de verdade e ESTE arquivo, no repositorio. Ele e instalado em
+# /etc/systemd/system/ por deploy/bootstrap.sh -- editar direto la produz uma
+# VPS que diverge do git sem ninguem notar, que e como o nginx deste mesmo
+# stack acumulou um .bak.
+[Unit]
+Description=n8necrm - servidor Next.js
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=n8necrm
+Group=n8necrm
+
+# Symlink, de proposito: deploy.sh troca para onde ele aponta, e o `restart`
+# seguinte ja executa a release nova. O systemd resolve o symlink na hora de
+# executar, nao na de carregar a unit.
+WorkingDirectory=/opt/n8necrm/current
+
+# O UNICO lugar dos segredos. Nao ha `Environment=` com valor sensivel aqui:
+# `systemctl show` imprime as linhas Environment= para qualquer usuario do
+# sistema, e NAO imprime o conteudo de EnvironmentFile=.
+EnvironmentFile=/etc/n8necrm/n8necrm.env
+Environment=NODE_ENV=production
+
+# `node .../next start` e nao `npm run start`: o npm viraria um processo pai
+# que repassa sinal mal, e o systemd mataria o npm enquanto o Next continua.
+# Assim o Next e o processo principal e recebe SIGTERM direto.
+#
+# `-H 127.0.0.1` e a linha que mais importa deste arquivo. A VPS nao tem ufw
+# ativo (medido em 2026-08-21: "Status: inactive"), entao escutar em qualquer
+# endereco poria a aplicacao na internet sem passar pelo nginx -- e quem
+# falasse direto com a porta 3000 escreveria o X-Real-IP que quisesse,
+# enchendo o AuditLog de IP forjado, que e pior que campo vazio. E a mesma
+# postura que o n8n (127.0.0.1:5678) e a Evolution (127.0.0.1:8080) ja tem
+# nesta maquina.
+ExecStart=/usr/bin/node node_modules/next/dist/bin/next start -H 127.0.0.1 -p 3000
+
+Restart=always
+RestartSec=5
+# Sem isto, 5 reinicios em 10s poem a unit em `failed` PARA SEMPRE. Aqui a
+# consequencia seria visivel (o site cai), mas a simetria com o worker importa:
+# as duas se comportam igual sob falha, entao quem le uma sabe ler a outra.
+StartLimitIntervalSec=0
+
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+# Teto de memoria: a maquina tem 2 vCPU e cinco containers de pe. Sem teto, um
+# vazamento no Next levaria n8n e Evolution junto pelo OOM killer.
+MemoryMax=2G
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=n8necrm-web
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+# `next start` escreve cache em .next/cache. ProtectSystem=strict deixaria o
+# sistema de arquivos inteiro somente-leitura sem esta linha, e o servidor
+# subiria so para falhar na primeira escrita de cache.
+ReadWritePaths=/opt/n8necrm
+
+[Install]
+WantedBy=multi-user.target
