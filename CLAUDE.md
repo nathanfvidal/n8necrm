@@ -46,8 +46,29 @@ que dependem dela — ver `docs/superpowers/specs/2026-08-19-n8necrm-fundacao-de
    e o estado de pareamento ficaram para o Ciclo 2c** — nada disso é provável
    sem uma instância Evolution acessível, e este ambiente não tem uma.
 5. **Tempo real: Supabase Realtime**, com RLS como trava do canal.
-6. **Hospedagem: Vercel.** A fila continua Vercel Queues; o que mudou no Ciclo 0
-   é que ela virou adaptador atrás de uma interface.
+6. **Hospedagem: EM ABERTO. A fila é Postgres.** *(Reaberta em 2026-08-21 —
+   ver `docs/superpowers/specs/2026-08-21-ciclo-2d-fila-em-postgres-design.md`.)*
+   Até essa data a decisão era "Vercel agora, com Vercel Queues atrás de um
+   adaptador". O dono decidiu **não usar a Vercel**. O que passou a valer: a
+   fila de turnos vive numa tabela do Postgres do Supabase que já existe
+   (`TurnoJob`, lease atômico, zero infra nova — pg-boss numa VPS e o próprio
+   n8n foram considerados e recusados), e **o app é agnóstico de hospedagem**:
+   roda em qualquer Node. Onde publicar é decisão adiada, e nada pode passar a
+   depender dela.
+   **Consequência que não pode ser esquecida:** a fila **não drena sozinha**.
+   Alguém tem de ligar `npm run fila:worker` ou um agendador batendo em
+   `POST /api/queues/whatsapp-turn`. Sem isso, mensagem entra e nunca é
+   respondida, sem erro nenhum aparecer.
+   **O que aconteceu com os ciclos que dependiam dela** (esta regra existe no
+   topo desta seção e foi cumprida, um a um, na §11 do spec do Ciclo 2d):
+   o **Ciclo 0** saiu **vindicado, não invalidado** — a fila já era adaptador
+   atrás de uma interface, e é isso que fez a troca custar uma linha nos três
+   importadores de `publicarTurno`; os **Ciclos 4 e 1b** continuam bloqueados,
+   com outro dono — `frame-ancestors` e `SUPABASE_JWT_ISSUER` precisam da
+   origem pública, que passou a depender da hospedagem em vez do domínio da
+   Vercel. Nada a refazer em nenhum dos três.
+   *(O histórico fica escrito aqui de propósito: decisão travada sem histórico
+   é decisão que alguém reabre de novo sem saber que já foi discutida.)*
 7. **Cópia da base: histórico completo, sem vínculo de fork.** As branches de
    feature em aberto da origem não vieram.
 8. **Identidade do produto: EM ABERTO.** `config/client.ts` está genérico de
@@ -67,6 +88,15 @@ que dependem dela — ver `docs/superpowers/specs/2026-08-19-n8necrm-fundacao-de
 
 ## Armadilhas conhecidas
 
+- **Não existe IP confiável sem `IP_CABECALHO_CONFIAVEL`.** Desde o Ciclo 2d
+  nenhum cabeçalho é lido até alguém nomear o que a borda SOBRESCREVE (não o
+  que ela ACRESCENTE — `x-forwarded-for` atrás de `proxy_add_x_forwarded_for`
+  ainda tem o valor do cliente na frente). Ausente: o login **pula** o limite
+  por IP, o balde do webhook passa a ser por empresa e `AuditLog.ip` fica nulo.
+  É o estado seguro, e é reversível com uma linha no ambiente.
+- **`TurnoJob` é modelo de tenant, mas a REIVINDICAÇÃO é cross-tenant.** É a
+  única exceção permanente de prisma cru fora de `src/core/`, e o motivo é
+  circularidade: a empresa é o RESULTADO da reivindicação, não a entrada dela.
 - **RLS não protege o caminho do Prisma.** Ele conecta com papel dono de tabela,
   que ignora política de linha. O isolamento por empresa são DUAS defesas: escopo
   obrigatório de query em `src/core/` e RLS para o caminho do navegador.

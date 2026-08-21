@@ -9,6 +9,11 @@ agora**, e **o que só você pode desbloquear**.
 
 ## Verificação, rodada por inteiro nesta data
 
+Os números abaixo são de **2026-08-21, ANTES do Ciclo 2d** (a saída da Vercel e
+a fila em Postgres). A verificação final daquele ciclo os remede e substitui —
+enquanto esta linha existir, leia-os como o último estado medido, não como o
+atual.
+
 | | |
 |---|---|
 | `npm run typecheck` | limpo, sem saída |
@@ -82,12 +87,45 @@ que o formulário mostra de verdade.
 
 Precisa de um Personal Access Token se o registro só sair pela Management API.
 
-### 4. Na Vercel
+### 4. Escolher a hospedagem, e ligar o gatilho da fila
 
-- Gerar `COFRE_CHAVE_MESTRA`: `openssl rand -base64 32`
-- **Remover `EVOLUTION_DOMAIN`, `EVOLUTION_INSTANCE`, `EVOLUTION_APIKEY` e
-  `EVOLUTION_COMPANY_ID`.** Elas morreram no código; apikey esquecida lá é
-  credencial viva sem dono.
+A Vercel saiu (Ciclo 2d). O app roda em qualquer Node, e **onde** é decisão
+sua. Três coisas dependem dela.
+
+**Ligue um gatilho da fila — sem isso o WhatsApp fica mudo.** Mensagem entra,
+vira linha em `TurnoJob`, e ninguém responde. **Nenhum erro aparece em lugar
+nenhum**: é o pior modo de falha possível, porque o sistema parece saudável. O
+Vercel Queues empurrava sozinho; agora alguém tem de puxar.
+
+- Node sempre ligado (recomendado): `npm run fila:worker` como serviço. Não
+  abre porta nenhuma, e o laço de 2s mantém a resposta em ~8-10s — praticamente
+  o que a Vercel entregava.
+- Ou um agendador batendo em `POST /api/queues/whatsapp-turn` com o cabeçalho
+  `x-fila-segredo` (pg_cron+pg_net do Supabase, cron de VPS, workflow do n8n).
+  Um cron de um minuto faz a resposta ao cliente sair em até ~68s.
+
+**`WHATSAPP_QUEUE_SECRET` virou a única defesa dessa rota.** Até o Ciclo 2d ela
+era segunda camada atrás do air-gap que a plataforma garantia — a rota não era
+alcançável da internet. Agora é, e o que a protege é só o segredo em cabeçalho,
+comparado em tempo constante, com 404 para quem erra. Gere com
+`openssl rand -hex 32`, não reaproveite, e trate como credencial de produção.
+
+**Defina três variáveis no ambiente do deploy:**
+
+- `IP_CABECALHO_CONFIAVEL` — o cabeçalho que a sua borda SOBRESCREVE (não o que
+  ela acrescenta). Sem ela não há limite por IP no login, o balde do webhook é
+  por empresa e `AuditLog.ip` fica nulo.
+- `SENTRY_ENVIRONMENT` — `VERCEL_ENV` não existe mais; sem ela todo evento
+  chega ao painel rotulado `local`, inclusive os de produção.
+- `SUPABASE_JWT_ISSUER` — a origem pública real (Ciclo 1b).
+
+E gere `COFRE_CHAVE_MESTRA` (`openssl rand -base64 32`) onde for publicar —
+sem ela o WhatsApp não sobe, e não há fallback.
+
+Se existir projeto na Vercel, **apague-o e as variáveis que estiverem lá**, em
+especial `EVOLUTION_DOMAIN`, `EVOLUTION_INSTANCE`, `EVOLUTION_APIKEY` e
+`EVOLUTION_COMPANY_ID`: elas morreram no código no Ciclo 2a, e apikey esquecida
+em painel é credencial viva sem dono.
 
 ### 5. Uma linha de SQL, se você quiser
 
@@ -165,6 +203,8 @@ e nos relatórios `.superpowers/sdd/fase2*.md`.
 
 | | |
 |---|---|
+| **A fila não drena sozinha** | Nenhum gatilho é ligado por padrão. É a única regressão funcional da saída da Vercel, que empurrava sozinha. Falha em SILÊNCIO. **Bloqueio antes de publicar.** |
+| **Sem IP confiável** | Enquanto `IP_CABECALHO_CONFIAVEL` não for definida: login sem limite por IP (o por conta continua valendo), `AuditLog.ip` nulo, e o balde do webhook é por empresa — quem souber o `companyId` pode queimá-lo. |
 | **Banco de teste separado** | o de desenvolvimento é o mesmo; a suíte reescreve as senhas do seed e duas execuções simultâneas de `vitest` o envenenam. **Bloqueio antes de publicar.** |
 | `REMETENTE` do e-mail | ainda é `notificacoes@exemplo.com`, domínio de exemplo que o Resend recusará |
 | Bucket de storage | não existe; `storage.ts` está dormente e agora **diz** isso |

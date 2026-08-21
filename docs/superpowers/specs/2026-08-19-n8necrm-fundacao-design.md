@@ -64,6 +64,18 @@ ciclos que dependem dela.
    muda no Ciclo 0 é que `@vercel/queue` deixa de ser importado direto e passa a
    ser **um adaptador atrás de uma interface**, para a VPS continuar sendo uma
    opção barata depois. Nada de comportamento muda.
+
+> **Adendo de 2026-08-21 — a decisão 6 foi REABERTA.** O dono decidiu não usar
+> a Vercel. A fila passou a ser uma tabela do Postgres (`TurnoJob`) e a
+> hospedagem voltou a ficar em aberto, com o app agnóstico. **Nenhuma palavra
+> do texto acima foi alterada** — ele registra o que foi decidido em
+> 2026-08-19, e continua sendo o registro correto daquela data. O que passou a
+> valer está em
+> `docs/superpowers/specs/2026-08-21-ciclo-2d-fila-em-postgres-design.md`.
+> Este adendo existe porque um leitor que encontrasse a decisão original sem
+> descobrir que ela foi revertida agiria com base nela — que é o mesmo dano que
+> a proibição de reescrever documento histórico tenta evitar, só que pelo outro
+> lado.
 7. **Cópia do repositório: histórico completo, sem vínculo de fork.**
    Só `main` + tags. As branches de feature em aberto **não** são copiadas.
 8. **Identidade do produto: em aberto.** `config/client.ts` fica genérico. Isto é
