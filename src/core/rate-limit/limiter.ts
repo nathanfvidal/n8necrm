@@ -84,8 +84,9 @@ export async function checarRateLimit(
  *
  * **Invariante que sustenta a segurança da poda:** este valor precisa ser
  * MAIOR que a maior `janelaMs` usada por qualquer política do sistema (hoje
- * 1h, do export de leads — ver `./export-leads.ts`; o login usa 10min e o
- * webhook 1min). Dentro dessa folga não existe janela viva que a poda possa
+ * 1h, empatada entre o export de leads — `./export-leads.ts` — e o teto de IA
+ * por empresa — `./ia-whatsapp.ts`; o login usa 10min e o webhook 1min).
+ * Dentro dessa folga não existe janela viva que a poda possa
  * alcançar, e apagar linha já expirada é inócuo: a janela é FIXA, então a
  * próxima chamada daquela chave reescreveria `janelaInicio` e zeraria a
  * contagem de qualquer jeito. A poda só chega ao mesmo estado mais cedo.

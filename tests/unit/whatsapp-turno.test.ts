@@ -45,6 +45,10 @@ import {
   confirmarTitularidadeLease,
 } from "../../src/modules/whatsapp/turno";
 import { TIPO_CONVERSA_AGUARDANDO } from "../../src/modules/whatsapp/notificacao-tipos";
+import {
+  chaveIaDaEmpresa,
+  LIMITE_RESPOSTAS_IA_POR_EMPRESA,
+} from "../../src/core/rate-limit/ia-whatsapp";
 import { botConfig } from "../../config/bot";
 // criarConversation/criarMensagemEntrada extraídos para tests/unit/helpers/whatsapp.ts
 // (Task 4 da Fatia 2) — mesmo nome, mesma assinatura, mesmo PREFIXO interno
@@ -92,6 +96,18 @@ async function limparDadosDeTeste() {
     }
     await prisma.whatsappMessage.deleteMany({ where: { conversationId: { in: ids } } });
     await prisma.conversation.deleteMany({ where: { id: { in: ids } } });
+  }
+
+  // A cota de IA POR EMPRESA (`core/rate-limit/ia-whatsapp.ts`, achado 24 da
+  // Fase 1) mora na tabela `RateLimit`, que não tem FK para nada deste arquivo
+  // e sobrevive a qualquer `deleteMany` de conversa. Cada turno bem-sucedido
+  // consome uma unidade da janela de 1h da empresa SEMEADA, que é a mesma em
+  // toda a suíte: sem esta linha, rodar o arquivo repetidas vezes na mesma hora
+  // acumularia contagem até o ducentésimo turno do dia falhar por um motivo que
+  // não é o do teste. É o tipo de teste que fica verde por meses e vermelho
+  // numa terça-feira movimentada.
+  if (EMPRESA) {
+    await prisma.rateLimit.deleteMany({ where: { chave: chaveIaDaEmpresa(EMPRESA) } });
   }
 }
 
@@ -559,6 +575,140 @@ describe("processarTurno", () => {
       await processarTurno({ companyId: EMPRESA, conversationId: conversation.id, seq: 1 });
 
       expect(gerarRespostaMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // Achado 24 da Fase 1
+  // (`docs/auditorias/2026-08-21-fase1-seguranca-branch-tenancy.md`): o teto
+  // acima é por CONVERSA e não vê N conversas. Cem números diferentes, cada um
+  // dentro dos seus 20/h, davam 2000 chamadas de OpenAI numa hora, e o único
+  // freio era o teto de gasto no painel da OpenAI — fora do sistema.
+  //
+  // A cota é semeada direto na tabela `RateLimit` (mesma técnica das 20
+  // mensagens semeadas acima): rodar 200 turnos de verdade seria lento e não
+  // provaria nada a mais.
+  describe("teto de respostas de IA por EMPRESA por hora", () => {
+    async function esgotarCotaDaEmpresa() {
+      await prisma.rateLimit.upsert({
+        where: { chave: chaveIaDaEmpresa(EMPRESA) },
+        create: {
+          chave: chaveIaDaEmpresa(EMPRESA),
+          janelaInicio: new Date(),
+          contagem: LIMITE_RESPOSTAS_IA_POR_EMPRESA,
+        },
+        update: { janelaInicio: new Date(), contagem: LIMITE_RESPOSTAS_IA_POR_EMPRESA },
+      });
+    }
+
+    it("para de chamar o modelo quando a empresa esgota a cota, mesmo com a conversa zerada", async () => {
+      // A conversa é NOVA — zero respostas de IA no histórico dela. Se este
+      // caso passasse por causa do teto por conversa, ele não estaria provando
+      // o teto por empresa. É a distinção que o teste existe para fazer.
+      const conversation = await criarConversation({ bufferSeq: 1 });
+      const pendente = await criarMensagemEntrada(conversation.id, { texto: "primeira pergunta" });
+
+      await esgotarCotaDaEmpresa();
+
+      await processarTurno({ companyId: EMPRESA, conversationId: conversation.id, seq: 1 });
+
+      expect(gerarRespostaMock).not.toHaveBeenCalled();
+      expect(enviarTextoMock).not.toHaveBeenCalled();
+
+      // "Persiste mas para de responder", nunca "descarta calado": a mensagem
+      // do cliente fica marcada como processada e visível no inbox humano.
+      const pendenteAtualizada = await prisma.whatsappMessage.findUniqueOrThrow({
+        where: { id: pendente.id },
+      });
+      expect(pendenteAtualizada.processadoEm).not.toBeNull();
+    });
+
+    it("acende o sino: o cliente não fica no silêncio, um humano é chamado", async () => {
+      // A segunda metade de "não descarta calado". Sem isto, a correção
+      // trocaria custo de OpenAI por cliente sem resposta e sem ninguém
+      // sabendo — que é pior que o problema original.
+      const conversation = await criarConversation({ bufferSeq: 1 });
+      await criarMensagemEntrada(conversation.id, { texto: "alguém aí?" });
+
+      await esgotarCotaDaEmpresa();
+      await processarTurno({ companyId: EMPRESA, conversationId: conversation.id, seq: 1 });
+
+      const notificacoes = await prisma.notification.findMany({
+        where: { tipo: TIPO_CONVERSA_AGUARDANDO },
+      });
+      const daConversa = notificacoes.filter(
+        (n) => (n.payload as { conversationId?: string } | null)?.conversationId === conversation.id
+      );
+      expect(daConversa.length).toBeGreaterThan(0);
+    });
+
+    it("uma unidade abaixo do teto, a resposta sai normalmente", async () => {
+      // A metade que impede "recusar tudo" de passar como correção.
+      const conversation = await criarConversation({ bufferSeq: 1 });
+      await criarMensagemEntrada(conversation.id, { texto: "tem Gol 2018?" });
+
+      await prisma.rateLimit.upsert({
+        where: { chave: chaveIaDaEmpresa(EMPRESA) },
+        create: {
+          chave: chaveIaDaEmpresa(EMPRESA),
+          janelaInicio: new Date(),
+          contagem: LIMITE_RESPOSTAS_IA_POR_EMPRESA - 1,
+        },
+        update: { janelaInicio: new Date(), contagem: LIMITE_RESPOSTAS_IA_POR_EMPRESA - 1 },
+      });
+
+      await processarTurno({ companyId: EMPRESA, conversationId: conversation.id, seq: 1 });
+
+      expect(gerarRespostaMock).toHaveBeenCalledTimes(1);
+      expect(enviarTextoMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("uma janela vencida não conta: a cota de uma hora atrás não bloqueia agora", async () => {
+      // A janela do limitador é FIXA (`core/rate-limit/limiter.ts`): passada a
+      // hora, a próxima chamada reescreve `janelaInicio` e zera a contagem.
+      // Sem este caso, uma rajada às 14h deixaria a empresa muda para sempre.
+      const conversation = await criarConversation({ bufferSeq: 1 });
+      await criarMensagemEntrada(conversation.id, { texto: "e agora?" });
+
+      await prisma.rateLimit.upsert({
+        where: { chave: chaveIaDaEmpresa(EMPRESA) },
+        create: {
+          chave: chaveIaDaEmpresa(EMPRESA),
+          janelaInicio: new Date(Date.now() - 2 * 60 * 60 * 1000),
+          contagem: LIMITE_RESPOSTAS_IA_POR_EMPRESA,
+        },
+        update: {
+          janelaInicio: new Date(Date.now() - 2 * 60 * 60 * 1000),
+          contagem: LIMITE_RESPOSTAS_IA_POR_EMPRESA,
+        },
+      });
+
+      await processarTurno({ companyId: EMPRESA, conversationId: conversation.id, seq: 1 });
+
+      expect(gerarRespostaMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("mensagem só de mídia NÃO consome a cota — ela conta o que custa", async () => {
+      // A escolha de pôr a checagem DENTRO do ramo que chama o modelo, e não
+      // junto do teto por conversa. `checarRateLimit` consome uma unidade a
+      // cada chamada; se a checagem estivesse antes do `if`, uma rajada de
+      // áudios (que respondem com texto fixo, sem tocar a OpenAI) queimaria a
+      // cota da empresa e deixaria as conversas de TEXTO sem resposta.
+      await prisma.rateLimit.deleteMany({ where: { chave: chaveIaDaEmpresa(EMPRESA) } });
+
+      const conversation = await criarConversation({ bufferSeq: 1 });
+      await criarMensagemEntrada(conversation.id, { tipo: "AUDIO", texto: null });
+
+      await processarTurno({ companyId: EMPRESA, conversationId: conversation.id, seq: 1 });
+
+      expect(gerarRespostaMock).not.toHaveBeenCalled();
+      // O fallback de mídia FOI enviado — o turno rodou até o fim.
+      expect(enviarTextoMock).toHaveBeenCalledTimes(1);
+
+      // E a cota continua intocada: nenhuma linha foi criada para a empresa.
+      const cota = await prisma.rateLimit.findUnique({
+        where: { chave: chaveIaDaEmpresa(EMPRESA) },
+      });
+      expect(cota).toBeNull();
     });
   });
 

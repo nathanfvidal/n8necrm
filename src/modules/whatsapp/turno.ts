@@ -2,6 +2,10 @@ import "server-only";
 
 import { DuplicateMessageError } from "@vercel/queue";
 
+import {
+  checarLimiteIaDaEmpresa,
+  LIMITE_RESPOSTAS_IA_POR_EMPRESA,
+} from "@/core/rate-limit/ia-whatsapp";
 import { prismaDaEmpresa } from "@/core/tenancy/escopo";
 
 import { publicarTurno, type TurnoJob } from "./fila";
@@ -112,10 +116,16 @@ const MAX_TENTATIVAS_REAGENDAMENTO = 30;
 // 20 é generoso para qualquer troca legítima de uma revenda (mesmo uma
 // negociação longa não chega a 20 idas e vindas numa hora), apertado o
 // bastante para conter um cliente em loop (ou um número comprometido
-// mandando mensagem em massa) de esgotar o orçamento de OpenAI sozinho. Um
-// teto de GASTO mensal configurado no painel da OpenAI continua sendo o
-// único backstop real contra um vazamento fora deste padrão — isso é
-// configuração humana, não algo que este código possa impor.
+// mandando mensagem em massa) de esgotar o orçamento de OpenAI sozinho.
+//
+// Este comentário dizia, até a Fase 2 da auditoria de 2026-08-21, que "um teto
+// de GASTO mensal configurado no painel da OpenAI continua sendo o único
+// backstop real". Era verdade e virou o achado 24: um controle que mora fora
+// do sistema, que ninguém aqui opera, e que a própria Fase 1 listou entre os
+// itens NÃO VERIFICADOS. Deixou de ser o único — `checarLimiteIaDaEmpresa`
+// (`core/rate-limit/ia-whatsapp.ts`) é o teto por EMPRESA, dentro do sistema,
+// aplicado logo antes da chamada ao modelo. O teto do painel continua sendo a
+// última rede, e continua sendo configuração humana.
 const TETO_RESPOSTAS_IA_POR_HORA = 20;
 
 const FALLBACK_MIDIA_NAO_SUPORTADA =
@@ -303,6 +313,38 @@ async function processarMensagensPendentes(
     // fallback única, sem chamar o modelo.
     respostas = [FALLBACK_MIDIA_NAO_SUPORTADA];
   } else {
+    // Teto de IA por EMPRESA — achado 24 da Fase 1
+    // (`docs/auditorias/2026-08-21-fase1-seguranca-branch-tenancy.md`). O teto
+    // por CONVERSA acima contém um cliente em loop e não vê N conversas: cem
+    // números diferentes, cada um dentro dos seus 20/h, dão 2000 chamadas numa
+    // hora e nada as enxerga como um conjunto. O número e o raciocínio estão em
+    // `core/rate-limit/ia-whatsapp.ts`; o mecanismo é o `checarRateLimit`
+    // atômico que o projeto já usa (login, export de leads), não um segundo.
+    //
+    // **Aqui dentro do `else`, e não junto do teto por conversa**, de
+    // propósito: `checarRateLimit` CONSOME uma unidade a cada chamada, e o ramo
+    // de cima (só mídia) responde com texto fixo sem tocar a OpenAI. Checar
+    // antes do `if` faria uma rajada de áudios queimar a cota de uma empresa
+    // sem gastar um centavo de modelo — e deixaria as conversas de texto
+    // legítimas sem resposta por causa disso. A cota conta o que custa.
+    if (!(await checarLimiteIaDaEmpresa(companyId))) {
+      // Mesmo tratamento do teto por conversa, e é a razão de ele estar escrito
+      // igual: "persiste mas para de responder", nunca "descarta calado". As
+      // pendentes ficam marcadas como processadas (visíveis no inbox humano em
+      // `/conversas`) e `marcarAguardandoHumano` acende o sino — o cliente do
+      // outro lado não fica no silêncio, alguém da equipe é chamado para
+      // responder à mão. Ver `marcarPendentesComoProcessadas` para os pontos
+      // irmãos.
+      console.warn(
+        `Empresa ${companyId} atingiu o teto de ${LIMITE_RESPOSTAS_IA_POR_EMPRESA} respostas de IA na ` +
+          `última hora (conversa ${conversationId}) — pendentes marcadas como processadas sem ` +
+          `resposta automática.`
+      );
+      await marcarPendentesComoProcessadas(db, pendentes);
+      await marcarAguardandoHumano(companyId, conversationId);
+      return;
+    }
+
     const historicoAnterior = await buscarHistorico(db, conversationId, pendentes[0]!.criadoEm);
     // Fragmentos de texto pendentes são unidos numa única mensagem "CLIENTE"
     // no contexto — é literalmente o comportamento que o plano da Fatia 1

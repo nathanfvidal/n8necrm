@@ -24,6 +24,8 @@ import {
   podarRateLimitExpirado,
   RETENCAO_RATE_LIMIT_MS,
 } from "../../src/core/rate-limit/limiter";
+import { JANELA_EXPORT_MS } from "../../src/core/rate-limit/export-leads";
+import { JANELA_IA_EMPRESA_MS } from "../../src/core/rate-limit/ia-whatsapp";
 
 // Todas as chaves usadas aqui começam com "teste:" — nunca usamos
 // deleteMany() sem esse filtro, porque esta suíte roda contra o Postgres
@@ -179,8 +181,13 @@ describe("podarRateLimitExpirado", () => {
     expect(registro.contagem).toBe(1);
   });
 
+  // As janelas não são mais um número escrito à mão aqui: são LIDAS das
+  // políticas. Antes desta correção a constante local dizia "export de leads" e
+  // ficaria desatualizada em silêncio no dia em que uma política nova passasse
+  // dela — que é exatamente o que o teto de IA por empresa (`ia-whatsapp.ts`,
+  // achado 24 da Fase 1) acabou de fazer aparecer como possibilidade.
   it("a retenção é maior que a maior janela em uso no sistema", () => {
-    const MAIOR_JANELA_EM_USO_MS = 60 * 60_000; // export de leads
+    const MAIOR_JANELA_EM_USO_MS = Math.max(JANELA_EXPORT_MS, JANELA_IA_EMPRESA_MS);
     expect(RETENCAO_RATE_LIMIT_MS).toBeGreaterThan(MAIOR_JANELA_EM_USO_MS);
   });
 });
