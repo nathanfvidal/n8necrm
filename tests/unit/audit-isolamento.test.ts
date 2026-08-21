@@ -154,13 +154,31 @@ beforeAll(async () => {
     ],
   });
 
+  // Sem `papel`: quem carrega o papel das três pessoas é o
+  // `membership.createMany` logo abaixo, e a coluna espelho `User.papel`
+  // deixou de ser escrita no Ciclo 1f.
+  //
+  // Esta chamada é o motivo de a trava do ciclo ser TEXTUAL e não apoiada no
+  // `tsc`. Com `papel` aqui dentro, ela passava no `npm run typecheck` mesmo
+  // com o campo fora do schema: a checagem de propriedade excedente do
+  // TypeScript só vale para objeto literal FRESCO atribuído direto ao
+  // parâmetro, e passando por `.map()` o tipo do elemento é inferido do
+  // retorno do callback — o excesso some. Em runtime o Prisma lançaria
+  // `Unknown argument 'papel'`.
+  //
+  // Único caso desse formato no repositório
+  // (`.superpowers/sdd/medicao-user-papel.md` § 4, passo 3; reconferido na
+  // Task 9 — a única outra batida de `.map()` alimentando um
+  // `prisma.user.createMany` é a CÓPIA deste trecho dentro da própria trava).
+  // Quem exercita a regra que o pega é o caso "a regra pega o `.map()` que o
+  // tsc NÃO pega", em `tests/unit/user-papel-nao-volta.test.ts`: sem ele um
+  // erro de regex deixaria a varredura vazia e ninguém saberia.
   await prisma.user.createMany({
     data: [USUARIO_DUPLO, ADMIN_A, ADMIN_B].map((id) => ({
       id,
       nome: `Pessoa ${id}`,
       email: `${id}@exemplo.invalido`,
       senhaHash: SENHA_FALSA,
-      papel: "ADMIN" as const,
     })),
   });
 

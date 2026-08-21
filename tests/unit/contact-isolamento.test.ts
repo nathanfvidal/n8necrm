@@ -261,14 +261,12 @@ beforeAll(async () => {
         nome: "Ana da A",
         email: `${USUARIO_A}@exemplo.invalido`,
         senhaHash: SENHA_FALSA,
-        papel: "ADMIN",
       },
       {
         id: USUARIO_B,
         nome: "Bruno da B",
         email: `${USUARIO_B}@exemplo.invalido`,
         senhaHash: SENHA_FALSA,
-        papel: "ADMIN",
       },
     ],
   });

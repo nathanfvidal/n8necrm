@@ -111,16 +111,6 @@ const CHAMADA_DE_USER = new RegExp(
  * (`usuario-ativo`, `lead-actions`, `task-actions`).
  */
 const EM_CONVERSAO: Record<string, string> = {
-  // Ciclo 1f, Task 9 — fixtures da família "isolamento".
-  "tests/unit/audit-isolamento.test.ts": "Task 9",
-  "tests/unit/contact-isolamento.test.ts": "Task 9",
-  "tests/unit/lead-isolamento.test.ts": "Task 9",
-  "tests/unit/notificacoes-isolamento.test.ts": "Task 9",
-  "tests/unit/pipeline-isolamento.test.ts": "Task 9",
-  "tests/unit/task-isolamento.test.ts": "Task 9",
-  "tests/unit/unicidades-por-empresa.test.ts": "Task 9",
-  "tests/unit/whatsapp-isolamento.test.ts": "Task 9",
-
   // Ciclo 1f, Task 10 — o restante das fixtures de unidade.
   "tests/unit/alerta-atividade.test.ts": "Task 10",
   "tests/unit/audit-log.test.ts": "Task 10",

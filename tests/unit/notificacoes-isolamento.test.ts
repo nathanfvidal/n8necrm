@@ -131,7 +131,6 @@ beforeAll(async () => {
       nome: "Duda das Duas",
       email: `${USUARIO_DUPLO}@exemplo.invalido`,
       senhaHash: SENHA_FALSA,
-      papel: "ADMIN",
     },
   });
 
