@@ -81,8 +81,15 @@ export default async function ConversasPage() {
               return (
                 <TableRow key={conversa.id} className="cursor-pointer">
                   <TableCell>
+                    {/* `prefetch={false}` vale para TODO `<Link>` do painel: a
+                        pré-busca leva o cookie de sessão ao servidor e o
+                        Auth.js o reemite — o defeito de logout de `0a81737`
+                        (AGENTS.md). Numa inbox de 30 linhas seriam 30
+                        pré-buscas em voo. Cobrado por
+                        `tests/unit/prefetch-do-painel.test.ts`. */}
                     <Link
                       href={`/conversas/${conversa.id}`}
+                      prefetch={false}
                       className="flex items-center gap-2 hover:underline"
                     >
                       <span className="font-medium">

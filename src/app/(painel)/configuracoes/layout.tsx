@@ -50,6 +50,19 @@ export default async function ConfiguracoesLayout({ children }: { children: Reac
             <Link
               key={secao.href}
               href={secao.href}
+              // `prefetch={false}` NÃO é detalhe de performance aqui: é a
+              // correção de segurança do logout (AGENTS.md). Esta régua vive na
+              // MESMA tela que o botão "Sair", e o padrão do `<Link>` — `auto`,
+              // node_modules/next/dist/docs/01-app/03-api-reference/02-components/link.md
+              // §prefetch — pré-busca a rota dinâmica até o `loading.js` mais
+              // próximo assim que o link entra na viewport. `(painel)/loading.tsx`
+              // existe, então essa pré-busca ACONTECE, bate no servidor com o
+              // cookie de sessão e o Auth.js o reemite; a resposta que chega
+              // depois do "Sair" ressuscita a sessão que acabou de ser revogada.
+              // Foi exatamente o defeito de `0a81737`, e esta régua tinha ficado
+              // de fora dele. Quem cobra agora é
+              // `tests/unit/prefetch-do-painel.test.ts`.
+              prefetch={false}
               className="rounded-t-md px-3 py-2 text-sm hover:bg-muted"
             >
               {secao.label}

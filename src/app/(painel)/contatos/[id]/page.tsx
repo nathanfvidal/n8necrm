@@ -54,7 +54,11 @@ export default async function ContatoPage({ params }: { params: Promise<{ id: st
   return (
     <div className="space-y-6 p-6">
       <div>
-        <Link href="/contatos" className="text-sm text-muted-foreground hover:underline">
+        {/* `prefetch={false}` vale para TODO `<Link>` do painel, não só para os
+            de `<nav>`: a pré-busca leva o cookie de sessão ao servidor e o
+            Auth.js o reemite, que é o defeito de logout de `0a81737`
+            (AGENTS.md). Cobrado por `tests/unit/prefetch-do-painel.test.ts`. */}
+        <Link href="/contatos" prefetch={false} className="text-sm text-muted-foreground hover:underline">
           ← Contatos
         </Link>
         <h1 className="text-xl font-semibold">{contato.nome}</h1>
@@ -95,7 +99,7 @@ export default async function ContatoPage({ params }: { params: Promise<{ id: st
               {contato.leads.map((lead) => (
                 <tr key={lead.id} className="border-b hover:bg-muted/40">
                   <td className="py-2">
-                    <Link href={`/leads/${lead.id}`} className="text-primary underline">
+                    <Link href={`/leads/${lead.id}`} prefetch={false} className="text-primary underline">
                       {lead.etapaNome}
                     </Link>
                     {/* Sem esta marca a pessoa vê um lead que não existe mais
@@ -128,7 +132,11 @@ export default async function ContatoPage({ params }: { params: Promise<{ id: st
             <ul className="space-y-1 text-sm">
               {conversas.map((conversa) => (
                 <li key={conversa.id} className="flex items-center gap-3 border-b py-2">
-                  <Link href={`/conversas/${conversa.id}`} className="text-primary underline">
+                  <Link
+                    href={`/conversas/${conversa.id}`}
+                    prefetch={false}
+                    className="text-primary underline"
+                  >
                     {/* Mesma cadeia de fallback da inbox: a Evolution nem
                         sempre manda o nome do perfil, e o telefone só é
                         gravado quando o número é reconhecido como brasileiro. */}

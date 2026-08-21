@@ -221,7 +221,15 @@ export default async function LeadDetalhePage({
             {/* O documento e o cadastro completo moram lá, com a permissão que
                 os protege. Este link é o que torna a ausência do CPF aqui uma
                 decisão navegável em vez de um dado que sumiu. */}
-            <Link href={`/contatos/${lead.contact.id}`} className="text-sm text-primary underline">
+            {/* `prefetch={false}` vale para TODO `<Link>` do painel: a
+                pré-busca leva o cookie de sessão ao servidor e o Auth.js o
+                reemite — o defeito de logout de `0a81737` (AGENTS.md). Cobrado
+                por `tests/unit/prefetch-do-painel.test.ts`. */}
+            <Link
+              href={`/contatos/${lead.contact.id}`}
+              prefetch={false}
+              className="text-sm text-primary underline"
+            >
               Ver cadastro completo
             </Link>
           </div>

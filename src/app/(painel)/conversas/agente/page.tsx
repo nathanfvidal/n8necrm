@@ -42,7 +42,11 @@ export default async function AgentePage() {
   return (
     <div className="space-y-6 p-6">
       <div>
-        <Link href="/conversas" className="text-sm text-muted-foreground hover:underline">
+        {/* `prefetch={false}` vale para TODO `<Link>` do painel: a pré-busca
+            leva o cookie de sessão ao servidor e o Auth.js o reemite — o
+            defeito de logout de `0a81737` (AGENTS.md). Cobrado por
+            `tests/unit/prefetch-do-painel.test.ts`. */}
+        <Link href="/conversas" prefetch={false} className="text-sm text-muted-foreground hover:underline">
           ← Conversas
         </Link>
         <h1 className="text-xl font-semibold">Agente de atendimento</h1>

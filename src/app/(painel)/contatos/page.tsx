@@ -84,8 +84,15 @@ export default async function ContatosPage({
         <Button type="submit" variant="outline">
           Buscar
         </Button>
+        {/* `prefetch={false}` em TODO `<Link>` do painel, e não só nos que
+            moram dentro de `<nav>`: o mecanismo do defeito de logout
+            (`0a81737`, AGENTS.md) é a requisição de pré-busca carregando o
+            cookie de sessão e o Auth.js o reemitindo — e ela não distingue
+            link de menu de link de tabela. Na tabela abaixo há o agravante de
+            a lista renderizar até 25 linhas, ou seja, 25 pré-buscas em voo por
+            tela. Cobrado por `tests/unit/prefetch-do-painel.test.ts`. */}
         {busca && (
-          <Link href="/contatos" className="text-sm text-muted-foreground underline">
+          <Link href="/contatos" prefetch={false} className="text-sm text-muted-foreground underline">
             Limpar
           </Link>
         )}
@@ -129,7 +136,11 @@ export default async function ContatosPage({
             {contatos.map((contato) => (
               <tr key={contato.id} className="border-b hover:bg-muted/40">
                 <td className="py-2">
-                  <Link href={`/contatos/${contato.id}`} className="text-primary underline">
+                  <Link
+                    href={`/contatos/${contato.id}`}
+                    prefetch={false}
+                    className="text-primary underline"
+                  >
                     {contato.nome}
                   </Link>
                 </td>

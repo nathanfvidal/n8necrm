@@ -170,9 +170,16 @@ export function NotificationBell({ notificacoes: iniciais }: { notificacoes: Not
                         {notificacao.titulo}
                       </p>
                       {notificacao.detalhe && <p>{notificacao.detalhe}</p>}
+                      {/* `prefetch={false}` no `<Link>` abaixo vale para TODO
+                          `<Link>` do painel: a pré-busca leva o cookie de
+                          sessão ao servidor e o Auth.js o reemite — o defeito
+                          de logout de `0a81737` (AGENTS.md). O sino é o vizinho
+                          mais próximo do botão "Sair" no cabeçalho. Cobrado por
+                          `tests/unit/prefetch-do-painel.test.ts`. */}
                       {notificacao.href && notificacao.textoLink && (
                         <Link
                           href={notificacao.href}
+                          prefetch={false}
                           className="text-xs text-primary underline"
                           onClick={() => setAberto(false)}
                         >

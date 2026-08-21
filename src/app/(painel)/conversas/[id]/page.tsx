@@ -55,7 +55,11 @@ export default async function ConversaDetalhePage({
     <div className="space-y-6 p-6">
       <div className="flex items-start justify-between">
         <div>
-          <Link href="/conversas" className="text-sm text-muted-foreground hover:underline">
+          {/* `prefetch={false}` vale para TODO `<Link>` do painel: a pré-busca
+              leva o cookie de sessão ao servidor e o Auth.js o reemite — o
+              defeito de logout de `0a81737` (AGENTS.md). Cobrado por
+              `tests/unit/prefetch-do-painel.test.ts`. */}
+          <Link href="/conversas" prefetch={false} className="text-sm text-muted-foreground hover:underline">
             ← Conversas
           </Link>
           <h1 className="text-xl font-semibold">
@@ -64,7 +68,11 @@ export default async function ConversaDetalhePage({
           <p className="text-sm text-muted-foreground">{conversa.telefone ?? conversa.waId}</p>
         </div>
         {hasPermission(usuario.papel, "configurar_agente") && (
-          <Link href="/conversas/agente" className="text-sm text-muted-foreground hover:underline">
+          <Link
+            href="/conversas/agente"
+            prefetch={false}
+            className="text-sm text-muted-foreground hover:underline"
+          >
             Configurar agente
           </Link>
         )}

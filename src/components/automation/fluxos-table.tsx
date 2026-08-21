@@ -85,7 +85,12 @@ export function FluxosTable({
         {fluxos.map((fluxo) => (
           <TableRow key={fluxo.id}>
             <TableCell>
-              <Link href={`/fluxos/${fluxo.id}`} className="font-medium hover:underline">
+              {/* `prefetch={false}` vale para TODO `<Link>` do painel, também
+                  fora de `<nav>`: a pré-busca leva o cookie de sessão ao
+                  servidor e o Auth.js o reemite — o defeito de logout de
+                  `0a81737` (AGENTS.md). Numa lista, é uma pré-busca por linha.
+                  Cobrado por `tests/unit/prefetch-do-painel.test.ts`. */}
+              <Link href={`/fluxos/${fluxo.id}`} prefetch={false} className="font-medium hover:underline">
                 {fluxo.nome}
               </Link>
             </TableCell>

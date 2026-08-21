@@ -100,7 +100,17 @@ export default async function FluxoDetalhePage({
       </div>
 
       <nav className="flex gap-2 border-b">
-        <Link href={`/fluxos/${id}`} aria-current={!mostrandoEditor ? "page" : undefined}>
+        {/* `prefetch={false}` nas duas abas pelo motivo de segurança de
+            `nav-links.tsx`, não por performance: a pré-busca padrão do `<Link>`
+            bate no servidor com o cookie de sessão, o Auth.js o reemite, e uma
+            resposta em voo no momento do "Sair" desfaz a revogação (o defeito
+            de `0a81737`). Este `<nav>` tinha ficado de fora daquela correção.
+            Cobrado por `tests/unit/prefetch-do-painel.test.ts`. */}
+        <Link
+          href={`/fluxos/${id}`}
+          prefetch={false}
+          aria-current={!mostrandoEditor ? "page" : undefined}
+        >
           <Button variant={!mostrandoEditor ? "default" : "ghost"} size="sm">
             Execuções
           </Button>
@@ -117,7 +127,11 @@ export default async function FluxoDetalhePage({
             que este CRM não provisiona. O gate NÃO é `gerenciar_fluxos` DE
             PROPÓSITO — não "consertar" isso depois achando que foi
             esquecimento. */}
-        <Link href={`/fluxos/${id}?aba=editar`} aria-current={mostrandoEditor ? "page" : undefined}>
+        <Link
+          href={`/fluxos/${id}?aba=editar`}
+          prefetch={false}
+          aria-current={mostrandoEditor ? "page" : undefined}
+        >
           <Button variant={mostrandoEditor ? "default" : "ghost"} size="sm">
             Editar
           </Button>

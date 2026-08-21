@@ -73,6 +73,10 @@ export function NavLinks({ grupos }: { grupos: LinkDoPainel[][] }) {
               <Link
                 key={href}
                 href={href}
+                // A correção de segurança do logout (`0a81737`, AGENTS.md), e
+                // por muito tempo o ÚNICO lugar onde ela existia. Desde
+                // 2026-08-21 a regra vale para toda a árvore do painel e é
+                // cobrada por `tests/unit/prefetch-do-painel.test.ts`.
                 prefetch={false}
                 aria-current={href === ativo ? "page" : undefined}
                 className={
