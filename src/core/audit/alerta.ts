@@ -3,6 +3,8 @@ import "server-only";
 import { prismaDaEmpresa } from "@/core/tenancy/escopo";
 import { checarRateLimit } from "@/core/rate-limit/limiter";
 import { idsDeSistema } from "@/core/users/sistema";
+import { enviarEmailMelhorEsforco } from "@/core/notifications/email-envio";
+import { AlertaAtividadeEmail } from "@/core/notifications/email";
 import {
   TIPO_ALERTA_ATIVIDADE,
   type AlertaAtividadePayload,
@@ -33,10 +35,17 @@ export type { AlertaAtividadePayload };
  * ## A assimetria que permite um gatilho apertado
  *
  * Alertar não bloqueia nada. Um falso positivo custa uma notificação no sino
- * de um ADMIN; um falso negativo custa a empresa não descobrir a tempo. É o
- * inverso de um limite de taxa, onde errar para o lado apertado barra quem
- * está trabalhando. Por isso o gatilho aqui pode ser — e é — bem mais
- * sensível do que qualquer teto de escrita poderia ser.
+ * de um ADMIN — e, desde o reparo do achado 40, um e-mail para ele; um falso
+ * negativo custa a empresa não descobrir a tempo. É o inverso de um limite de
+ * taxa, onde errar para o lado apertado barra quem está trabalhando. Por isso
+ * o gatilho aqui pode ser — e é — bem mais sensível do que qualquer teto de
+ * escrita poderia ser.
+ *
+ * A assimetria ficou MENOS folgada com o e-mail: falso positivo agora chega na
+ * caixa de entrada, que é o canal que as pessoas aprendem a filtrar. O que
+ * segura isso não é o limiar ser alto — é o silêncio de 30 minutos
+ * (`SILENCIO_ENTRE_ALERTAS_MS`), que limita o pior caso a dois e-mails por
+ * hora por conta suspeita, por mais longa que seja a rajada.
  */
 
 /**
@@ -210,13 +219,19 @@ export async function avaliarAtividadeSuspeita(input: {
   // entrega que ele foi percebido. Se o autor for o ÚNICO ADMIN ativo desta
   // empresa, a lista fica vazia e nenhum alerta é enviado: é o limite honesto
   // deste controle, e o `AuditLog` continua guardando tudo para depois.
+  //
+  // `select` traz o `email` junto desde o reparo do achado 40 (o alerta passou
+  // a sair também por e-mail, logo abaixo). É `user: { select: { email: true } }`
+  // e NUNCA `user: true`: a linha inteira de `User` traria `senhaHash`, que é
+  // o padrão que `tests/unit/consultas-estreitas.test.ts` reprova — e reprovaria
+  // esta linha, por nome de campo, se ela fosse escrita assim.
   const destinatarios = await db.membership.findMany({
     where: {
       papel: "ADMIN",
       userId: { notIn: [...idsDeSistema(), input.userId] },
       user: { ativo: true },
     },
-    select: { userId: true },
+    select: { userId: true, user: { select: { email: true } } },
   });
   if (destinatarios.length === 0) return;
 
@@ -249,4 +264,48 @@ export async function avaliarAtividadeSuspeita(input: {
       payload,
     })),
   });
+
+  // ## O e-mail, e por que ele passou a existir (achado 40 da auditoria)
+  //
+  // Até 2026-08-21 a função terminava na linha acima. A auditoria mediu a
+  // consequência: **lead novo rendia e-mail (`core/notifications/dispatch.ts`)
+  // e rajada destrutiva rendia só um badge no sino** — o canal mais fraco para
+  // o evento mais grave. Sino só é visto por quem está logado e olha; uma
+  // sabotagem às 3h da manhã, ou num fim de semana, ficava esperando alguém
+  // abrir o CRM.
+  //
+  // ORDEM: in-app PRIMEIRO, e-mail depois. Mesma regra de `dispatch.ts` e pelo
+  // mesmo motivo — o canal que não depende de terceiro é o que não pode
+  // faltar. Se o Resend estiver fora do ar, o alerta já está gravado.
+  //
+  // O SILÊNCIO DE 30 MINUTOS VALE PARA OS DOIS, e isto é o ponto mais
+  // importante deste bloco: o `return` de `primeiroDaJanela`, lá em cima, é o
+  // que impede que a 11ª, a 12ª e a 13ª ação da rajada rendam um e-mail cada.
+  // E-mail repetido é pior que e-mail nenhum — ensina o ADMIN a criar regra de
+  // caixa de entrada para o alerta, e aí o controle morre em silêncio. Por
+  // isso o envio mora DEPOIS da trava, e não em qualquer ponto acima dela.
+  // Caso que trava: "nao repete o alerta a cada acao seguinte dentro da janela
+  // de silencio" (`tests/unit/alerta-atividade.test.ts`) e o par mockado em
+  // `tests/unit/alerta-email.test.ts`.
+  //
+  // UM ENVIO POR DESTINATÁRIO, e não um `to: [a, b, c]`: um envio só exporia a
+  // caixa de cada ADMIN para os outros, e uma recusa do provedor a UM endereço
+  // derrubaria a mensagem dos demais. Sequencial, e não `Promise.all`, porque
+  // são poucos endereços (ADMINs de uma empresa) e um disparo simultâneo
+  // contra o limite de taxa do Resend faria justamente o alerta de incidente
+  // ser o que estoura a cota.
+  //
+  // FALHA AQUI NÃO DERRUBA NADA: `enviarEmailMelhorEsforco` registra e engole
+  // (ver o docstring dele), e `registrarAuditoria` (`./log.ts`) ainda envolve a
+  // chamada inteira num `try/catch`. Sem `RESEND_API_KEY` — o caso real deste
+  // projeto hoje — ele devolve `false` sem tentar rede nenhuma, e o
+  // comportamento observável volta a ser exatamente o de antes deste bloco.
+  for (const destinatario of destinatarios) {
+    await enviarEmailMelhorEsforco({
+      para: destinatario.user.email,
+      assunto: "Alerta: atividade destrutiva em rajada",
+      react: AlertaAtividadeEmail(payload),
+      contexto: `alerta de atividade suspeita, empresa ${input.companyId}`,
+    });
+  }
 }

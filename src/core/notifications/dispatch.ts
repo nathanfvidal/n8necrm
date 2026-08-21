@@ -1,28 +1,17 @@
 // `import "server-only"` — mesmo padrão de `src/lib/prisma.ts`,
 // `src/core/leads/notes.ts` e `src/core/tasks/service.ts`: este módulo
-// importa Prisma diretamente (e, agora, também o SDK do Resend, que espera
-// rodar em servidor). Sem esta linha, o único motivo pelo qual um Client
-// Component não conseguiria importar isto seria coincidência do bundler, não
-// uma garantia.
+// importa Prisma diretamente. Sem esta linha, o único motivo pelo qual um
+// Client Component não conseguiria importar isto seria coincidência do
+// bundler, não uma garantia.
 import "server-only";
 
 import { after } from "next/server";
-import { Resend } from "resend";
 
 import { prismaDaEmpresa } from "@/core/tenancy/escopo";
+import { enviarEmailMelhorEsforco } from "./email-envio";
 import { NovoLeadEmail } from "./email";
 import type { NovoLeadPayload } from "./types";
 import type { Notification } from "@prisma/client";
-
-// `resend` é `null` quando `RESEND_API_KEY` não está definida — o caso real
-// deste projeto hoje: a Task 19 é explícita que a chave fica de fora do
-// `.env` (não há conta Resend real disponível), então o caminho de e-mail
-// nunca é exercitado de verdade, nem em dev nem nos testes. `null` em vez de
-// instanciar `Resend("")` é deliberado: o SDK não valida a chave na
-// construção, então um `new Resend("")` "funcionaria" até a primeira
-// chamada de rede falhar com um erro de autenticação genérico — pior sinal
-// para debugar do que simplesmente nunca tentar enviar.
-const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null;
 
 /**
  * Notifica o responsável por um lead recém-criado: grava uma notificação
@@ -42,13 +31,13 @@ const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KE
  *   real que deve propagar (o `try/catch` de `criarLead` do lado de fora é
  *   quem decide não deixar isso quebrar a criação do lead; aqui dentro não
  *   faz sentido fingir sucesso).
- * - O envio de e-mail É envolvido em try/catch, e SEMPRE roda depois da
- *   notificação in-app já estar gravada: um Resend fora do ar (ou, no caso
- *   comum deste projeto, `resend === null` porque a chave não existe) nunca
- *   deveria impedir a pessoa de ver a notificação dentro do próprio CRM.
- *   `console.error` é o único registro de uma falha de e-mail — sem retry,
- *   sem fila (a spec descreve entrega com retry via QStash como alvo
- *   futuro; esta fase implementa só o "melhor esforço" mais simples).
+ * - O envio de e-mail é MELHOR ESFORÇO, e SEMPRE roda depois da notificação
+ *   in-app já estar gravada: um Resend fora do ar (ou, no caso comum deste
+ *   projeto, a chave que não existe) nunca deveria impedir a pessoa de ver a
+ *   notificação dentro do próprio CRM. O try/catch e o `resend === null`
+ *   moram em `./email-envio.ts` desde o reparo do achado 40 — é o pedaço que
+ *   o alerta de rajada (`core/audit/alerta.ts`) passou a compartilhar, e a
+ *   regra de resiliência está escrita lá, uma vez só, para os dois caminhos.
  */
 export async function notificarNovoLead(companyId: string, leadId: string): Promise<void> {
   const db = prismaDaEmpresa(companyId);
@@ -150,21 +139,15 @@ export async function notificarNovoLead(companyId: string, leadId: string): Prom
     },
   });
 
-  if (!resend) return;
-
-  try {
-    await resend.emails.send({
-      from: "CRM <notificacoes@exemplo.com>",
-      to: lead.responsavel.email,
-      subject: "Novo lead recebido",
-      react: NovoLeadEmail({
-        contatoNome: payload.contatoNome,
-        etapaNome: lead.stage.nome,
-      }),
-    });
-  } catch (erro) {
-    console.error("Falha ao enviar e-mail de notificação de novo lead:", erro);
-  }
+  await enviarEmailMelhorEsforco({
+    para: lead.responsavel.email,
+    assunto: "Novo lead recebido",
+    react: NovoLeadEmail({
+      contatoNome: payload.contatoNome,
+      etapaNome: lead.stage.nome,
+    }),
+    contexto: "notificação de novo lead",
+  });
 }
 
 /**
