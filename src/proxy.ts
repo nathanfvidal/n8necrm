@@ -207,15 +207,21 @@ export const config = {
    *   criada ali precisa se autenticar sozinha, e NENHUMA rota que leia
    *   dado do CRM (lead, contato, conversa, etc.) pode morar ali — só
    *   ingestão/saída de WhatsApp.
-   * - api/queues (mesma fatia): consumidor da fila
-   *   (`/api/queues/whatsapp-turn/route.ts`), invocado pela infraestrutura
-   *   de fila da Vercel, também sem sessão de usuário. Confirmado
+   * - api/queues: o TICK da fila (`/api/queues/whatsapp-turn/route.ts`), que
+   *   drena os turnos pendentes. Não tem sessão de usuário. Confirmado
    *   empiricamente que o proxy também interceptava este path antes desta
-   *   exceção (mesmo teste de regex acima). Seguro mesmo sem token
-   *   próprio — ao contrário de `/api/whatsapp/*`, este path não tem
-   *   nenhum ponto de entrada alcançável de fora (não está atrás de nenhum
-   *   link, formulário ou documentação pública; só a própria Vercel invoca
-   *   -- ver plano da Fatia 1, seção "Verificação").
+   *   exceção (mesmo teste de regex acima). Até o Ciclo 2d ele era um
+   *   consumidor de push do Vercel Queues e a garantia era de REDE — a
+   *   plataforma mantinha a rota air-gapped da internet, e este comentário
+   *   dizia que "só a própria Vercel invoca". Fora da Vercel essa garantia não
+   *   existe mais, e a frase teria virado mentira no mesmo commit. Hoje a rota
+   *   **se autentica sozinha**, com um segredo em cabeçalho comparado em tempo
+   *   constante (`@/lib/segredo`), e responde 404 a quem não tem — mesma
+   *   resposta que o webhook dá, pelo mesmo motivo.
+   *
+   *   **Invariante que este subdiretório passa a carregar**, igual ao de
+   *   `/api/whatsapp/*`: tudo sob `/api/queues/*` é público por definição, e
+   *   toda rota nova criada ali precisa se autenticar sozinha.
    * - _next/static, _next/image: assets internos do Next.
    * - arquivos estáticos de primeiro nível (favicon.ico, public/*.svg
    *   etc.): usa `[^/]+\.ext$`, não `.*\.ext$`. `.*` combina com qualquer
