@@ -7,7 +7,7 @@
 // `@/modules/whatsapp/gateway/fabrica`, que constrói o gateway a partir da
 // CONEXÃO resolvida. É a mudança inteira do ciclo, vista de dentro do teste: a
 // rota não conhece mais nenhuma credencial de ambiente.
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 
 const EMPRESA = "cmp_a";
 const TOKEN = "a".repeat(64);
@@ -80,10 +80,25 @@ function eventoNormalizado(idExterno: string, texto = "oi") {
   };
 }
 
+/**
+ * O cabecalho que a borda sobrescreve, nomeado por `IP_CABECALHO_CONFIAVEL`
+ * (ver `src/lib/ip.ts`). Desde o Ciclo 2d a rota nao le mais `x-forwarded-for`
+ * nem `x-real-ip` por conta propria: nenhum cabecalho e confiavel ate alguem
+ * dizer qual e. Os casos que exercitam a chave por IP definem a variavel; o que
+ * exercita a AUSENCIA de borda a apaga.
+ */
+const CABECALHO_DA_BORDA = "x-vercel-forwarded-for";
+const cabecalhoOriginal = process.env.IP_CABECALHO_CONFIAVEL;
+
+afterEach(() => {
+  if (cabecalhoOriginal === undefined) delete process.env.IP_CABECALHO_CONFIAVEL;
+  else process.env.IP_CABECALHO_CONFIAVEL = cabecalhoOriginal;
+});
+
 function requestComCorpo(corpo: unknown, ip = "203.0.113.10") {
   return new Request("https://crm.exemplo.com/api/whatsapp/evolution/x/y", {
     method: "POST",
-    headers: { "content-type": "application/json", "x-forwarded-for": ip },
+    headers: { "content-type": "application/json", [CABECALHO_DA_BORDA]: ip },
     body: JSON.stringify(corpo),
   });
 }
@@ -93,6 +108,9 @@ function chamar(request: Request, companyId = EMPRESA, token = TOKEN) {
 }
 
 beforeEach(() => {
+  // A maioria dos casos deste arquivo mede o caminho NORMAL, com borda na
+  // frente. O caso do estado degradado apaga a variavel por conta propria.
+  process.env.IP_CABECALHO_CONFIAVEL = CABECALHO_DA_BORDA;
   checarRateLimitMock.mockReset().mockResolvedValue(true);
   resolverConexaoPorWebhookMock.mockReset().mockResolvedValue(CRED);
   verificarOrigemMock.mockReset().mockReturnValue(true);
@@ -236,7 +254,7 @@ describe("resolução da conexão — é ela que substitui EVOLUTION_COMPANY_ID"
   it("devolve 200 (ack) para JSON malformado, sem resolver conexão nenhuma", async () => {
     const request = new Request("https://crm.exemplo.com/api/whatsapp/evolution/x/y", {
       method: "POST",
-      headers: { "content-type": "application/json", "x-forwarded-for": "203.0.113.10" },
+      headers: { "content-type": "application/json", [CABECALHO_DA_BORDA]: "203.0.113.10" },
       body: "{ nao é json",
     });
     const resposta = await chamar(request);
@@ -269,29 +287,72 @@ describe("rate limit por IP", () => {
     }
   );
 
-  it(
-    "fix round 1/5 (achado MENOR): usa x-vercel-forwarded-for (não forjável pelo cliente) como chave do " +
-      "rate limit quando presente, antes de x-forwarded-for (forjável)",
-    async () => {
-      const request = new Request("https://crm.exemplo.com/api/whatsapp/evolution/x/y", {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-forwarded-for": "198.51.100.9", // forjável, deveria ser ignorado quando o outro header existe
-          "x-vercel-forwarded-for": "203.0.113.55",
-        },
-        body: JSON.stringify({}),
-      });
+  it("com cabeçalho confiável, a chave do rate limit é o IP", async () => {
+    // Herdeiro do "fix round 1/5 (achado MENOR)": o cabecalho escolhido pelo
+    // cliente continua ignorado. O que mudou no Ciclo 2d e QUEM decide qual e o
+    // confiavel -- antes era uma ordem fixa no codigo, agora e
+    // `IP_CABECALHO_CONFIAVEL`, porque fora da Vercel nao existe cabecalho que o
+    // codigo possa presumir nao forjavel.
+    const request = new Request("https://crm.exemplo.com/api/whatsapp/evolution/x/y", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-forwarded-for": "198.51.100.9", // não é o nomeado: deve ser ignorado
+        [CABECALHO_DA_BORDA]: "203.0.113.55",
+      },
+      body: JSON.stringify({}),
+    });
 
-      await chamar(request);
+    await chamar(request);
 
-      expect(checarRateLimitMock).toHaveBeenCalledWith(
-        "whatsapp:webhook:203.0.113.55",
-        expect.any(Number),
-        expect.any(Number)
-      );
-    }
-  );
+    expect(checarRateLimitMock).toHaveBeenCalledWith(
+      "whatsapp:webhook:203.0.113.55",
+      expect.any(Number),
+      expect.any(Number)
+    );
+  });
+
+  it("sem cabeçalho confiável, a chave passa a ser a EMPRESA do path", async () => {
+    // Colapsar tudo num balde so derrubaria mensagens legitimas de todas as
+    // empresas juntas -- e o limite existe para conter flood, nao para virar um.
+    // A empresa do path esta disponivel antes de qualquer consulta ao banco, o
+    // que preserva a ordem "rate limit antes de resolver a conexao".
+    //
+    // Limite conhecido, dito em voz alta: quem souber o `companyId` (ele esta na
+    // URL do webhook que o dono cola no painel da Evolution) pode queimar o
+    // balde daquela empresa. Um cabecalho confiavel fecha isso; nada mais fecha.
+    delete process.env.IP_CABECALHO_CONFIAVEL;
+
+    const request = new Request("https://crm.exemplo.com/api/whatsapp/evolution/x/y", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-forwarded-for": "198.51.100.9", // sem borda nomeada, isto nao vira chave
+      },
+      body: JSON.stringify({}),
+    });
+
+    await chamar(request);
+
+    expect(checarRateLimitMock).toHaveBeenCalledWith(
+      `whatsapp:webhook:empresa:${EMPRESA}`,
+      expect.any(Number),
+      expect.any(Number)
+    );
+  });
+
+  it("sem cabeçalho confiável, empresas diferentes recebem baldes diferentes", async () => {
+    // Sem este caso, "cai para a empresa" tambem seria verdade num mundo em que
+    // a chave degradada fosse uma constante -- que e exatamente o balde unico
+    // que o caso acima existe para evitar.
+    delete process.env.IP_CABECALHO_CONFIAVEL;
+
+    await chamar(requestComCorpo({}), "cmp_a");
+    await chamar(requestComCorpo({}), "cmp_b");
+
+    const chaves = checarRateLimitMock.mock.calls.map((c) => c[0]);
+    expect(chaves).toEqual(["whatsapp:webhook:empresa:cmp_a", "whatsapp:webhook:empresa:cmp_b"]);
+  });
 });
 
 describe("ingestão e publicação de turno", () => {

@@ -21,6 +21,7 @@ vi.mock("server-only", () => ({}));
 import { Prisma } from "@prisma/client";
 import { prisma } from "../../src/lib/prisma";
 import { registrarAuditoria } from "../../src/core/audit/log";
+import { IP_DESCONHECIDO } from "../../src/lib/ip";
 
 // AuditLog.userId é FK obrigatória para User — precisamos de um usuário real
 // no Postgres. Criamos um usuário com prefixo "teste-" e removemos, junto
@@ -94,6 +95,34 @@ describe("registrarAuditoria", () => {
     expect(registro?.antes).toBeNull();
     expect(registro?.depois).toEqual({ nome: "Fulano de Tal", ativo: true, tags: ["a", "b"] });
     expect(registro?.ip).toBe("127.0.0.1");
+  });
+
+  it("a sentinela de \"sem borda confiável\" grava a coluna `ip` NULA, não a string", async () => {
+    // Ciclo 2d: `obterIpDaRequisicao` devolve `IP_DESCONHECIDO` quando
+    // `IP_CABECALHO_CONFIAVEL` não nomeia cabeçalho nenhum. Ela existe porque a
+    // chave de rate limit precisa de uma `string`; a coluna, não — é anulável.
+    // Gravá-la deixaria o log indistinguível de um IP real vindo de uma máquina
+    // chamada "desconhecido", e coluna preenchida com o que não é um IP é pior
+    // que coluna vazia: vazio é ausência de informação, sentinela parece dado.
+    //
+    // O caso roda contra o Postgres de verdade porque o que se afirma é o
+    // conteúdo da COLUNA depois de gravada, não o argumento passado adiante.
+    await registrarAuditoria({
+      companyId,
+      userId,
+      acao: "criar_lead",
+      entidade: "Lead",
+      entidadeId: "teste-lead-sem-borda",
+      ip: IP_DESCONHECIDO,
+    });
+
+    const registro = await prisma.auditLog.findFirst({
+      where: { userId, entidadeId: "teste-lead-sem-borda" },
+      orderBy: { criadoEm: "desc" },
+    });
+
+    expect(registro).not.toBeNull();
+    expect(registro?.ip).toBeNull();
   });
 
   it("coage Date para string ISO e Decimal do Prisma para string, e descarta campos undefined", async () => {

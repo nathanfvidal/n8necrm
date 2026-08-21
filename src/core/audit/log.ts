@@ -1,6 +1,6 @@
 import type { Prisma } from "@prisma/client";
 import { prismaDaEmpresa } from "@/core/tenancy/escopo";
-import { ipDaRequisicaoAtual } from "@/lib/ip";
+import { IP_DESCONHECIDO, ipDaRequisicaoAtual } from "@/lib/ip";
 import { avaliarAtividadeSuspeita } from "./alerta";
 
 /**
@@ -131,7 +131,16 @@ export function dadosDeLinhaDeAuditoria(
  *   `headers()` com lock de linha em `Lead` na mão.
  */
 async function comIpDaRequisicao(params: ParamsDeAuditoria): Promise<ParamsDeAuditoria> {
-  if (params.ip !== undefined) return params;
+  // `IP_DESCONHECIDO` é a sentinela que `obterIpDaRequisicao` devolve quando não
+  // há borda confiável (Ciclo 2d, `lib/ip.ts`). Ela existe porque os chamadores
+  // de rate limit precisam de uma `string` para montar chave — mas aqui a coluna
+  // é ANULÁVEL, e gravar a sentinela a deixaria indistinguível de um IP real
+  // vindo de uma máquina chamada "desconhecido". Coluna preenchida com um valor
+  // que não é um IP é pior que coluna vazia: vazio é ausência de informação,
+  // sentinela é informação que parece dado. Normalizada aqui, no funil, e não em
+  // cada chamador — mesmo argumento que trouxe `ipDaRequisicaoAtual` para cá.
+  const informado = params.ip === IP_DESCONHECIDO ? undefined : params.ip;
+  if (informado !== undefined) return { ...params, ip: informado };
   return { ...params, ip: await ipDaRequisicaoAtual() };
 }
 

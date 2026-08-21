@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { checarRateLimit } from "@/core/rate-limit/limiter";
-import { obterIpDaRequisicao } from "@/lib/ip";
+import { IP_DESCONHECIDO, obterIpDaRequisicao } from "@/lib/ip";
 import { resolverConexaoPorWebhook } from "@/core/conexoes/leitura";
 import { gatewayDaCredencial } from "@/modules/whatsapp/gateway/fabrica";
 import { ingerirMensagem } from "@/modules/whatsapp/ingest";
@@ -48,7 +48,8 @@ import { publicarTurno } from "@/modules/whatsapp/fila";
  *
  * ## Camadas de defesa, nesta ordem
  *
- * 1. **Rate limit por IP** — primeiro de todos, e a ordem importa mais agora
+ * 1. **Rate limit por IP** (ou por EMPRESA, quando não há borda confiável — ver
+ *    `lib/ip.ts` e o comentário no corpo) — primeiro de todos, e a ordem importa mais agora
  *    que antes: resolver a conexão é uma ida ao BANCO, e deixá-la à frente
  *    daria a quem descobriu o path uma consulta por requisição de graça. Tem
  *    caso de teste. O limite alargado (600/min) continua sendo trava contra
@@ -80,7 +81,21 @@ export async function POST(
   const { companyId, token } = await params;
 
   const ip = obterIpDaRequisicao(request);
-  const permitido = await checarRateLimit(`whatsapp:webhook:${ip}`, 600, 60_000);
+  // Sem borda confiável (`IP_CABECALHO_CONFIAVEL` ausente — ver `lib/ip.ts`), o
+  // IP é o mesmo para todo mundo, e um balde único derrubaria mensagens
+  // legítimas de todas as empresas juntas: o limite que existe para conter
+  // flood viraria o próprio flood. A empresa do path está disponível ANTES de
+  // qualquer consulta, então a degradação não custa a ordem "rate limit antes
+  // de resolver a conexão" que a camada 1 garante.
+  //
+  // Limite conhecido, dito em voz alta: o `companyId` está na URL de webhook
+  // que o dono cola no painel da Evolution, então quem a conhecer pode queimar
+  // o balde daquela empresa. Um cabeçalho confiável fecha isso; nada mais fecha.
+  const chaveDeTaxa =
+    ip === IP_DESCONHECIDO
+      ? `whatsapp:webhook:empresa:${companyId}`
+      : `whatsapp:webhook:${ip}`;
+  const permitido = await checarRateLimit(chaveDeTaxa, 600, 60_000);
   if (!permitido) {
     return NextResponse.json({ ok: false }, { status: 429 });
   }

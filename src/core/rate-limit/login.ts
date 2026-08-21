@@ -1,3 +1,5 @@
+import { IP_DESCONHECIDO } from "@/lib/ip";
+
 import { checarRateLimit } from "./limiter";
 
 /**
@@ -43,6 +45,26 @@ import { checarRateLimit } from "./limiter";
  * contrário um atacante bloqueado ainda conseguiria queimar o balde do
  * e-mail da vítima a cada requisição, transformando um limite que existe
  * para proteger a conta numa arma contra ela.
+ *
+ * ## Quando não há IP nenhum
+ *
+ * Desde o Ciclo 2d, `lib/ip.ts` só devolve IP quando `IP_CABECALHO_CONFIAVEL`
+ * nomeia o cabeçalho que a borda SOBRESCREVE — fora da Vercel não existe
+ * cabeçalho que o código possa presumir não forjável. Sem essa variável, TODA
+ * requisição chegaria aqui com `IP_DESCONHECIDO`.
+ *
+ * Usar essa sentinela como chave seria pior que não ter limite por IP: como o
+ * IP é checado PRIMEIRO e a função retorna sem tocar na cota da conta quando
+ * ele estoura, 20 tentativas erradas de um atacante trancariam o login de TODO
+ * MUNDO por 10 minutos. Uma defesa contra força bruta que vira negação de
+ * serviço global é o modo de falha errado, então a dimensão é PULADA.
+ *
+ * O que sustenta o login nesse estado é a dimensão por CONTA — justamente a
+ * que protege uma conta específica de adivinhação dirigida, e que não depende
+ * de IP nenhum. O que se perde é a defesa contra varredura de MUITAS contas a
+ * partir de uma origem só, e essa perda é consequência da hospedagem
+ * indefinida, não escolha de código: ela some no dia em que a variável for
+ * definida.
  *
  * ## A cota da conta é consumida mesmo se o e-mail não existir
  *
@@ -91,12 +113,18 @@ export async function checarLimiteLogin(
   ip: string,
   email: string
 ): Promise<ResultadoLimiteLogin> {
-  const ipPermitido = await checarRateLimit(
-    `login:ip:${ip}`,
-    LIMITE_LOGIN_POR_IP,
-    JANELA_LOGIN_MS
-  );
-  if (!ipPermitido) return { permitido: false, dimensao: "ip" };
+  // Sem borda confiável (`IP_CABECALHO_CONFIAVEL` ausente — ver `lib/ip.ts`),
+  // toda requisição chega com a mesma sentinela. Ver a seção "Quando não há IP
+  // nenhum" acima: um balde compartilhado transformaria a defesa contra força
+  // bruta em negação de serviço global, porque o IP é consultado PRIMEIRO.
+  if (ip !== IP_DESCONHECIDO) {
+    const ipPermitido = await checarRateLimit(
+      `login:ip:${ip}`,
+      LIMITE_LOGIN_POR_IP,
+      JANELA_LOGIN_MS
+    );
+    if (!ipPermitido) return { permitido: false, dimensao: "ip" };
+  }
 
   const contaPermitida = await checarRateLimit(
     `login:conta:${chaveDaConta(email)}`,

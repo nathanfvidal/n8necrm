@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 
 // "server-only" só resolve para um no-op sob a condição de resolução
 // "react-server" que o Next.js aplica no build — fora desse pipeline (aqui,
@@ -51,7 +51,26 @@ const {
   JANELA_LOGIN_MS,
 } = await import("../../src/core/rate-limit/login");
 
+// A sentinela vem do modulo, nao repetida como literal: ela e o CONTRATO entre
+// `lib/ip.ts` e `rate-limit/login.ts` -- quem renomear o valor num lado tem de
+// ver este arquivo ficar vermelho, nao passar despercebido.
+const { IP_DESCONHECIDO } = await import("../../src/lib/ip");
+
 const chavesUsadas = () => checarRateLimitMock.mock.calls.map((c) => c[0]);
+
+/**
+ * O cabecalho que a borda sobrescreve, nomeado por `IP_CABECALHO_CONFIAVEL`
+ * (ver `src/lib/ip.ts`). Desde o Ciclo 2d NENHUM cabecalho e lido sem essa
+ * variavel, entao os casos que exercitam a chave por IP precisam defini-la --
+ * e os que exercitam a AUSENCIA de borda precisam apaga-la.
+ */
+const CABECALHO_DA_BORDA = "x-vercel-forwarded-for";
+const cabecalhoOriginal = process.env.IP_CABECALHO_CONFIAVEL;
+
+function restaurarCabecalhoConfiavel() {
+  if (cabecalhoOriginal === undefined) delete process.env.IP_CABECALHO_CONFIAVEL;
+  else process.env.IP_CABECALHO_CONFIAVEL = cabecalhoOriginal;
+}
 
 describe("checarLimiteLogin", () => {
   beforeEach(() => {
@@ -117,21 +136,67 @@ describe("checarLimiteLogin", () => {
     const chaveDaConta = chavesUsadas()[1]!;
     expect(chaveDaConta.length).toBeLessThanOrEqual("login:conta:".length + 200);
   });
+
+  it("sem cabeçalho confiável, a dimensão de IP é PULADA — não vira um balde só", async () => {
+    // Colapsar tudo em `login:ip:desconhecido` seria pior que nao ter limite:
+    // 20 tentativas erradas de um atacante trancariam o login de TODO MUNDO por
+    // 10 minutos, porque esta funcao consulta o IP PRIMEIRO e retorna sem tocar
+    // na cota da conta quando ele estoura. Uma defesa contra forca bruta que
+    // vira negacao de servico global e o modo de falha errado.
+    //
+    // O que se afirma aqui e a AUSENCIA da chamada, nao um resultado dela: com
+    // o limiter mockado, "passou" nao distingue "pulou" de "consultou e
+    // permitiu". So a contagem de chamadas distingue.
+    await checarLimiteLogin(IP_DESCONHECIDO, "alguem@exemplo.com");
+
+    expect(checarRateLimitMock).toHaveBeenCalledTimes(1);
+    expect(chavesUsadas()).toEqual(["login:conta:alguem@exemplo.com"]);
+    expect(chavesUsadas().some((c) => String(c).startsWith("login:ip:"))).toBe(false);
+  });
+
+  it("sem cabeçalho confiável, a dimensão por CONTA continua mordendo", async () => {
+    // A metade que sustenta o login nesse estado: e a cota por conta que protege
+    // uma conta especifica de adivinhacao dirigida, e ela nao depende de IP
+    // nenhum. Sem este caso, "pular o IP" tambem seria verdade num mundo em que
+    // a funcao inteira parasse de limitar.
+    checarRateLimitMock.mockResolvedValueOnce(false);
+
+    const resultado = await checarLimiteLogin(IP_DESCONHECIDO, "alvo@exemplo.com");
+
+    expect(resultado).toEqual({ permitido: false, dimensao: "conta" });
+    expect(chavesUsadas()).toEqual(["login:conta:alvo@exemplo.com"]);
+  });
+
+  it("um IP de verdade continua consumindo as duas dimensões, na ordem de sempre", async () => {
+    // O guarda e sobre a SENTINELA, nao sobre "as vezes pular": qualquer valor
+    // diferente dela mantem o comportamento que os casos acima descrevem.
+    await checarLimiteLogin("203.0.113.10", "alguem@exemplo.com");
+
+    expect(chavesUsadas()).toEqual([
+      "login:ip:203.0.113.10",
+      "login:conta:alguem@exemplo.com",
+    ]);
+  });
 });
 
 describe("autorizarCredenciais — o limite roda antes do banco e do bcrypt", () => {
   const requisicao = (ip = "203.0.113.77") =>
     new Request("https://crm.exemplo.com/api/auth/callback/credentials", {
       method: "POST",
-      headers: { "x-vercel-forwarded-for": ip },
+      headers: { [CABECALHO_DA_BORDA]: ip },
     });
 
   beforeEach(() => {
+    // Sem esta linha o IP nao existiria e a chave `login:ip:*` nunca apareceria
+    // -- o que faria os casos abaixo medirem o estado degradado em vez do normal.
+    process.env.IP_CABECALHO_CONFIAVEL = CABECALHO_DA_BORDA;
     checarRateLimitMock.mockReset();
     checarRateLimitMock.mockResolvedValue(true);
     findUniqueMock.mockReset();
     compareMock.mockReset();
   });
+
+  afterEach(restaurarCabecalhoConfiavel);
 
   it("lança MuitasTentativasDeLoginError e NÃO consulta o usuário quando o limite estourou", async () => {
     const { autorizarCredenciais, MuitasTentativasDeLoginError } = await import(
@@ -150,20 +215,37 @@ describe("autorizarCredenciais — o limite roda antes do banco e do bcrypt", ()
     expect(compareMock).not.toHaveBeenCalled();
   });
 
-  it("usa o IP não forjável (x-vercel-forwarded-for) como chave, não o x-forwarded-for do cliente", async () => {
+  it("usa SÓ o cabeçalho nomeado por IP_CABECALHO_CONFIAVEL como chave", async () => {
     const { autorizarCredenciais } = await import("../../src/core/auth/credenciais");
     findUniqueMock.mockResolvedValue(null);
 
     const request = new Request("https://crm.exemplo.com/api/auth/callback/credentials", {
       method: "POST",
       headers: {
-        "x-forwarded-for": "198.51.100.9", // forjável: deve ser ignorado
-        "x-vercel-forwarded-for": "203.0.113.55",
+        "x-forwarded-for": "198.51.100.9", // não é o nomeado: deve ser ignorado
+        [CABECALHO_DA_BORDA]: "203.0.113.55",
       },
     });
     await autorizarCredenciais({ email: "a@b.com", senha: "x" }, request);
 
     expect(chavesUsadas()[0]).toBe("login:ip:203.0.113.55");
+  });
+
+  it("sem a variável, o login não gasta cota de IP nenhuma — nem a do cabeçalho que o cliente mandou", async () => {
+    // O caminho inteiro, da requisicao ate a chave: `obterIpDaRequisicao`
+    // devolve a sentinela e `checarLimiteLogin` pula a dimensao. Sem este caso,
+    // as duas metades poderiam estar certas e a costura entre elas errada.
+    delete process.env.IP_CABECALHO_CONFIAVEL;
+    const { autorizarCredenciais } = await import("../../src/core/auth/credenciais");
+    findUniqueMock.mockResolvedValue(null);
+
+    const request = new Request("https://crm.exemplo.com/api/auth/callback/credentials", {
+      method: "POST",
+      headers: { "x-forwarded-for": "198.51.100.9" },
+    });
+    await autorizarCredenciais({ email: "a@b.com", senha: "x" }, request);
+
+    expect(chavesUsadas()).toEqual(["login:conta:a@b.com"]);
   });
 
   it("consome a cota da conta mesmo quando o e-mail não existe — senão o bloqueio vira oráculo de enumeração", async () => {
@@ -193,8 +275,17 @@ describe("autorizarCredenciais — tempo de resposta não revela se a conta exis
   const requisicao = () =>
     new Request("https://crm.exemplo.com/api/auth/callback/credentials", {
       method: "POST",
-      headers: { "x-vercel-forwarded-for": "203.0.113.88" },
+      headers: { [CABECALHO_DA_BORDA]: "203.0.113.88" },
     });
+
+  beforeEach(() => {
+    // O tempo constante e medido no caminho normal, com borda confiavel: sem a
+    // variavel a funcao pularia uma chamada e o proprio custo mediria outra
+    // coisa.
+    process.env.IP_CABECALHO_CONFIAVEL = CABECALHO_DA_BORDA;
+  });
+
+  afterEach(restaurarCabecalhoConfiavel);
 
   // Sem `papel`: a coluna `User.papel` foi derrubada no Ciclo 1f
   // (`20260821130000_derruba_user_papel_de_vez`) e o papel mora em
@@ -318,7 +409,7 @@ describe("autorizarCredenciais — auditoria de login", () => {
   const requisicao = () =>
     new Request("https://crm.exemplo.com/api/auth/callback/credentials", {
       method: "POST",
-      headers: { "x-vercel-forwarded-for": "203.0.113.99" },
+      headers: { [CABECALHO_DA_BORDA]: "203.0.113.99" },
     });
 
   const usuarioAtivo = {
@@ -331,6 +422,10 @@ describe("autorizarCredenciais — auditoria de login", () => {
   };
 
   beforeEach(() => {
+    // O caso abaixo afirma que o IP chega na linha de auditoria. Sem a borda
+    // nomeada nao existe IP nenhum (Ciclo 2d, `lib/ip.ts`), e o caso mediria o
+    // estado degradado achando que mede o normal.
+    process.env.IP_CABECALHO_CONFIAVEL = CABECALHO_DA_BORDA;
     checarRateLimitMock.mockReset();
     checarRateLimitMock.mockResolvedValue(true);
     findUniqueMock.mockReset();
@@ -340,7 +435,9 @@ describe("autorizarCredenciais — auditoria de login", () => {
     tentativaRecusadaMock.mockReset();
   });
 
-  it("login aceito grava a linha com a empresa DO VÍNCULO e o IP não forjável", async () => {
+  afterEach(restaurarCabecalhoConfiavel);
+
+  it("login aceito grava a linha com a empresa DO VÍNCULO e o IP da borda confiável", async () => {
     const { autorizarCredenciais } = await import("../../src/core/auth/credenciais");
     findUniqueMock.mockResolvedValue(usuarioAtivo);
     compareMock.mockResolvedValue(true);
@@ -356,6 +453,32 @@ describe("autorizarCredenciais — auditoria de login", () => {
     expect(argumento.userId).toBe("u1");
     expect(argumento.companyId).toBe("empresa-1");
     expect(argumento.ip).toBe("203.0.113.99");
+  });
+
+  it("sem borda confiável, o login é auditado com a sentinela — e o funil a nula", async () => {
+    // O que chega em `auditarLogin` e `IP_DESCONHECIDO`, porque
+    // `obterIpDaRequisicao` devolve `string` (a mesma que vira chave de rate
+    // limit). Quem transforma isso em coluna NULA e o funil de auditoria
+    // (`core/audit/log.ts`), e a prova disso mora contra o Postgres de verdade
+    // em `tests/unit/audit-log.test.ts` -- aqui `auditarLogin` esta mockado.
+    //
+    // O que este caso trava e a outra metade: a auditoria de login CONTINUA
+    // acontecendo sem borda. Um login que deixasse de deixar rastro por falta de
+    // variavel de ambiente seria o pior desfecho dos tres possiveis.
+    delete process.env.IP_CABECALHO_CONFIAVEL;
+    const { autorizarCredenciais } = await import("../../src/core/auth/credenciais");
+    findUniqueMock.mockResolvedValue(usuarioAtivo);
+    compareMock.mockResolvedValue(true);
+
+    const request = new Request("https://crm.exemplo.com/api/auth/callback/credentials", {
+      method: "POST",
+      headers: { "x-forwarded-for": "198.51.100.9" },
+    });
+    await autorizarCredenciais({ email: usuarioAtivo.email, senha: "senha-certa" }, request);
+
+    expect(auditarLoginMock).toHaveBeenCalledTimes(1);
+    const argumento = auditarLoginMock.mock.calls[0]![0] as Record<string, unknown>;
+    expect(argumento.ip).toBe(IP_DESCONHECIDO);
   });
 
   it("a senha NÃO viaja para a auditoria — nem em claro, nem em tamanho", async () => {

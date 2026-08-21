@@ -258,9 +258,17 @@ describe("registrarTentativaRecusada", () => {
  * requisição" precisa justamente do `next/headers` de verdade lançando.
  */
 describe("ipDaRequisicaoAtual", () => {
+  const cabecalhoOriginal = process.env.IP_CABECALHO_CONFIAVEL;
+
   afterEach(() => {
     vi.resetModules();
     vi.doUnmock("next/headers");
+    // A variável é lida DENTRO da função (leitura preguiçosa), então cada caso
+    // a define ou a apaga por conta própria e este `afterEach` devolve o
+    // ambiente ao que era — senão a ordem dos casos passaria a decidir o
+    // resultado deles.
+    if (cabecalhoOriginal === undefined) delete process.env.IP_CABECALHO_CONFIAVEL;
+    else process.env.IP_CABECALHO_CONFIAVEL = cabecalhoOriginal;
   });
 
   async function comCabecalhos(pares: Record<string, string>) {
@@ -272,37 +280,69 @@ describe("ipDaRequisicaoAtual", () => {
     return ipDaRequisicaoAtual();
   }
 
-  it("prefere o header da borda ao `x-forwarded-for`, que o cliente escolhe", async () => {
-    // A ordem é a MESMA de `obterIpDaRequisicao`, e manter as duas iguais é o
-    // que impede que um dia alguém corrija só uma. `x-forwarded-for` vem no
-    // pedido: confiar nele primeiro deixaria quem ataca escolher a própria
-    // identidade no log.
+  it("sem IP_CABECALHO_CONFIAVEL, NENHUM cabeçalho vira IP", async () => {
+    // `x-vercel-forwarded-for` funcionava por uma propriedade da plataforma: ela
+    // SOBRESCREVIA o que viesse de fora com aquele nome. Fora da Vercel sobram
+    // `x-real-ip` e `x-forwarded-for`, e os dois são escolhidos pelo cliente
+    // quando não há proxy confiável na frente. Continuar lendo-os seria trocar
+    // um cabeçalho não forjável por um forjável SEM mudar uma linha de
+    // comentário — o pior desfecho, porque o código seguiria afirmando uma
+    // garantia que perdeu.
+    delete process.env.IP_CABECALHO_CONFIAVEL;
     expect(
       await comCabecalhos({
         "x-forwarded-for": "198.51.100.9",
+        "x-real-ip": "203.0.113.60",
         "x-vercel-forwarded-for": "203.0.113.55",
       })
-    ).toBe("203.0.113.55");
+    ).toBeUndefined();
   });
 
-  it("cai para `x-real-ip` e depois para `x-forwarded-for`", async () => {
+  it("com IP_CABECALHO_CONFIAVEL definida, SÓ o cabeçalho nomeado é lido", async () => {
+    process.env.IP_CABECALHO_CONFIAVEL = "x-real-ip";
     expect(
-      await comCabecalhos({ "x-real-ip": "203.0.113.60", "x-forwarded-for": "198.51.100.9" })
+      await comCabecalhos({
+        "x-real-ip": "203.0.113.60",
+        "x-forwarded-for": "198.51.100.9",
+      })
     ).toBe("203.0.113.60");
-    expect(await comCabecalhos({ "x-forwarded-for": "198.51.100.9" })).toBe("198.51.100.9");
   });
 
-  it("cadeia de proxies: fica com o primeiro, que é o cliente", async () => {
+  it("o cabeçalho nomeado que chega ausente NÃO cai para outro", async () => {
+    // Sem fallback: uma borda que devia sobrescrever `cf-connecting-ip` e não
+    // mandou nada é uma borda que não está na frente. Cair para o que o cliente
+    // mandou seria transformar a falha de configuração em IP forjado.
+    process.env.IP_CABECALHO_CONFIAVEL = "cf-connecting-ip";
+    expect(await comCabecalhos({ "x-forwarded-for": "198.51.100.9" })).toBeUndefined();
+  });
+
+  it("pega o primeiro da lista quando a borda manda vários", async () => {
+    process.env.IP_CABECALHO_CONFIAVEL = "x-vercel-forwarded-for";
     expect(
       await comCabecalhos({ "x-vercel-forwarded-for": "203.0.113.70, 10.0.0.1, 10.0.0.2" })
     ).toBe("203.0.113.70");
   });
 
+  it("o nome do cabeçalho é comparado sem caixa e sem espaços nas pontas", async () => {
+    // Nome de cabeçalho HTTP é insensível a caixa (RFC 9110 §5.1), e a variável
+    // é digitada por uma pessoa num painel de hospedagem. `Headers.get` já
+    // normaliza a caixa do lado dele; o `trim()` é o que impede que um espaço
+    // colado junto silencie o IP inteiro — falha que não deixaria rastro
+    // nenhum, porque o estado sem IP é justamente o estado válido.
+    process.env.IP_CABECALHO_CONFIAVEL = "  X-Real-IP  ";
+    expect(await comCabecalhos({ "x-real-ip": "203.0.113.60" })).toBe("203.0.113.60");
+  });
+
   it("fora de um escopo de requisição devolve `undefined`, e NÃO lança", async () => {
     // Job de fila, seed, script e este próprio teste. Auditoria que derruba a
     // operação que ela deveria apenas registrar é pior que auditoria sem IP.
-    // `undefined` e não `"desconhecido"`: a coluna é anulável, e uma sentinela
+    // `undefined` e não `IP_DESCONHECIDO`: a coluna é anulável, e uma sentinela
     // gravada 22 vezes ficaria indistinguível de um IP que a borda não mandou.
+    //
+    // A variável é definida DE PROPÓSITO: sem ela a função devolveria
+    // `undefined` antes de chegar em `headers()`, e o caso ficaria verde sem
+    // nunca exercitar o `try/catch` que ele existe para provar.
+    process.env.IP_CABECALHO_CONFIAVEL = "x-real-ip";
     vi.resetModules();
     const { ipDaRequisicaoAtual } = await import("../../src/lib/ip");
     await expect(ipDaRequisicaoAtual()).resolves.toBeUndefined();
@@ -312,6 +352,11 @@ describe("ipDaRequisicaoAtual", () => {
     // A precedência é do chamador: a exportação de leads lê o IP do `Request`
     // real do route handler, e o login lê o `Request` que o @auth/core
     // reconstrói. As duas fontes são melhores que a ambiente.
+    //
+    // A variável nomeia o cabeçalho porque a SEGUNDA metade do caso — a que
+    // prova que o preenchimento automático de fato roda — só tem desfecho
+    // observável quando existe uma borda em que confiar.
+    process.env.IP_CABECALHO_CONFIAVEL = "x-vercel-forwarded-for";
     vi.doMock("next/headers", () => ({
       headers: async () => new Headers({ "x-vercel-forwarded-for": "203.0.113.80" }),
     }));
