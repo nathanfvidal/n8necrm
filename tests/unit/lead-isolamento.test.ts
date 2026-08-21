@@ -88,11 +88,11 @@ const NOTA_B = `${P}-note-b`;
 const NOTA_CRUZADA = `${P}-note-cruzada`;
 
 /**
- * `PipelineStage.@@unique([ordem])` ainda é GLOBAL (`prisma/schema.prisma`,
- * pendência registrada do ciclo e bloqueadora da segunda empresa de verdade).
- * Enquanto for, duas empresas não podem ter etapas com a mesma `ordem` — nem
- * neste teste. As faixas abaixo são altas de propósito, para não colidir com
- * as do seed (medidas em 2026-08-20: 0, 1, 2 e 3).
+ * Desde o Ciclo 1e a chave é `@@unique([companyId, ordem])`, então o banco não
+ * exige mais faixas disjuntas entre empresas. As faixas abaixo continuam altas
+ * de propósito, e o motivo NÃO era só a constraint: elas não podem colidir com
+ * as do seed (medidas em 2026-08-20: 0, 1, 2 e 3), que é a etapa que o defeito
+ * D fazia aparecer.
  *
  * Isto NÃO enfraquece o teste: o que ele mede é qual etapa cada empresa
  * enxerga, e as faixas escolhidas colocam a empresa A ANTES da B na ordenação

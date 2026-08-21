@@ -92,17 +92,15 @@ async function responsavelDaEmpresa(
  *
  * Era `prisma.pipelineStage.findFirstOrThrow({ orderBy: { ordem: "asc" } })`,
  * sem empresa nenhuma: o lead nascia na etapa de menor `ordem` do banco
- * INTEIRO. Hoje isso é inofensivo por acidente — `PipelineStage` ainda tem
- * `@@unique([ordem])` GLOBAL (`prisma/schema.prisma`), o que impede duas
- * empresas de terem uma etapa "1" cada — mas essa unicidade global é uma
- * pendência registrada do ciclo, bloqueadora da segunda empresa, e no dia em
- * que virar `[companyId, ordem]` a consulta sem escopo passa a devolver a
- * etapa de outra empresa sem nenhum erro. Escopar agora custa nada e remove a
- * dependência de um acidente.
+ * INTEIRO. Enquanto `PipelineStage` teve `@@unique([ordem])` GLOBAL isso era
+ * inofensivo por acidente — duas empresas não podiam ter uma etapa "1" cada,
+ * então "a menor do banco" e "a menor da empresa" coincidiam.
  *
- * A unicidade global NÃO é mexida aqui: é item à parte, com migração e
- * auditoria das consultas que hoje confiam em `ordem` ser única sozinha
- * (`core/pipeline/service.ts`).
+ * O Ciclo 1e desfez o acidente: a chave é `@@unique([companyId, ordem])`, duas
+ * empresas ocupam a mesma posição, e uma consulta sem escopo passaria a
+ * devolver a etapa de outra empresa sem nenhum erro. O escopo, que o Ciclo 1a
+ * já tinha posto aqui, é o que continua segurando isso — e agora ele é a única
+ * coisa que segura.
  */
 function primeiraEtapaDoFunil(db: ClienteDaEmpresa) {
   return db.pipelineStage.findFirstOrThrow({ orderBy: { ordem: "asc" } });

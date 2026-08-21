@@ -85,13 +85,13 @@ const LEAD_A = `${P}-lead-a`;
 const LEAD_B = `${P}-lead-b`;
 
 /**
- * `PipelineStage.@@unique([ordem])` ainda é GLOBAL (`prisma/schema.prisma`,
- * pendência registrada do ciclo e bloqueadora da segunda empresa de verdade —
- * NÃO é assunto desta tarefa). Enquanto for, duas empresas não podem ter
- * etapas com a mesma `ordem`, nem neste teste. As faixas abaixo são altas de
- * propósito, para não colidir com as do seed (medidas em 2026-08-20 na empresa
- * `company-migracao-1a`: 0, 1, 2 e 3) — se a fixture usasse a mesma faixa, um
- * caso passaria por acidente.
+ * Desde o Ciclo 1e, `PipelineStage` tem `@@unique([companyId, ordem])`, então o
+ * banco NÃO exige mais faixas disjuntas entre empresas — há caso neste arquivo
+ * provando isso ("duas empresas podem ter etapas na MESMA posição do funil").
+ * As faixas continuam disjuntas por outro motivo, que segue valendo: elas são
+ * altas de propósito para não colidir com as do seed (medidas em 2026-08-20 na
+ * empresa `company-migracao-1a`: 0, 1, 2 e 3) — se a fixture usasse a mesma
+ * faixa, um caso passaria por acidente.
  *
  * A escolha das faixas é o que faz três casos DISCRIMINAREM em vez de
  * decorarem:
@@ -379,6 +379,60 @@ describe("criarEtapa", () => {
         companyId: EMPRESA_A,
       })
     ).rejects.toBeInstanceOf(EtapaInvalidaError);
+  });
+});
+
+describe("a mesma `ordem` em duas empresas — o que o Ciclo 1e destravou", () => {
+  it("duas empresas podem ter etapas na MESMA posição do funil", async () => {
+    // Até o Ciclo 1e isto era `P2002` em `PipelineStage_ordem_key`: a posição
+    // "1" do funil era um recurso do BANCO INTEIRO, não da empresa. É a razão
+    // pela qual as faixas de `ordem` deste arquivo tiveram de ser disjuntas.
+    const nova = await prisma.pipelineStage.create({
+      data: {
+        id: `${P}-stage-a-na-ordem-da-b`,
+        companyId: EMPRESA_A,
+        nome: "A na mesma posição da B",
+        ordem: ORDEM_B1,
+        cor: "#777777",
+      },
+    });
+
+    expect(nova.companyId).toBe(EMPRESA_A);
+    expect(nova.ordem).toBe(ORDEM_B1);
+
+    // Segunda metade: a etapa da B na mesma posição continua lá, intocada.
+    expect((await lerEtapaCrua(ETAPA_B1))?.ordem).toBe(ORDEM_B1);
+    expect((await lerEtapaCrua(ETAPA_B1))?.companyId).toBe(EMPRESA_B);
+  });
+
+  it("`criarEtapa` na B cai em `max(ordem da B) + 1` mesmo com a A já ocupando esse número", async () => {
+    // O defeito VIVO que a composição corrige (§4.2.4 do spec): `criarEtapa` já
+    // computa `max` DA EMPRESA desde o Ciclo 1d — corretamente. Com a unicidade
+    // global, esse valor podia estar ocupado por outra empresa, e a pessoa via
+    // um `P2002` apontando para uma etapa que ela não pode enxergar.
+    const esperada = ORDEM_B2 + 1;
+
+    // Ocupa, na empresa A, exatamente a posição em que a próxima etapa da B vai
+    // nascer. Antes do Ciclo 1e, o `create` abaixo morreria aqui.
+    await prisma.pipelineStage.create({
+      data: {
+        id: `${P}-stage-a-bloqueadora`,
+        companyId: EMPRESA_A,
+        nome: "Bloqueadora da A",
+        ordem: esperada,
+        cor: "#888888",
+      },
+    });
+
+    const nova = await criarEtapa({
+      nome: "Nova da B",
+      cor: "#999999",
+      autorId: USUARIO_B,
+      companyId: EMPRESA_B,
+    });
+
+    expect(nova.ordem).toBe(esperada);
+    expect(nova.companyId).toBe(EMPRESA_B);
   });
 });
 

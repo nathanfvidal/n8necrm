@@ -85,11 +85,13 @@ const LEAD_DA_B_NO_CONTATO_A = `${P}-lead-b-em-a`;
 const CONVERSA_B = `${P}-conv-b`;
 
 /**
- * `PipelineStage.@@unique([ordem])` ainda é GLOBAL (`prisma/schema.prisma`,
- * pendência registrada do ciclo). Enquanto for, duas empresas não podem ter
- * etapas com a mesma `ordem` — nem neste teste. Faixa própria deste arquivo,
- * sem colisão com o seed (0..3), `lead-isolamento` (90xx/91xx),
- * `pipeline-isolamento` (92xx..94xx) nem `pipeline-stages` (95xx/96xx).
+ * Faixa própria deste arquivo. Desde o Ciclo 1e a `ordem` é única POR EMPRESA
+ * (`@@unique([companyId, ordem])`), então o banco não exige mais faixas
+ * disjuntas — a exigência que sobra é não colidir com o funil do SEED (0..3),
+ * que vive na mesma tabela e não é apagado pela limpeza deste arquivo. As
+ * faixas de `lead-isolamento` (90xx/91xx), `pipeline-isolamento` (92xx..94xx) e
+ * `pipeline-stages` (95xx/96xx) continuam evitadas pelo mesmo motivo de sempre:
+ * o Postgres de teste é o de desenvolvimento (⚠️ R1 do Ciclo 1a).
  */
 const ORDEM_A = 9701;
 const ORDEM_B = 9801;

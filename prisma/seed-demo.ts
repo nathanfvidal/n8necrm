@@ -289,7 +289,14 @@ export async function seedDemo(): Promise<void> {
   // do base".
   const empresa = await prisma.company.findFirstOrThrow();
 
-  const etapas = await prisma.pipelineStage.findMany({ orderBy: { ordem: "asc" } });
+  // `where: { companyId }` pelo mesmo motivo de `seed.ts` (Ciclo 1e): sem ele,
+  // a checagem `etapas.length !== 5` abaixo contaria o funil de todas as
+  // empresas e lançaria uma mensagem que culpa a tela `/etapas` por um problema
+  // que ela não causou.
+  const etapas = await prisma.pipelineStage.findMany({
+    where: { companyId: empresa.id },
+    orderBy: { ordem: "asc" },
+  });
   if (etapas.length !== 5) {
     throw new Error(
       `seed-demo.ts assume um funil de 5 etapas — encontrei ${etapas.length} PipelineStage no banco. ` +

@@ -268,14 +268,27 @@ model PipelineStage {
   ehPerdido Boolean @default(false)
   leads     Lead[]
 
-  // `@@unique([ordem])` continua GLOBAL, não `[companyId, ordem]`, de
-  // propósito NESTA tarefa: virar composta exigiria auditar cada consulta que
-  // hoje confia em `ordem` ser única sozinha (`core/pipeline/service.ts`), e
-  // essa é a classe de mudança que este ciclo empurra para depois — a UI
-  // continua servindo uma empresa só (decisão 4 do spec de tenancy), então
-  // nada quebra HOJE. Fica registrado como achado no relatório desta tarefa:
-  // é bloqueador para a SEGUNDA empresa existir, não para esta.
-  @@unique([ordem])
+  /// Unicidade POR EMPRESA (Ciclo 1e). Era `@@unique([ordem])`, GLOBAL.
+  ///
+  /// A auditoria que o comentário anterior exigia está feita, e está na §4.2.1
+  /// do spec do Ciclo 1e: as nove consultas que tocam `ordem`, uma a uma. Ela
+  /// ficou barata porque o Ciclo 1d converteu `pipeline/` inteiro para
+  /// `prismaDaEmpresa` — as seis consultas de `src/` já carregavam `companyId`,
+  /// e as três que não carregavam são de seed.
+  ///
+  /// A composição CORRIGE um defeito vivo, e não só destrava a segunda empresa:
+  /// `criarEtapa` calcula `max(ordem DA EMPRESA) + 1` (correto desde o Ciclo
+  /// 1d), e com a unicidade global esse valor podia já estar ocupado por outra
+  /// empresa — `P2002` na tela `/etapas`, apontando para uma etapa que a pessoa
+  /// não pode ver. Caso em `tests/unit/pipeline-isolamento.test.ts`
+  /// ("`criarEtapa` na B cai em `max(ordem da B) + 1` mesmo com a A já ocupando
+  /// esse número").
+  ///
+  /// `ORDEM_ESTACIONAMENTO = -1` (`core/pipeline/service.ts`) CONTINUA
+  /// necessário: o Postgres verifica índice único a cada `UPDATE`, e a colisão
+  /// que o estacionamento evita é entre duas etapas da MESMA empresa. O que
+  /// mudou é que `-1` deixou de ser disputado ENTRE empresas.
+  @@unique([companyId, ordem])
   @@index([companyId])
 }
 

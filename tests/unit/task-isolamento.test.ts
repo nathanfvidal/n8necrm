@@ -108,11 +108,12 @@ const TASK_DUPLO_NA_A = `${P}-task-duplo-a`;
 const TASK_DUPLO_NA_B = `${P}-task-duplo-b`;
 
 /**
- * `PipelineStage.@@unique([ordem])` ainda é GLOBAL (`prisma/schema.prisma`,
- * pendência registrada do ciclo). Enquanto for, duas empresas não podem ter
- * etapas com a mesma `ordem` — nem aqui. Faixa alta e própria deste arquivo,
- * sem colisão com o seed (0–3, medido em 2026-08-20) nem com
- * `lead-isolamento.test.ts` (9001/9002/9101/9102).
+ * Faixa alta e própria deste arquivo. Desde o Ciclo 1e a `ordem` é única POR
+ * EMPRESA (`@@unique([companyId, ordem])`, `prisma/schema.prisma`), então o
+ * banco não exige mais faixas disjuntas — o que sobra é não colidir com o seed
+ * (0–3, medido em 2026-08-20) nem com `lead-isolamento.test.ts`
+ * (9001/9002/9101/9102), porque o Postgres de teste é o de desenvolvimento
+ * (⚠️ R1 do Ciclo 1a).
  */
 const ORDEM_A = 9201;
 const ORDEM_B = 9202;

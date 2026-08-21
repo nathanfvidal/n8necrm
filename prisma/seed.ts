@@ -134,6 +134,12 @@ export async function seed(): Promise<void> {
   // tela existiu: renomearia "Negociação" para "Fechado" e recoloriria por
   // índice. `client.funil` virou SEMENTE de instalação, e é isso que permite
   // um fork nascer com o funil dele.
+  // SEM `where: { companyId }`, e isso é dívida DECLARADA, não esquecimento:
+  // ⚠️ D2-a do spec do Ciclo 1e (§4.2.1, item 7). Este seed cria/encontra UMA
+  // empresa (`empresaExistente ?? create` acima), então "existe etapa no
+  // banco?" e "existe etapa desta empresa?" são hoje a mesma pergunta. No dia
+  // em que o seed semear uma segunda empresa, ele pulará o funil dela — e é
+  // esse dia o gatilho para escopar aqui.
   const quantasEtapasExistem = await prisma.pipelineStage.count();
   if (quantasEtapasExistem === 0) {
     for (const [index, nome] of client.funil.entries()) {
@@ -206,7 +212,14 @@ export async function seed(): Promise<void> {
   await semearUsuarioSistemaWhatsapp(empresa.id);
   await semearBotConfig(empresa.id);
 
-  const primeiraEtapa = await prisma.pipelineStage.findFirstOrThrow({ orderBy: { ordem: "asc" } });
+  // `where: { companyId }`, e não a etapa de menor `ordem` do banco inteiro:
+  // desde o Ciclo 1e a `ordem` é única POR EMPRESA, então "a menor do banco"
+  // deixou de coincidir com "a menor desta empresa". Sem o filtro, os leads de
+  // demonstração nasceriam na etapa de outra empresa no dia em que existir uma.
+  const primeiraEtapa = await prisma.pipelineStage.findFirstOrThrow({
+    where: { companyId: empresa.id },
+    orderBy: { ordem: "asc" },
+  });
 
   const nomes = ["Carlos Silva", "Fernanda Lima", "João Pereira", "Marina Costa"];
   for (let i = 0; i < nomes.length; i++) {

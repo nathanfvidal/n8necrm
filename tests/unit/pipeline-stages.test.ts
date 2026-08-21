@@ -35,11 +35,11 @@ import { prisma } from "../../src/lib/prisma";
  * necessário — e isso é ganho à parte: ele escreve em `User`, `Contact` e
  * `Lead` da empresa de desenvolvimento a cada execução da suíte.
  *
- * A faixa de `ordem` é alta (9500+) por dois motivos: `PipelineStage` ainda tem
- * `@@unique([ordem])` GLOBAL (pendência registrada do ciclo, não desta tarefa),
- * então a fixture não pode colidir com as etapas do seed (`ordem` 0-3 em
- * `company-migracao-1a`); e, se ela usasse a mesma faixa, um caso poderia
- * passar por acidente.
+ * A faixa de `ordem` é alta (9500+) e continua assim depois do Ciclo 1e, que
+ * trocou `@@unique([ordem])` por `@@unique([companyId, ordem])`: o banco deixou
+ * de EXIGIR faixas disjuntas entre empresas, mas o motivo que sobra é o que
+ * sempre valeu mais — se a fixture usasse a faixa do seed (`ordem` 0-3 em
+ * `company-migracao-1a`), um caso poderia passar por acidente.
  */
 const P = "stages-t5";
 const EMPRESA = `${P}-company`;

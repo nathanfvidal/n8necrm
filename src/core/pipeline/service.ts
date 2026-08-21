@@ -192,6 +192,16 @@ export async function criarEtapa(input: {
   // e não `count()`. O `aggregate` sai do cliente escopado: sem isso o `_max`
   // era o da tabela inteira, e a etapa da empresa A nascia depois da última
   // etapa da empresa B — com um buraco do tamanho do funil alheio no meio.
+  //
+  // Escopar o `_max` no Ciclo 1d tornou ALCANÇÁVEL um segundo defeito, que só
+  // o Ciclo 1e fechou: enquanto `ordem` foi única GLOBAL, `max(da empresa) + 1`
+  // podia cair num número já ocupado por OUTRA empresa, e o `create` abaixo
+  // devolvia `P2002` na tela `/etapas` apontando para uma etapa que quem
+  // clicou não pode ver. Com `@@unique([companyId, ordem])` esse valor só
+  // precisa estar livre dentro da empresa, que é exatamente o que o `_max`
+  // acima garante. Caso em `tests/unit/pipeline-isolamento.test.ts`
+  // ("`criarEtapa` na B cai em `max(ordem da B) + 1` mesmo com a A já ocupando
+  // esse número").
   const maior = await db.pipelineStage.aggregate({ _max: { ordem: true } });
 
   const etapa = await db.pipelineStage.create({
@@ -261,10 +271,10 @@ export async function editarEtapa(input: {
 /**
  * Posição de estacionamento usada durante a troca de duas etapas.
  *
- * `PipelineStage_ordem_key` é um índice ÚNICO, e o Postgres o verifica a cada
- * `UPDATE` — não no fim da transação. Trocar as etapas de ordem 0 e 1 com dois
- * `UPDATE`s diretos falha no primeiro, porque por um instante duas linhas
- * teriam a mesma `ordem`.
+ * `PipelineStage_companyId_ordem_key` é um índice ÚNICO, e o Postgres o
+ * verifica a cada `UPDATE` — não no fim da transação. Trocar as etapas de
+ * ordem 0 e 1 com dois `UPDATE`s diretos falha no primeiro, porque por um
+ * instante duas linhas da mesma empresa teriam a mesma `ordem`.
  *
  * Negativo de propósito: nenhuma etapa real ocupa posição negativa, então o
  * valor nunca colide com uma linha legítima. Ele existe por microssegundos
@@ -274,11 +284,11 @@ export async function editarEtapa(input: {
  * que o Prisma não representa e que viraria drift no próximo diff. Ver § 5 da
  * spec.
  *
- * A unicidade de `ordem` é GLOBAL hoje (`@@unique([ordem])` em
- * `prisma/schema.prisma`), o que é pendência registrada do ciclo e bloqueadora
- * da segunda empresa — e NÃO é assunto desta conversão. O estacionamento
- * continua sendo necessário quando ela virar `[companyId, ordem]`: a colisão
- * que ele evita é entre duas etapas da MESMA empresa.
+ * A unicidade de `ordem` virou `@@unique([companyId, ordem])` no Ciclo 1e, e o
+ * estacionamento CONTINUA necessário: a colisão que ele evita é entre duas
+ * etapas da MESMA empresa, e essa continua existindo. O que mudou é que `-1`
+ * deixou de ser disputado ENTRE empresas — antes, duas empresas reordenando
+ * funis diferentes ao mesmo tempo colidiam neste valor.
  */
 export const ORDEM_ESTACIONAMENTO = -1;
 
