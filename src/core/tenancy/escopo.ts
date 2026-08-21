@@ -117,6 +117,28 @@ import type { PrismaClient } from "@prisma/client";
  * pelo tipo e NÃO pela empresa, que é exatamente o caminho que a Tarefa 7 do
  * Ciclo 2a fecha usando `findFirst` no cliente escopado.
  *
+ * **As quatro compostas do Ciclo 1e mudam o TIPO e não a regra.**
+ * `Contact` (`[companyId, telefone]`), `PipelineStage` (`[companyId, ordem]`),
+ * `Conversation` (`[companyId, waId]`) e `WhatsappMessage`
+ * (`[companyId, idExterno]`) passaram a ter `@@unique` que CONTÉM `companyId`.
+ * A frase acima — "em 11 dos 13 modelos de tenant `companyId` não é único" —
+ * continua literalmente verdadeira, porque ela fala de `companyId` SOZINHO; o
+ * que deixou de ser verdade é a conclusão fácil que se tira dela, "não existe
+ * onde pendurar o filtro". Agora existe: `ContactWhereUniqueInput` aceita
+ * `companyId_telefone` (conferido em `node_modules/.prisma/client/index.d.ts`,
+ * onde as quatro chaves compostas aparecem).
+ *
+ * A recusa continua, e passa a ser por uniformidade nesses quatro também — o
+ * mesmo motivo de `BotConfig`/`CompanyConfig`. A razão de fundo é a que vale
+ * para `webhookTokenHash`: o `companyId` de um `where` composto vem de QUEM
+ * CHAMA, então `findUnique({ where: { companyId_telefone: { companyId, … } } })`
+ * seria escopável pelo TIPO e não pela EMPRESA — o parâmetro é a defesa, e
+ * parâmetro não é defesa. `findFirst` no cliente escopado resolve o mesmo caso
+ * com a mesma consulta e com o `companyId` vindo do escopo. Há caso amarrando
+ * isto (`tests/unit/escopo-empresa.test.ts`, "uma `@@unique` que CONTÉM
+ * companyId não reabre `findUnique` em modelo de tenant"), para que a decisão
+ * não se desfaça no dia em que o tipo parar de reclamar.
+ *
  * **Não alcança de jeito nenhum**: `$queryRaw`/`$executeRaw`. Eles não passam
  * por `$allModels`, e por isso o lint é a peça central — é ele que garante
  * que chegar no `prisma` cru para fazer SQL exige uma exceção visível.

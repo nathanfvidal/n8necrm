@@ -853,6 +853,115 @@ describe("prismaDaEmpresa", () => {
       expect(bloco.filter((l) => /^\s*webhookTokenHash\s+String\s+@unique/.test(l))).toHaveLength(1);
     });
 
+    it("as quatro unicidades do Ciclo 1e são COMPOSTAS e começam por `companyId`", () => {
+      // A trava do ciclo inteiro. Cada uma destas quatro linhas foi, um dia, um
+      // `@unique` global que impedia a segunda empresa de existir — a fonte é o
+      // §7.4 de `docs/superpowers/specs/2026-08-20-ciclo-1e-unicidades-globais-design.md`,
+      // e duas delas cobraram preço real (o laço de 500 da Evolution, e o
+      // `criarEtapa` que batia em P2002 na tela, corrigido na Task 2). `companyId`
+      // PRIMEIRO não é gosto: é o que faz o índice servir `WHERE "companyId" = $1`,
+      // a forma de toda consulta escopada — o mesmo prefixo que o
+      // `@@unique([companyId, canal, instancia])` de `WhatsappConnection` já usa.
+      const esperado: [string, RegExp][] = [
+        ["Contact", /^\s*@@unique\(\[companyId, telefone\]\)/],
+        ["PipelineStage", /^\s*@@unique\(\[companyId, ordem\]\)/],
+        ["Conversation", /^\s*@@unique\(\[companyId, waId\]\)/],
+        ["WhatsappMessage", /^\s*@@unique\(\[companyId, idExterno\]\)/],
+      ];
+
+      const faltando = esperado
+        .filter(([modelo, padrao]) => !blocoDoModelo(modelo).some((l) => padrao.test(l)))
+        .map(([modelo]) => modelo);
+      expect(faltando).toEqual([]);
+
+      // E a metade que impede a volta: nenhum dos quatro campos pode ter
+      // recuperado o `@unique` de coluna. Sem esta asserção, acrescentar a
+      // composta SEM tirar a global passaria como correção — e a global é o
+      // defeito. `PipelineStage` entra pela forma `@@unique([ordem])` porque era
+      // assim que a global dele estava escrita antes da Task 2 (ver o comentário
+      // de schema na linha "Unicidade POR EMPRESA (Ciclo 1e)").
+      const aindaGlobais = (
+        [
+          ["Contact", /^\s*telefone\s+String\s+@unique/],
+          ["PipelineStage", /^\s*@@unique\(\[ordem\]\)/],
+          ["Conversation", /^\s*waId\s+String\s+@unique/],
+          ["WhatsappMessage", /^\s*idExterno\s+String\s+@unique/],
+        ] as [string, RegExp][]
+      )
+        .filter(([modelo, padrao]) => blocoDoModelo(modelo).some((l) => padrao.test(l)))
+        .map(([modelo]) => modelo);
+      expect(aindaGlobais).toEqual([]);
+    });
+
+    it("uma `@@unique` que CONTÉM companyId não reabre `findUnique` em modelo de tenant", async () => {
+      // Depois do Ciclo 1e, `ContactWhereUniqueInput` aceita `companyId_telefone`
+      // — o Prisma passou a ter onde pendurar o filtro nos quatro. A recusa
+      // CONTINUA, e por uniformidade, pelo mesmo motivo que já vale para
+      // `BotConfig` e `CompanyConfig` (bloco "Recusa, lançando" de
+      // `src/core/tenancy/escopo.ts`).
+      //
+      // A razão de fundo: o `companyId` de um `where` composto vem de QUEM
+      // CHAMA. Um `findUnique` por `companyId_telefone` seria escopável pelo
+      // TIPO e não pela EMPRESA — o caminho exato que a Tarefa 7 do Ciclo 2a
+      // fechou para `webhookTokenHash`, usando `findFirst` no cliente escopado.
+      //
+      // Este caso existe porque a janela ficou aberta: nada em `src/` chama
+      // `findUnique` por chave composta hoje, mas o tipo parou de reclamar e a
+      // prosa sozinha não impede ninguém de concluir que virou legítimo.
+      const a = escopadoPara(EMPRESA_A);
+      const cliente = a as any;
+
+      const recusadas: [string, () => unknown][] = [
+        [
+          "Contact.findUnique por companyId_telefone",
+          () =>
+            cliente.contact.findUnique({
+              where: { companyId_telefone: { companyId: EMPRESA_A, telefone: "11900000000" } },
+            }),
+        ],
+        [
+          "PipelineStage.update por companyId_ordem",
+          () =>
+            cliente.pipelineStage.update({
+              where: { companyId_ordem: { companyId: EMPRESA_A, ordem: 1 } },
+              data: { nome: "x" },
+            }),
+        ],
+        [
+          "Conversation.upsert por companyId_waId",
+          () =>
+            cliente.conversation.upsert({
+              where: { companyId_waId: { companyId: EMPRESA_A, waId: "w" } },
+              create: {},
+              update: {},
+            }),
+        ],
+        [
+          "WhatsappMessage.delete por companyId_idExterno",
+          () =>
+            cliente.whatsappMessage.delete({
+              where: { companyId_idExterno: { companyId: EMPRESA_A, idExterno: "e" } },
+            }),
+        ],
+      ];
+
+      // Mesmo idioma do caso "TODA mensagem lançada com escopo ativo carrega o
+      // companyId", logo acima: `Promise.resolve().then(...)` porque parte
+      // destes caminhos lança de forma síncrona e parte rejeita, e o teste não
+      // deve depender de qual é qual.
+      for (const [nome, disparar] of recusadas) {
+        const erro = await Promise.resolve()
+          .then(disparar)
+          .then(
+            () => new Error(`${nome} NAO lancou`),
+            (e: Error) => e
+          );
+
+        expect(erro, nome).toBeInstanceOf(EscopoDeEmpresaError);
+        expect((erro as Error).message, nome).toContain(EMPRESA_A);
+      }
+    });
+
     it("TODA mensagem lançada com escopo ativo carrega o companyId", async () => {
       const a = escopadoPara(EMPRESA_A);
       const cliente = a as any;
