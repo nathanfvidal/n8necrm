@@ -1,4 +1,4 @@
-# Estado do n8necrm — 2026-08-21
+# Estado do n8necrm — 2026-08-21 (pós-Ciclo 2d)
 
 Branch `ciclo-1a-tenancy`, **~145 commits, nada integrado, nada publicado.**
 
@@ -9,22 +9,42 @@ agora**, e **o que só você pode desbloquear**.
 
 ## Verificação, rodada por inteiro nesta data
 
-Os números abaixo são de **2026-08-21, ANTES do Ciclo 2d** (a saída da Vercel e
-a fila em Postgres). A verificação final daquele ciclo os remede e substitui —
-enquanto esta linha existir, leia-os como o último estado medido, não como o
-atual.
+Remedido no fim do **Ciclo 2d** (saída da Vercel, fila em Postgres). Os números
+anteriores eram de 2026-08-21 antes do ciclo: 1622 unitários e 6 avisos de lint.
 
 | | |
 |---|---|
 | `npm run typecheck` | limpo, sem saída |
-| `npm run lint` | 0 erros (6 avisos pré-existentes, herdados da base) |
-| `npm run build` | verde |
-| `npx vitest run tests/unit` | **1622 passando**, 13 pulados, 0 falhas |
-| `npm run test:e2e` | **54 passando** (3 workers) |
+| `npm run lint` | 0 erros, **5 avisos** pré-existentes herdados da base |
+| `npm run build` | verde (`Compiled successfully`) |
+| `npx vitest run tests/unit` | **1679 passando**, 13 pulados, **0 falhas** (142 arquivos, 1 pulado) |
+| `npm run test:e2e` | **54 passando** (1.3 min) |
 
-Banco de desenvolvimento, medido depois de tudo: 1 empresa, 6 usuários, 6
-vínculos, 4 contatos, 4 leads, 4 etapas, 0 conversas, 0 conexões, 135 linhas de
-auditoria. **Zero usuário sem vínculo, zero resíduo de fixture.**
+Catracas, conferidas no mesmo instante: `MODELOS_DE_TENANT` em **14** modelos,
+exceções de prisma cru em **0 temporárias / 6 permanentes**, `PERDOADAS` de
+migração em **2**, e a varredura `tests/unit/sem-vercel.test.ts` **verde** (agora
+com 5 casos: o novo proíbe ler `process.env.VERCEL` em código).
+
+O tick da fila, medido contra `npm run dev` em `localhost:3000`:
+
+```
+sem segredo:    404
+segredo errado: 404
+segredo certo:  200 {"ok":true,"processados":0,"falhados":0,"mortos":0,"esgotou":true}
+```
+
+E `npm run fila:worker` sobe e fica em laço (`Worker da fila de turnos
+iniciado.`), sem abrir porta nenhuma.
+
+Banco de desenvolvimento: **0 conversas, 0 conexões, 0 linhas em `TurnoJob`** —
+por isso o percurso completo *webhook → `TurnoJob` → resposta* está
+🔍 **NÃO VERIFICADO**, e continua assim até você cadastrar uma conexão. Criar
+conversa sintética no banco compartilhado seria provar o percurso com dado que
+não é seu.
+
+⚠️ **`npx vitest run tests/unit` inclui `seed.test.ts`, que roda o seed e
+REESCREVE as senhas de `admin@exemplo.com` e `vendedor@exemplo.com`.** Ela foi
+rodada nesta verificação — **rotacione as duas**.
 
 ---
 
