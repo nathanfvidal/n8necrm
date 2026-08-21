@@ -139,3 +139,63 @@ describe("a variável nunca é pública", () => {
     }
   });
 });
+
+describe("`.env.example` ensina o deploy a não quebrar o login", () => {
+  // Varredura de texto cru, mesmo padrão do bloco acima: o que este arquivo
+  // não ensinar, quem publica não configura. Nenhuma destas afirmações é
+  // sobre COMPORTAMENTO do código -- é sobre a documentação executável do
+  // deploy, que foi exatamente o que faltou até 2026-08-21.
+  const exemplo = readFileSync(".env.example", "utf8");
+
+  it("documenta AUTH_URL e AUTH_TRUST_HOST — sem elas o login inteiro quebra", () => {
+    // Achado do plano de deploy de 2026-08-21: `playwright.config.ts:73-75`
+    // sobe o servidor com AUTH_TRUST_HOST="true", e o comentário das linhas
+    // 60-72 de lá explica por quê. A causa está em
+    // node_modules/@auth/core/lib/utils/env.js: `config.trustHost` cai para
+    // `envObject.NODE_ENV !== "production"` quando nem AUTH_URL nem
+    // AUTH_TRUST_HOST estão definidas. `next start` roda com
+    // NODE_ENV=production, logo trustHost=false, logo `UntrustedHost`.
+    //
+    // Até este caso existir, a variável morava SÓ na configuração de teste --
+    // um deploy novo herdava um CRM que sobe, responde, desenha o formulário
+    // e recusa o login.
+    expect(exemplo).toMatch(/^AUTH_URL=/m);
+    expect(exemplo).toMatch(/^AUTH_TRUST_HOST=/m);
+  });
+
+  it("o comentário nomeia `UntrustedHost`, que é o que a pessoa vai buscar", () => {
+    // O erro não aparece na tela: sai no log do servidor. "UntrustedHost" é a
+    // string que alguém cola num buscador às 2 da manhã; um comentário que
+    // diga só "configure a URL" não a traz de volta a este arquivo.
+    expect(exemplo).toContain("UntrustedHost");
+  });
+
+  it("AUTH_URL é só origem, sem caminho — caminho mudaria o basePath do Auth.js", () => {
+    // Este caso trava uma armadilha medida na fonte, não uma preferência de
+    // estilo. Em node_modules/next-auth/lib/env.js, `setEnvDefaults` faz
+    // `const { pathname } = new URL(url); if (pathname === "/") return;` e só
+    // então cai no `finally` que fixa basePath em "/api/auth". Com um caminho
+    // dentro de AUTH_URL (ex.: ".../crm"), o basePath vira aquele caminho e as
+    // rotas /api/auth/* deixam de existir. Como nada em src/ define `basePath`
+    // (conferido em 2026-08-21: `grep -rn basePath src/` não devolve nada), o
+    // valor de AUTH_URL é a ÚNICA coisa que decide isso.
+    const linha = exemplo.match(/^AUTH_URL=(.*)$/m);
+    expect(linha).not.toBeNull();
+    const valor = linha![1]!.trim().replace(/^["']|["']$/g, "");
+    expect(new URL(valor).pathname).toBe("/");
+  });
+});
+
+describe("package.json", () => {
+  it("declara `engines` — o host do deploy não tem isolamento de runtime", () => {
+    // A hospedagem escolhida em 2026-08-21 é systemd no host, sem Docker (ver
+    // docs/superpowers/plans/2026-08-21-n8necrm-deploy-vps.md). Sem container,
+    // um `apt upgrade` troca o Node debaixo da aplicação sem rebuild nenhum.
+    // `engines` é METADE da defesa: o npm só avisa. A trava dura, que falha,
+    // fica em deploy/deploy.sh -- por isso não há `.npmrc` com engine-strict,
+    // que transformaria o aviso em erro de `npm ci` em toda máquina, inclusive
+    // na de quem só clona o repositório para olhar.
+    const pkg = JSON.parse(readFileSync("package.json", "utf8"));
+    expect(pkg.engines?.node).toBe(">=22.18.0 <23");
+  });
+});
