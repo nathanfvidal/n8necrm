@@ -1,5 +1,6 @@
 import type { Prisma } from "@prisma/client";
 import { prismaDaEmpresa } from "@/core/tenancy/escopo";
+import { ipDaRequisicaoAtual } from "@/lib/ip";
 import { avaliarAtividadeSuspeita } from "./alerta";
 
 /**
@@ -104,6 +105,37 @@ export function dadosDeLinhaDeAuditoria(
 }
 
 /**
+ * Completa o `ip` quando o chamador não tinha um `Request` para consultar.
+ *
+ * Item 39 da auditoria de 2026-08-21: `AuditLog.ip` estava preenchido em **1
+ * dos 23 pontos**. A causa não era desleixo, é estrutural — 22 dos 23 nascem
+ * em Server Action, e Server Action não recebe `Request`. O único jeito de
+ * alcançar o IP ali é `headers()` de `next/headers`, e chamá-la aqui, no funil
+ * único, resolve os 22 de uma vez (ver o docstring de `ipDaRequisicaoAtual`).
+ *
+ * **A precedência é do chamador.** `params.ip` informado nunca é
+ * sobrescrito: o caminho da exportação de leads já lê o IP do `Request` real
+ * do route handler, e o do login lê o `Request` que o @auth/core reconstrói.
+ * Os dois têm fonte melhor que a ambiente, e continuam vencendo.
+ *
+ * ONDE ISTO NÃO ALCANÇA, e por quê — a lista importa porque uma coluna
+ * preenchida "quase sempre" engana quem investiga:
+ *
+ * - **Fora de requisição HTTP**: consumidor da fila do WhatsApp, seed,
+ *   scripts. Não há requisição, então não há IP — e o `undefined` é a resposta
+ *   honesta, não uma falha.
+ * - **`excluirEtapa`** (`core/pipeline/service.ts`) grava a linha DENTRO da
+ *   transação, por `tx.auditLog.create(dadosDeLinhaDeAuditoria(...))`, sem
+ *   passar por aqui. Ela resolve o IP antes de abrir a transação e o passa
+ *   explicitamente — o alternativo seria fazer uma chamada assíncrona a
+ *   `headers()` com lock de linha em `Lead` na mão.
+ */
+async function comIpDaRequisicao(params: ParamsDeAuditoria): Promise<ParamsDeAuditoria> {
+  if (params.ip !== undefined) return params;
+  return { ...params, ip: await ipDaRequisicaoAtual() };
+}
+
+/**
  * Grava a linha, e só isso.
  *
  * Existe separada de `registrarAuditoria` porque há um caminho que precisa da
@@ -140,7 +172,11 @@ export function dadosDeLinhaDeAuditoria(
  * segurando lock em linhas de `Lead` alonga a transação por trabalho que não é
  * do domínio dela.
  */
-export async function gravarLinhaDeAuditoria(params: ParamsDeAuditoria): Promise<void> {
+export async function gravarLinhaDeAuditoria(
+  paramsRecebidos: ParamsDeAuditoria
+): Promise<void> {
+  const params = await comIpDaRequisicao(paramsRecebidos);
+
   // A cascata que a versão anterior deste comentário evitava — 17 pontos de
   // chamada em 8 arquivos — foi PAGA no Ciclo 1d, e o que se ganhou foi a
   // empresa da entidade no lugar de um vínculo arbitrário do autor (ver

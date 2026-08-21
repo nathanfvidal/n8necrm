@@ -2,6 +2,7 @@ import "server-only";
 
 import { prismaDaEmpresa } from "@/core/tenancy/escopo";
 import { dadosDeLinhaDeAuditoria, registrarAuditoria } from "@/core/audit/log";
+import { ipDaRequisicaoAtual } from "@/lib/ip";
 import { avaliarAtividadeSuspeita } from "@/core/audit/alerta";
 import { etapaSchema } from "./schema";
 import type { PipelineStage } from "@prisma/client";
@@ -607,6 +608,20 @@ export async function excluirEtapa(input: {
   // `destinoId: null` — comportamento preservado da versão anterior.
   const destinoId = leadsQueSeguram > 0 ? input.destinoId : null;
 
+  // O IP é resolvido AQUI, antes da transação, e não lá dentro.
+  //
+  // Esta é a única linha de auditoria do sistema que não passa por
+  // `gravarLinhaDeAuditoria` — ela é escrita pelo `tx` escopado, pelo motivo de
+  // TIPO registrado em `core/audit/log.ts`. Então o preenchimento automático de
+  // `ip` (item 39 da auditoria de 2026-08-21) não a alcança, e ela é a exceção
+  // que aquele docstring nomeia.
+  //
+  // Fora da transação porque `ipDaRequisicaoAtual()` é assíncrona, e esperá-la
+  // com lock de linha em `Lead` na mão alongaria a transação por trabalho que
+  // não é do domínio dela — a mesma razão pela qual `avaliarAtividadeSuspeita`
+  // fica de fora.
+  const ip = await ipDaRequisicaoAtual();
+
   const leadsMovidos = await db.$transaction(async (tx) => {
     const funil = await travarEstruturaDoFunil(tx, input.companyId);
 
@@ -669,6 +684,7 @@ export async function excluirEtapa(input: {
           antes: { nome: etapa.nome, ordem: etapa.ordem, cor: etapa.cor },
           // O `count` da própria escrita, nunca uma leitura anterior.
           depois: { destinoId: destinoId ?? null, leadsMovidos: movidos },
+          ip,
         }
       ),
     });

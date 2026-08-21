@@ -26,6 +26,24 @@ vi.mock("../../src/lib/prisma", () => ({
 const compareMock = vi.fn();
 vi.mock("bcryptjs", () => ({ default: { compare: (...a: unknown[]) => compareMock(...a) } }));
 
+// A auditoria de login (Fase 2 da auditoria de 2026-08-21) e mockada aqui de
+// proposito. O que interessa NESTE arquivo e QUANDO cada uma e chamada -- a
+// simetria entre conta existente e inexistente e a ausencia de escrita no
+// caminho de falha. O que a linha gravada REALMENTE contem depois de chegar no
+// Postgres esta em `tests/unit/auditoria-login.test.ts`, contra o banco de
+// verdade, porque `AuditLog.companyId` e NOT NULL e um mock com a forma do
+// delegate fica verde recebendo `undefined`.
+const auditarLoginMock = vi.fn();
+const tentativaRecusadaMock = vi.fn();
+vi.mock("../../src/core/auth/auditoria-login", () => ({
+  ACAO_LOGIN: "login",
+  ACAO_LOGOUT: "logout",
+  PREFIXO_TENTATIVA_RECUSADA: "[auditoria] login recusado",
+  auditarLogin: (...a: unknown[]) => auditarLoginMock(...a),
+  auditarLogout: vi.fn(),
+  registrarTentativaRecusada: (...a: unknown[]) => tentativaRecusadaMock(...a),
+}));
+
 const {
   checarLimiteLogin,
   LIMITE_LOGIN_POR_IP,
@@ -190,6 +208,12 @@ describe("autorizarCredenciais — tempo de resposta não revela se a conta exis
     email: "existe@exemplo.com",
     senhaHash: "$2b$10$hashRealDeMentiraParaOTeste......................",
     ativo: true,
+    // O vinculo passou a vir na MESMA consulta (Fase 2 da auditoria de
+    // 2026-08-21): ele e a unica origem sa do `companyId` da linha de
+    // auditoria de login, e traze-lo aqui evita uma segunda ida ao banco
+    // dentro do caminho de login. `prisma.company.findFirst()` esta proibido
+    // (`core/users/empresa.ts`).
+    memberships: [{ companyId: "empresa-1" }],
   };
 
   beforeEach(() => {
@@ -198,6 +222,8 @@ describe("autorizarCredenciais — tempo de resposta não revela se a conta exis
     findUniqueMock.mockReset();
     compareMock.mockReset();
     compareMock.mockResolvedValue(false);
+    auditarLoginMock.mockReset();
+    tentativaRecusadaMock.mockReset();
   });
 
   it("compara a senha MESMO quando o e-mail não existe — sair antes é o que vaza o tempo", async () => {
@@ -277,5 +303,171 @@ describe("autorizarCredenciais — tempo de resposta não revela se a conta exis
     });
     // O objeto que vai para o token JWT não pode carregar o hash junto.
     expect(JSON.stringify(resultado)).not.toContain("$2b$");
+  });
+});
+
+/**
+ * A porta de entrada deixa rastro — item 39 da auditoria de 2026-08-21.
+ *
+ * O `RateLimit` não substituía: conta acerto e erro juntos, é volátil (janela
+ * de 10 min) e guarda contagem, não o par conta/IP/instante. Estes casos
+ * travam QUANDO cada registro acontece; o conteúdo da linha gravada está em
+ * `tests/unit/auditoria-login.test.ts`, contra o Postgres de verdade.
+ */
+describe("autorizarCredenciais — auditoria de login", () => {
+  const requisicao = () =>
+    new Request("https://crm.exemplo.com/api/auth/callback/credentials", {
+      method: "POST",
+      headers: { "x-vercel-forwarded-for": "203.0.113.99" },
+    });
+
+  const usuarioAtivo = {
+    id: "u1",
+    nome: "Fulano",
+    email: "existe@exemplo.com",
+    senhaHash: "$2b$10$hashRealDeMentiraParaOTeste......................",
+    ativo: true,
+    memberships: [{ companyId: "empresa-1" }],
+  };
+
+  beforeEach(() => {
+    checarRateLimitMock.mockReset();
+    checarRateLimitMock.mockResolvedValue(true);
+    findUniqueMock.mockReset();
+    compareMock.mockReset();
+    compareMock.mockResolvedValue(false);
+    auditarLoginMock.mockReset();
+    tentativaRecusadaMock.mockReset();
+  });
+
+  it("login aceito grava a linha com a empresa DO VÍNCULO e o IP não forjável", async () => {
+    const { autorizarCredenciais } = await import("../../src/core/auth/credenciais");
+    findUniqueMock.mockResolvedValue(usuarioAtivo);
+    compareMock.mockResolvedValue(true);
+
+    await autorizarCredenciais({ email: usuarioAtivo.email, senha: "senha-certa" }, requisicao());
+
+    expect(auditarLoginMock).toHaveBeenCalledTimes(1);
+    // Objeto inspecionado à mão, e não `toHaveBeenCalledWith`: o Vitest ignora
+    // chave de valor `undefined` até na forma exata, então um `companyId` que
+    // não fosse resolvido passaria despercebido — a armadilha medida nesta
+    // branch.
+    const argumento = auditarLoginMock.mock.calls[0]![0] as Record<string, unknown>;
+    expect(argumento.userId).toBe("u1");
+    expect(argumento.companyId).toBe("empresa-1");
+    expect(argumento.ip).toBe("203.0.113.99");
+  });
+
+  it("a senha NÃO viaja para a auditoria — nem em claro, nem em tamanho", async () => {
+    // Precedente literal de `redefinirSenha` (`core/users/service.ts`), que
+    // audita sem `antes` nem `depois` "porque não há nada aqui que seja seguro
+    // guardar". A varredura é sobre o argumento INTEIRO serializado, e não
+    // sobre um campo esperado: um campo novo carregando a senha entraria sem
+    // ninguém notar.
+    const { autorizarCredenciais } = await import("../../src/core/auth/credenciais");
+    findUniqueMock.mockResolvedValue(usuarioAtivo);
+    compareMock.mockResolvedValue(true);
+
+    const senha = "SenhaSecreta!123";
+    await autorizarCredenciais({ email: usuarioAtivo.email, senha }, requisicao());
+
+    const serializado = JSON.stringify(auditarLoginMock.mock.calls[0]![0]);
+    expect(serializado).not.toContain(senha);
+    expect(serializado).not.toContain(usuarioAtivo.senhaHash);
+    // Nem o TAMANHO: ele reduz o espaço de busca de graça.
+    expect(serializado).not.toContain(String(senha.length));
+  });
+
+  it("senha errada em conta EXISTENTE registra a tentativa e NÃO grava no AuditLog", async () => {
+    const { autorizarCredenciais } = await import("../../src/core/auth/credenciais");
+    findUniqueMock.mockResolvedValue(usuarioAtivo);
+
+    await autorizarCredenciais({ email: usuarioAtivo.email, senha: "errada" }, requisicao());
+
+    expect(tentativaRecusadaMock).toHaveBeenCalledTimes(1);
+    expect(auditarLoginMock).not.toHaveBeenCalled();
+    const argumento = tentativaRecusadaMock.mock.calls[0]![0] as Record<string, unknown>;
+    expect(argumento.conta).toBe("existente");
+    expect(argumento.motivo).toBe("credenciais");
+  });
+
+  it("e-mail INEXISTENTE registra a tentativa com o MESMO trabalho — sem escrita no banco", async () => {
+    // Esta é a metade que impede a auditoria de virar o oráculo de enumeração
+    // que `HASH_INERTE` existe para fechar. Se a conta existente gravasse uma
+    // linha e a inexistente não, o `INSERT` (mediana de 85 ms neste banco)
+    // reapareceria como diferença de tempo sobre os ~240 ms de bcrypt — o
+    // mesmo canal, com outro nome.
+    const { autorizarCredenciais } = await import("../../src/core/auth/credenciais");
+    findUniqueMock.mockResolvedValue(null);
+
+    await autorizarCredenciais({ email: "nao-existe@exemplo.com", senha: "x" }, requisicao());
+
+    expect(tentativaRecusadaMock).toHaveBeenCalledTimes(1);
+    expect(auditarLoginMock).not.toHaveBeenCalled();
+    expect((tentativaRecusadaMock.mock.calls[0]![0] as Record<string, unknown>).conta).toBe(
+      "inexistente"
+    );
+  });
+
+  it("conta DESATIVADA com a senha certa é recusada e registrada, sem linha de login", async () => {
+    const { autorizarCredenciais } = await import("../../src/core/auth/credenciais");
+    findUniqueMock.mockResolvedValue({ ...usuarioAtivo, ativo: false });
+    compareMock.mockResolvedValue(true);
+
+    const resultado = await autorizarCredenciais(
+      { email: usuarioAtivo.email, senha: "senha-certa" },
+      requisicao()
+    );
+
+    expect(resultado).toBeNull();
+    expect(auditarLoginMock).not.toHaveBeenCalled();
+    expect((tentativaRecusadaMock.mock.calls[0]![0] as Record<string, unknown>).motivo).toBe(
+      "desativada"
+    );
+  });
+
+  it("bloqueio por limite também é tentativa registrada — é o formato da força bruta", async () => {
+    const { autorizarCredenciais, MuitasTentativasDeLoginError } = await import(
+      "../../src/core/auth/credenciais"
+    );
+    checarRateLimitMock.mockResolvedValueOnce(false);
+
+    await expect(
+      autorizarCredenciais({ email: "alvo@exemplo.com", senha: "chute" }, requisicao())
+    ).rejects.toBeInstanceOf(MuitasTentativasDeLoginError);
+
+    expect(tentativaRecusadaMock).toHaveBeenCalledTimes(1);
+    expect((tentativaRecusadaMock.mock.calls[0]![0] as Record<string, unknown>).motivo).toBe(
+      "limite"
+    );
+    // E o banco continua intocado: o limite roda ANTES da consulta, que é o
+    // que torna a força bruta cara para quem ataca.
+    expect(findUniqueMock).not.toHaveBeenCalled();
+  });
+
+  it("vínculo != 1 não inventa empresa e não derruba o login", async () => {
+    // Mesma postura de `usuarioAtual()`: zero vínculo é sessão inválida, mais
+    // de um LANÇA em vez de escolher. Aqui a autorização já terminou — negar o
+    // login por causa do rastro seria negação de serviço —, então a anomalia
+    // vai para o log e nenhuma linha é gravada numa empresa escolhida a dedo.
+    const { autorizarCredenciais } = await import("../../src/core/auth/credenciais");
+    const aviso = vi.spyOn(console, "warn").mockImplementation(() => {});
+    compareMock.mockResolvedValue(true);
+
+    for (const memberships of [[], [{ companyId: "a" }, { companyId: "b" }]]) {
+      auditarLoginMock.mockReset();
+      findUniqueMock.mockResolvedValue({ ...usuarioAtivo, memberships });
+
+      const resultado = await autorizarCredenciais(
+        { email: usuarioAtivo.email, senha: "senha-certa" },
+        requisicao()
+      );
+
+      expect(resultado).not.toBeNull();
+      expect(auditarLoginMock).not.toHaveBeenCalled();
+    }
+    expect(aviso).toHaveBeenCalledTimes(2);
+
+    aviso.mockRestore();
   });
 });
