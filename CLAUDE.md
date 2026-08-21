@@ -46,29 +46,25 @@ que dependem dela — ver `docs/superpowers/specs/2026-08-19-n8necrm-fundacao-de
    e o estado de pareamento ficaram para o Ciclo 2c** — nada disso é provável
    sem uma instância Evolution acessível, e este ambiente não tem uma.
 5. **Tempo real: Supabase Realtime**, com RLS como trava do canal.
-6. **Hospedagem: EM ABERTO. A fila é Postgres.** *(Reaberta em 2026-08-21 —
-   ver `docs/superpowers/specs/2026-08-21-ciclo-2d-fila-em-postgres-design.md`.)*
-   Até essa data a decisão era "Vercel agora, com Vercel Queues atrás de um
-   adaptador". O dono decidiu **não usar a Vercel**. O que passou a valer: a
-   fila de turnos vive numa tabela do Postgres do Supabase que já existe
-   (`TurnoJob`, lease atômico, zero infra nova — pg-boss numa VPS e o próprio
-   n8n foram considerados e recusados), e **o app é agnóstico de hospedagem**:
-   roda em qualquer Node. Onde publicar é decisão adiada, e nada pode passar a
-   depender dela.
+6. **Hospedagem: a própria VPS `76.13.224.40`**, sob systemd, ao lado de n8n e
+   Evolution (2026-08-21). **Reaberta e refechada duas vezes:** era Vercel
+   (2026-08-19), virou "em aberto" no Ciclo 2d (2026-08-21), e fechou na VPS no
+   mesmo dia. A fila é uma tabela do Postgres desde o Ciclo 2d (`TurnoJob`,
+   lease atômico, zero infra nova — pg-boss numa VPS e o próprio n8n foram
+   considerados e recusados), e o gatilho é o **worker**
+   (`npm run fila:worker`) como serviço supervisionado — não agendador.
    **Consequência que não pode ser esquecida:** a fila **não drena sozinha**.
-   Alguém tem de ligar `npm run fila:worker` ou um agendador batendo em
-   `POST /api/queues/whatsapp-turn`. Sem isso, mensagem entra e nunca é
-   respondida, sem erro nenhum aparecer.
-   **O que aconteceu com os ciclos que dependiam dela** (esta regra existe no
-   topo desta seção e foi cumprida, um a um, na §11 do spec do Ciclo 2d):
-   o **Ciclo 0** saiu **vindicado, não invalidado** — a fila já era adaptador
-   atrás de uma interface, e é isso que fez a troca custar uma linha nos três
-   importadores de `publicarTurno`; os **Ciclos 4 e 1b** continuam bloqueados,
-   com outro dono — `frame-ancestors` e `SUPABASE_JWT_ISSUER` precisam da
-   origem pública, que passou a depender da hospedagem em vez do domínio da
-   Vercel. Nada a refazer em nenhum dos três.
+   Worker parado é mensagem que entra, vira linha em `TurnoJob` e nunca é
+   respondida, sem erro aparecer em lugar nenhum. Quem acusa isso é
+   `n8necrm-saude.timer`, que pergunta ao BANCO e não ao systemd.
+   **O que continuava bloqueado e destravou:** `frame-ancestors` (Ciclo 4) e
+   `SUPABASE_JWT_ISSUER` (Ciclo 1b) esperavam a origem pública, que agora é
+   `https://crm.nateksoft.com`. Ver `docs/DEPLOY.md` e
+   `docs/superpowers/plans/2026-08-21-n8necrm-deploy-vps.md`.
    *(O histórico fica escrito aqui de propósito: decisão travada sem histórico
-   é decisão que alguém reabre de novo sem saber que já foi discutida.)*
+   é decisão que alguém reabre de novo sem saber que já foi discutida — e esta
+   já foi reaberta uma vez. Um leitor que encontre só "em aberto" pergunta de
+   novo; um que encontre só "Vercel" age errado.)*
 7. **Cópia da base: histórico completo, sem vínculo de fork.** As branches de
    feature em aberto da origem não vieram.
 8. **Identidade do produto: EM ABERTO.** `config/client.ts` está genérico de
@@ -143,3 +139,22 @@ que dependem dela — ver `docs/superpowers/specs/2026-08-19-n8necrm-fundacao-de
   schema em `tests/e2e/banco-blindado.spec.ts` fixa o CONJUNTO EXATO de grants
   em vez de exigir lista vazia: exigir vazio seria vermelho no primeiro dia e
   o "conserto" arrancaria o Realtime que o Ciclo 3 precisa.
+- **`AUTH_URL` e `AUTH_TRUST_HOST` não são opcionais em produção.** Sem elas o
+  Auth.js v5 recusa **todo** login com `UntrustedHost` — a checagem é
+  `config.trustHost` em `node_modules/@auth/core/lib/utils/env.js`, que cai
+  para `NODE_ENV !== "production"` quando nenhuma das duas existe. Ou seja:
+  `next dev` NUNCA mostra o problema e `next start` sempre mostra, e o erro sai
+  só no log do servidor. O aviso viveu meses dentro de `playwright.config.ts`,
+  onde quem faz deploy não olha. `AUTH_URL` é **só a origem**, sem caminho:
+  `next-auth/lib/env.js` deriva `basePath` do pathname, e um caminho ali apaga
+  as rotas `/api/auth/*`. Travado em `tests/unit/supabase-jwt-chave.test.ts`.
+- **Mexer em `/opt/nateksoft/nginx/nateksoft.conf` pode derrubar n8n e
+  Evolution.** O CRM vive num arquivo **separado** em `sites-available/`, e a
+  precedência de `server_name` exato sobre curinga é o que torna isso possível
+  sem editar aquele arquivo. `nginx -t` antes de todo `reload`.
+- **A VPS não tem `ufw` ativo** (medido em 2026-08-21). É por isso que
+  `next start` escuta em `127.0.0.1` e não em qualquer endereço: sem esse bind,
+  qualquer um fala com a aplicação direto, contorna o nginx, e escreve o
+  `X-Real-IP` que quiser — e o `AuditLog` passa a guardar IP forjado, que é
+  pior que campo vazio. Travado em `tests/unit/deploy-units.test.ts`.
+

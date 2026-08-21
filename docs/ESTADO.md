@@ -107,45 +107,44 @@ que o formulário mostra de verdade.
 
 Precisa de um Personal Access Token se o registro só sair pela Management API.
 
-### 4. Escolher a hospedagem, e ligar o gatilho da fila
+### 4. Hospedagem: DECIDIDA em 2026-08-21 -- a propria VPS
 
-A Vercel saiu (Ciclo 2d). O app roda em qualquer Node, e **onde** é decisão
-sua. Três coisas dependem dela.
+A decisão de hospedagem deixou de estar em aberto. O CRM vai para
+`76.13.224.40`, a mesma VPS de n8n e Evolution, sob **systemd** (não Docker),
+com o **worker** (`npm run fila:worker`) como gatilho da fila — não agendador.
 
-**Ligue um gatilho da fila — sem isso o WhatsApp fica mudo.** Mensagem entra,
-vira linha em `TurnoJob`, e ninguém responde. **Nenhum erro aparece em lugar
-nenhum**: é o pior modo de falha possível, porque o sistema parece saudável. O
-Vercel Queues empurrava sozinho; agora alguém tem de puxar.
+O runbook é `docs/DEPLOY.md`. O plano, com as decisões e o custo de cada
+alternativa recusada, é
+`docs/superpowers/plans/2026-08-21-n8necrm-deploy-vps.md`.
 
-- Node sempre ligado (recomendado): `npm run fila:worker` como serviço. Não
-  abre porta nenhuma, e o laço de 2s mantém a resposta em ~8-10s — praticamente
-  o que a Vercel entregava.
-- Ou um agendador batendo em `POST /api/queues/whatsapp-turn` com o cabeçalho
-  `x-fila-segredo` (pg_cron+pg_net do Supabase, cron de VPS, workflow do n8n).
-  Um cron de um minuto faz a resposta ao cliente sair em até ~68s.
+**O que essa decisão fechou, e que estava aberto aqui:**
 
-**`WHATSAPP_QUEUE_SECRET` virou a única defesa dessa rota.** Até o Ciclo 2d ela
-era segunda camada atrás do air-gap que a plataforma garantia — a rota não era
-alcançável da internet. Agora é, e o que a protege é só o segredo em cabeçalho,
-comparado em tempo constante, com 404 para quem erra. Gere com
-`openssl rand -hex 32`, não reaproveite, e trate como credencial de produção.
+- O gatilho da fila é o worker. A rota `POST /api/queues/whatsapp-turn` passa a
+  ser **recusada na borda** (`return 404` no nginx do CRM), porque nada
+  legítimo a chama de fora. `WHATSAPP_QUEUE_SECRET` continua obrigatória — a
+  recusa no nginx é uma camada, não a defesa, e o dia em que o gatilho voltar a
+  ser externo aquele bloco tem de sair conscientemente.
+- `IP_CABECALHO_CONFIAVEL="x-real-ip"`, sustentada por
+  `proxy_set_header X-Real-IP $remote_addr;` no nginx — a linha que DESCARTA o
+  que o cliente mandou. Nunca `x-forwarded-for`, que ACUMULA.
+- `SENTRY_ENVIRONMENT="production"` e
+  `SUPABASE_JWT_ISSUER="https://crm.nateksoft.com"`.
+- `COFRE_CHAVE_MESTRA` é gerada na VPS e não tem cópia em lugar nenhum: perdê-la
+  torna os segredos cifrados no banco irrecuperáveis.
 
-**Defina três variáveis no ambiente do deploy:**
-
-- `IP_CABECALHO_CONFIAVEL` — o cabeçalho que a sua borda SOBRESCREVE (não o que
-  ela acrescenta). Sem ela não há limite por IP no login, o balde do webhook é
-  por empresa e `AuditLog.ip` fica nulo.
-- `SENTRY_ENVIRONMENT` — `VERCEL_ENV` não existe mais; sem ela todo evento
-  chega ao painel rotulado `local`, inclusive os de produção.
-- `SUPABASE_JWT_ISSUER` — a origem pública real (Ciclo 1b).
-
-E gere `COFRE_CHAVE_MESTRA` (`openssl rand -base64 32`) onde for publicar —
-sem ela o WhatsApp não sobe, e não há fallback.
+**O que ela ABRIU, e não estava aqui antes:** `AUTH_URL` e `AUTH_TRUST_HOST`.
+Sem as duas, `next start` sobe, responde, desenha o formulário e recusa todo
+login com `UntrustedHost` — a checagem está em
+`node_modules/@auth/core/lib/utils/env.js`, e só vale sob
+`NODE_ENV=production`, então `next dev` nunca mostra o problema. O aviso
+existia desde 2026-08 dentro de `playwright.config.ts`, onde quem faz deploy
+não olha. Agora está no `.env.example`, com caso de teste.
 
 Se existir projeto na Vercel, **apague-o e as variáveis que estiverem lá**, em
 especial `EVOLUTION_DOMAIN`, `EVOLUTION_INSTANCE`, `EVOLUTION_APIKEY` e
 `EVOLUTION_COMPANY_ID`: elas morreram no código no Ciclo 2a, e apikey esquecida
 em painel é credencial viva sem dono.
+
 
 ### 5. Uma linha de SQL, se você quiser
 
