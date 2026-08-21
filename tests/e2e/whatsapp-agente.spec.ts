@@ -330,7 +330,6 @@ test("erro de sessão inválida chega à tela ao tentar pausar a IA", async ({ p
       nome: "E2E Sessão Inválida",
       email: EMAIL_USUARIO_TESTE,
       senhaHash,
-      papel: "VENDEDOR",
       // O VÍNCULO. Sem ele esta conta LOGA e não entra em lugar nenhum:
       // desde o Ciclo 1a `usuarioAtual()` resolve `companyId`/`papel` pelo
       // `Membership` e LANÇA sem vínculo, e `(painel)/layout.tsx` manda para

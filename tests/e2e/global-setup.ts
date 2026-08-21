@@ -56,8 +56,8 @@ async function garantirContasDeTeste(prisma: PrismaClient): Promise<void> {
   ] as const) {
     const usuario = await prisma.user.upsert({
       where: { email },
-      update: { senhaHash, ativo: true, papel },
-      create: { nome, email, senhaHash, papel },
+      update: { senhaHash, ativo: true },
+      create: { nome, email, senhaHash },
       select: { id: true },
     });
 
@@ -76,9 +76,14 @@ async function garantirContasDeTeste(prisma: PrismaClient): Promise<void> {
     // link "Equipe" não estava visível. É o mesmo defeito que o commit e67e1e6
     // fechou em `tests/unit/audit-log.test.ts`; a fixture E2E ficou de fora.
     //
-    // `update: { papel }` pelo mesmo motivo que o `upsert` do usuário regrava o
-    // papel: um teste de permissão que troque o papel e falhe no meio deixaria
-    // o vínculo com o papel errado para a execução seguinte.
+    // `update: { papel }` e não só `create`: um teste de permissão que troque o
+    // papel e falhe no meio deixaria o vínculo com o papel errado para a
+    // execução seguinte. Desde o Ciclo 1f este `upsert` é o ÚNICO lugar que
+    // grava o papel destas duas contas — o `upsert` do usuário, acima, também
+    // regravava a coluna espelho `User.papel` e parou. Quem sustenta a palavra
+    // "único" não é esta prosa: é `tests/unit/user-papel-nao-volta.test.ts`,
+    // que reprova `papel` em qualquer chamada a `prisma.user.*` do
+    // repositório e deixa o vínculo como a única via.
     await prisma.membership.upsert({
       where: { userId_companyId: { userId: usuario.id, companyId: empresa.id } },
       update: { papel },

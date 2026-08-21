@@ -238,7 +238,6 @@ async function comContaDescartavel(corpo: () => Promise<void>) {
       // aqui faria o login falhar por motivo que não tem nada a ver com o
       // que este teste mede.
       senhaHash: await bcrypt.hash(senhaE2e(), 10),
-      papel: "VENDEDOR",
       ativo: true,
       memberships: { create: { companyId: empresa.id, papel: "VENDEDOR" } },
     },
