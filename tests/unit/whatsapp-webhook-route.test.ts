@@ -39,11 +39,6 @@ vi.mock("@/modules/whatsapp/fila", () => ({
   publicarTurno: (...a: unknown[]) => publicarTurnoMock(...a),
 }));
 
-// A rota importa `DuplicateMessageError` de "@vercel/queue" (não de fila.ts)
-// para reconhecer especificamente esse erro vindo de `publicarTurno` (mockado
-// acima) — usamos a classe REAL do pacote: importar só a classe de erro não
-// toca rede nem exige env nenhuma, ao contrário de `send`/`handleCallback`.
-const { DuplicateMessageError } = await import("@vercel/queue");
 const { POST } = await import(
   "../../src/app/api/whatsapp/evolution/[companyId]/[token]/route"
 );
@@ -348,12 +343,19 @@ describe("ingestão e publicação de turno", () => {
   );
 
   it(
-    "trata DuplicateMessageError vindo de publicarTurno como esperado (200), não como falha — é o caminho " +
-      "normal quando o job para este bufferSeq já tinha sido publicado antes",
+    "republicação do MESMO bufferSeq responde 200 — é o caminho normal quando o job já tinha sido " +
+      "publicado antes, e desde o Ciclo 2d ele nem chega como erro",
     async () => {
+      // Este caso nasceu afirmando que a rota TRADUZIA `DuplicateMessageError`
+      // do Vercel Queues para "tudo bem". A tradução morreu com o adaptador: em
+      // Postgres a republicação da mesma chave é `createMany({ skipDuplicates:
+      // true })`, que resolve sem lançar (`fila/postgres.ts`). O caso fica, e é
+      // por isso que o mock RESOLVE em vez de rejeitar — o desfecho observável
+      // pela Evolution (200, `ok: true`) é o mesmo de antes, e é ele que o
+      // arquivo existe para travar.
       normalizarEventosMock.mockReturnValue([eventoNormalizado("1")]);
       ingerirMensagemMock.mockResolvedValue(resultadoIngestao({ duplicada: true }));
-      publicarTurnoMock.mockRejectedValueOnce(new DuplicateMessageError("dup", "conv-1:1"));
+      publicarTurnoMock.mockResolvedValueOnce(undefined);
 
       const resposta = await chamar(requestComCorpo({ instance: "inst-1" }));
 
@@ -364,9 +366,9 @@ describe("ingestão e publicação de turno", () => {
   );
 
   it(
-    "fix round 1/5 (achado I3): devolve 500 quando publicarTurno falha por um motivo GENUÍNO (não " +
-      "DuplicateMessageError) — deixa a Evolution reentregar o webhook, seguro agora que ingest e " +
-      "publish são idempotentes de ponta a ponta",
+    "fix round 1/5 (achado I3): devolve 500 quando publicarTurno falha por um motivo GENUÍNO — deixa " +
+      "a Evolution reentregar o webhook, seguro porque ingest e publish são idempotentes de ponta a " +
+      "ponta. Desde o Ciclo 2d TODA rejeição de publicarTurno é genuína: duplicata deixou de lançar.",
     async () => {
       normalizarEventosMock.mockReturnValue([eventoNormalizado("1")]);
       ingerirMensagemMock.mockResolvedValue(resultadoIngestao());

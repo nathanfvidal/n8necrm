@@ -28,7 +28,8 @@ import { checarRateLimit } from "./limiter";
  *
  * Exportar é ato deliberado que termina numa planilha aberta na mão de
  * alguém — não existe consumidor automático legítimo: a suíte e2e não toca
- * esta rota e `vercel.json` não declara nenhum cron que a chame. A maior
+ * esta rota, e nenhum agendador a chama (`vercel.json` foi apagado no Ciclo
+ * 2d, junto com o resto da plataforma). A maior
  * rajada legítima imaginável é alguém exportar, ver que filtrou errado e
  * exportar de novo; isso é um punhado, não uma dezena.
  *

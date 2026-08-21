@@ -1,10 +1,10 @@
 /**
  * Contrato da fila de turnos de conversa.
  *
- * Vive num arquivo próprio, sem `server-only` e sem importar `@vercel/queue`,
- * pelo MESMO motivo de `gateway/tipos.ts`: quem só precisa nomear o tipo (o
- * consumidor, um teste, um adaptador futuro) não deveria arrastar junto o SDK
- * de um provedor específico nem a marcação de servidor.
+ * Vive num arquivo próprio, sem `server-only` e sem importar o SDK de nenhum
+ * provedor, pelo MESMO motivo de `gateway/tipos.ts`: quem só precisa nomear o
+ * tipo (o consumidor, um teste, um adaptador futuro) não deveria arrastar junto
+ * uma dependência de infraestrutura nem a marcação de servidor.
  */
 
 /**
@@ -44,10 +44,12 @@ export interface OpcoesPublicacao {
 /**
  * Abstração sobre o provedor de fila — mesmo padrão de `WhatsappGateway`.
  *
- * Hoje só existe `FilaVercel`. A decisão 6 do spec (2026-08-19) mantém a
- * Vercel como runtime e exige esta costura para que mover o CRM para a VPS
- * seja escrever um segundo adaptador (pg-boss, BullMQ), não reescrever o
- * módulo de WhatsApp.
+ * A decisão 6 do spec fundador (2026-08-19) exigiu esta costura para que mover
+ * o CRM para fora da Vercel fosse escrever um SEGUNDO adaptador, não reescrever
+ * o módulo de WhatsApp. Ela foi reaberta em 2026-08-21 — o dono decidiu não
+ * usar a Vercel — e a costura pagou: `FilaPostgres` (`./postgres.ts`) entrou no
+ * lugar de `FilaVercel` trocando uma linha de `./index.ts`, e os três
+ * importadores de `publicarTurno` não mudaram.
  */
 export interface FilaTurnos {
   publicar(job: TurnoJob, opcoes?: OpcoesPublicacao): Promise<void>;

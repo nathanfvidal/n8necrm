@@ -37,10 +37,13 @@ import "server-only";
  *
  * O build inteiro falhava — leads, funil e login inclusos, que não têm relação
  * nenhuma com WhatsApp. Ninguém percebeu por três dias porque o sintoma só
- * aparece na Vercel: numa máquina de desenvolvimento o `.env` tem tudo.
+ * aparece onde as variáveis não estão: numa máquina de desenvolvimento o `.env`
+ * tem tudo. Foi na Vercel que ele apareceu, e o Ciclo 2d saiu dela — mas a
+ * regra NÃO era da plataforma: `next build` avalia módulo alcançável para
+ * coletar configuração de rota em qualquer lugar que ele rode.
  *
  * Meia dúzia de arquivos aponta para cá quando explica a própria construção
- * preguiçosa (`fila/index.ts`, `fila/vercel.ts`, `llm/index.ts`,
+ * preguiçosa (`fila/index.ts`, `fila/postgres.ts`, `llm/index.ts`,
  * `core/cofre/chave.ts`, `core/supabase-jwt/chave.ts` e `emitir.ts`,
  * `automation/n8n/index.ts`). O relato acima é o que essas referências vêm
  * buscar; ele fica, e é por isso que a contração apagou o schema e não a

@@ -302,26 +302,27 @@ describe("processarTurno", () => {
       "quando o reagendamento dela já existe na fila",
     async () => {
       // Cenário: a fila entrega o job (seq 1, tentativa 0), o lease está
-      // ocupado, o reagendamento r1 é publicado com sucesso e o handler
-      // devolve 200 — mas essa confirmação se perde (entrega "pelo menos uma
-      // vez" é justamente isso). A fila reentrega o MESMO job (seq 1,
-      // tentativa 0). O lease continua ocupado, então o código tenta publicar
-      // r1 de novo — e a chave r1 já está registrada na janela de dedupe.
+      // ocupado, o reagendamento r1 é publicado com sucesso — mas a conclusão
+      // daquele turno se perde (entrega "pelo menos uma vez" é justamente
+      // isso, e a reivindicação por lease de `fila/postgres.ts` tem a mesma
+      // propriedade). A fila reentrega o MESMO job (seq 1, tentativa 0). O
+      // lease continua ocupado, então o código tenta publicar r1 de novo — e a
+      // chave r1 já existe.
       //
-      // Sem tratamento, `DuplicateMessageError` sobe, o handler responde 500,
-      // a fila reentrega, e o ciclo se repete até esgotar as tentativas. É a
-      // MESMA classe do achado C2 (que era sempre) por outro gatilho (que é
-      // raro) — e o reagendamento r1 correto já está na fila fazendo o
-      // trabalho, então não há nada a recuperar: a publicação duplicada é uma
-      // não-operação, não uma falha.
+      // Até o Ciclo 2d isso subia como `DuplicateMessageError`, o handler
+      // respondia 500, a fila reentregava, e o ciclo se repetia até esgotar as
+      // tentativas — a MESMA classe do achado C2 (que era sempre) por um
+      // gatilho raro. O adaptador de Postgres torna a republicação um no-op
+      // (`skipDuplicates`), então o mock RESOLVE: o que este caso trava é que
+      // `processarTurno` sai sem lançar e sem republicar duas vezes, e isso não
+      // mudou.
       const conversation = await criarConversation({ bufferSeq: 1 });
       await prisma.conversation.update({
         where: { id: conversation.id },
         data: { processandoAte: new Date(Date.now() + 60_000) },
       });
 
-      const { DuplicateMessageError } = await import("@vercel/queue");
-      publicarTurnoMock.mockRejectedValueOnce(new DuplicateMessageError("já publicado"));
+      publicarTurnoMock.mockResolvedValueOnce(undefined);
 
       await expect(
         processarTurno({ companyId: EMPRESA, conversationId: conversation.id, seq: 1, tentativaReagendamento: 0 })

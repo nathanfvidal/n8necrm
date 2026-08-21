@@ -1,7 +1,5 @@
 import "server-only";
 
-import { DuplicateMessageError } from "@vercel/queue";
-
 import {
   checarLimiteIaDaEmpresa,
   LIMITE_RESPOSTAS_IA_POR_EMPRESA,
@@ -91,14 +89,23 @@ const HISTORICO_MAX_MENSAGENS = 20;
 const MAX_CARACTERES_POR_MENSAGEM_CONTEXTO = 2000;
 
 // Fix round 1/5, achado CRÍTICO do revisor (C2): reagendar com
-// `delaySeconds: 5` usando a MESMA `idempotencyKey` do job original
-// (`${conversationId}:${seq}`) colidia com a janela de dedupe do Vercel
-// Queues (até 24h) — `publicarTurno` lançava `DuplicateMessageError` em TODA
-// ocorrência de lease ocupado, o handler 500ava, e quem de fato reentregava
-// a mensagem era o retry padrão da fila (`retryAfterSeconds: 30` em
-// vercel.json), não o reagendamento de 5s pretendido. `tentativaReagendamento`
-// dá a cada republish uma `idempotencyKey` própria (ver fila.ts) — sem essa
-// contagem, o job reagendado colidiria consigo mesmo na segunda vez também.
+// `delaySeconds: 5` usando a MESMA chave de idempotência do job original
+// (`${conversationId}:${seq}`) fazia a republicação COLIDIR com a publicação
+// que ainda estava pendente — `publicarTurno` lançava `DuplicateMessageError`
+// em TODA ocorrência de lease ocupado, o handler 500ava, e quem de fato
+// reentregava a mensagem era o retry padrão da fila, não o reagendamento de 5s
+// pretendido. `tentativaReagendamento` dá a cada republish uma chave própria
+// (ver `fila/postgres.ts#chaveIdempotencia`) — sem essa contagem, o job
+// reagendado colidiria consigo mesmo na segunda vez também.
+//
+// A JANELA em que a colisão acontece mudou no Ciclo 2d, e a necessidade da
+// contagem NÃO. Na Vercel a chave ficava reservada por `min(retenção, 24h)`,
+// muito além dos 5s do reagendamento. Em Postgres ela vale enquanto a LINHA
+// existir — e a linha do job original existe exatamente durante o
+// reagendamento, porque quem está reagendando é o turno que ainda a segura. O
+// que mudou é o DESFECHO da colisão: `skipDuplicates` a torna no-op silencioso
+// em vez de exceção. Sem a contagem, esse silêncio seria pior que a exceção
+// antiga — o reagendamento sumiria sem ninguém notar.
 // Um teto evita reagendar para sempre se algo ficar genuinamente preso (ex.:
 // uma conversa cujo lease nunca é liberado por um bug futuro) — 30 tentativas
 // de 5s é ~2,5min de espera antes de desistir e logar, generoso o bastante
@@ -159,8 +166,9 @@ const FALLBACK_MIDIA_NAO_SUPORTADA =
  *
  * Quando a reivindicação falha (0 linhas afetadas — lease genuinamente
  * ocupado), reagenda o MESMO job com `delaySeconds: 5` — mas com uma
- * `idempotencyKey` NOVA a cada tentativa (ver `MAX_TENTATIVAS_REAGENDAMENTO`
- * acima e `fila.ts`), não descarta a mensagem: outro processo pode estar
+ * chave de idempotência NOVA a cada tentativa (ver
+ * `MAX_TENTATIVAS_REAGENDAMENTO` acima e `fila/postgres.ts`), não descarta a
+ * mensagem: outro processo pode estar
  * processando um turno anterior da mesma conversa, e este job ainda precisa
  * rodar depois.
  *
@@ -190,26 +198,18 @@ export async function processarTurno(job: TurnoJob): Promise<void> {
       );
       return;
     }
-    try {
-      await publicarTurno({ ...job, tentativaReagendamento: tentativa }, { delaySeconds: 5 });
-    } catch (erro) {
-      // Re-revisão da leva de fixes: entrega "pelo menos uma vez" significa
-      // que a fila pode reentregar o MESMO job (mesmo `seq`, mesma
-      // `tentativaReagendamento`) quando a confirmação de um handler que já
-      // rodou com sucesso se perde. Nesse caso o reagendamento desta
-      // tentativa JÁ foi publicado, sua `idempotencyKey` já está na janela de
-      // dedupe, e `send()` recusa a republicação.
-      //
-      // Sem este catch o erro sobe, o handler responde 500, a fila reentrega
-      // e o ciclo se repete até esgotar as tentativas de entrega — a MESMA
-      // classe do achado C2, só que disparada por um caminho raro em vez de
-      // sempre. E é um alarme falso: o job reagendado correto já está na fila
-      // fazendo o trabalho, então "já existe" é exatamente o resultado
-      // desejado, não uma falha. Mesmo tratamento que a rota do webhook já dá
-      // a este erro (`api/whatsapp/evolution/[companyId]/[token]/route.ts`).
-      if (erro instanceof DuplicateMessageError) return;
-      throw erro;
-    }
+    // Sem `try/catch` de duplicata desde o Ciclo 2d, e a razão está em
+    // `fila/postgres.ts`: republicar a MESMA chave é um `INSERT` com
+    // `skipDuplicates`, ou seja, no-op — não lança mais. O motivo por que ela
+    // lançava antes fica registrado aqui porque o CASO continua acontecendo:
+    // entrega "pelo menos uma vez" significa que a fila pode reentregar o mesmo
+    // job (mesmo `seq`, mesma `tentativaReagendamento`) quando a confirmação de
+    // um handler que já rodou se perde — e a reivindicação por lease de
+    // `fila/postgres.ts` tem exatamente a mesma propriedade. O reagendamento
+    // daquela tentativa já está gravado, e "já existe" é o resultado desejado,
+    // não uma falha. O que mudou é que agora isso é silêncio, em vez de exceção
+    // traduzida em dois lugares diferentes.
+    await publicarTurno({ ...job, tentativaReagendamento: tentativa }, { delaySeconds: 5 });
     return;
   }
 

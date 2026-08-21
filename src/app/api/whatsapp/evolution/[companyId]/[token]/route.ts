@@ -1,5 +1,4 @@
 import { NextResponse } from "next/server";
-import { DuplicateMessageError } from "@vercel/queue";
 
 import { checarRateLimit } from "@/core/rate-limit/limiter";
 import { obterIpDaRequisicao } from "@/lib/ip";
@@ -72,7 +71,7 @@ import { publicarTurno } from "@/modules/whatsapp/fila";
  * 200 para autenticação/formato ok e todo evento processado (ou duplicado);
  * 500 quando pelo menos um evento falhou de ponta a ponta, deixando o retry
  * NATIVO da Evolution recuperar — seguro porque `ingerirMensagem` (idExterno)
- * e `publicarTurno` (idempotencyKey) são idempotentes.
+ * e `publicarTurno` (`@@unique([companyId, chaveIdempotencia])`) são idempotentes.
  */
 export async function POST(
   request: Request,
@@ -122,20 +121,16 @@ export async function POST(
         companyId: conexao.companyId,
         connectionId: conexao.id,
       });
-      try {
-        await publicarTurno({
-          companyId: resultado.companyId,
-          conversationId: resultado.conversationId,
-          seq: resultado.bufferSeq,
-        });
-      } catch (erroPublicacao) {
-        if (erroPublicacao instanceof DuplicateMessageError) {
-          // Esperado no caminho de redelivery: a fila já deduplicou por
-          // `idempotencyKey`, não é falha.
-          continue;
-        }
-        throw erroPublicacao;
-      }
+      // Sem `catch` de duplicata desde o Ciclo 2d: `publicarTurno` deixou de
+      // lançar em republicação da mesma chave (o `skipDuplicates` de
+      // `fila/postgres.ts`). O caminho de redelivery continua existindo — a
+      // Evolution reentrega o payload inteiro quando esta rota responde 500 — e
+      // continua sendo inofensivo; ele só deixou de precisar de tradução aqui.
+      await publicarTurno({
+        companyId: resultado.companyId,
+        conversationId: resultado.conversationId,
+        seq: resultado.bufferSeq,
+      });
     } catch (erro) {
       // Uma falha de verdade não impede os DEMAIS eventos do mesmo payload de
       // serem tentados — mas marca a resposta como falha, para a Evolution
