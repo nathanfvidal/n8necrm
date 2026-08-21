@@ -142,7 +142,15 @@ describe("core/contacts", () => {
     });
 
     it("registra auditoria da criação", async () => {
-      const contato = await prisma.contact.findUniqueOrThrow({ where: { telefone: TELEFONES.basico } });
+      // `findFirstOrThrow` com `companyId` junto, e não `findUniqueOrThrow` por
+      // telefone: desde o Ciclo 1e a chave única de `Contact` é
+      // `@@unique([companyId, telefone])` e o telefone sozinho deixou de existir
+      // em `ContactWhereUniqueInput`. O oráculo continua sendo o prisma CRU,
+      // fora do escopo — o que mudou é que ele agora nomeia a empresa em vez de
+      // depender da unicidade global para acertar a linha.
+      const contato = await prisma.contact.findFirstOrThrow({
+        where: { companyId, telefone: TELEFONES.basico },
+      });
       const log = await prisma.auditLog.findFirst({
         where: { entidade: "Contact", entidadeId: contato.id, acao: "criar_contato" },
       });
@@ -173,7 +181,11 @@ describe("core/contacts", () => {
     });
 
     it("recusa mudar o telefone para um que já é de outra pessoa", async () => {
-      const contato = await prisma.contact.findUniqueOrThrow({ where: { telefone: TELEFONES.colisao } });
+      // Mesmo motivo do caso "registra auditoria da criação": a chave única é
+      // composta desde o Ciclo 1e.
+      const contato = await prisma.contact.findFirstOrThrow({
+        where: { companyId, telefone: TELEFONES.colisao },
+      });
 
       await expect(
         atualizarContato(companyId,

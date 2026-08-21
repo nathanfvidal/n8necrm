@@ -63,8 +63,11 @@ export const prisma = new PrismaClient({ adapter });
 // `119555*`, `119666*`, `119444*`, `119222*`, além do prefixo `1199999000{0-3}`
 // do próprio seed base) e limpa por `startsWith`/`in` sobre esse valor. Uma
 // coluna `isDemo` seria mais uma forma de fazer a mesma coisa, divergindo da
-// convenção já estabelecida sem ganhar precisão nenhuma — `Contact.telefone`
-// já é único e já é a chave de dedupe natural do domínio (spec §2.3), então
+// convenção já estabelecida sem ganhar precisão nenhuma — o telefone já é
+// único DENTRO da empresa (`@@unique([companyId, telefone])`, Ciclo 1e; era
+// `@unique` global quando esta convenção nasceu, e a mudança não a afeta
+// porque seed e testes gravam na mesma empresa) e já é a chave de dedupe
+// natural do domínio (spec §2.3), então
 // reservar uma faixa dela é, literalmente, o mesmo mecanismo que todo o resto
 // da suíte usa, aplicado a dados de demo em vez de dados de teste.
 //
@@ -211,7 +214,11 @@ async function encontrarOuCriarContactDemo(
   nome: string,
   telefone: string
 ): Promise<Contact> {
-  const existente = await prisma.contact.findUnique({ where: { telefone } });
+  // `findFirst` com as duas colunas, e não `findUnique({ where: { telefone } })`:
+  // desde o Ciclo 1e a unicidade é `[companyId, telefone]`, e buscar só pelo
+  // telefone devolveria o contato de outra empresa se um dia existir uma
+  // segunda — que é exatamente o estado que aquele ciclo tornou possível.
+  const existente = await prisma.contact.findFirst({ where: { companyId, telefone } });
   if (existente) return existente;
   return prisma.contact.create({ data: { companyId, nome, telefone } });
 }

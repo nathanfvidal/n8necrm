@@ -105,9 +105,12 @@ const ORDEM_A2 = 9002;
 const ORDEM_B1 = 9101;
 const ORDEM_B2 = 9102;
 
-// `Contact.telefone` é `@unique` GLOBAL (`prisma/schema.prisma`) — a mesma
-// pendência de `PipelineStage.ordem`, do outro lado. Telefones distintos por
-// empresa, com família própria deste arquivo ("11933"), sem colisão com o seed
+// Família própria deste arquivo ("11933"). Desde o Ciclo 1e o telefone é único
+// POR EMPRESA (`@@unique([companyId, telefone])`), então o banco não exige
+// mais famílias distintas — elas continuam porque o Postgres de teste é o de
+// desenvolvimento (⚠️ R1 do Ciclo 1a) e um resíduo de execução interrompida
+// de outro arquivo derrubaria um caso por um motivo que não é o testado.
+// Telefones distintos por empresa, sem colisão com o seed
 // (`1199999000{0..3}`), dedupe.test.ts ("119977"), lead-notes.test.ts
 // ("119555") nem stage-transition.test.ts ("119888").
 const TELEFONE_A = "11933330001";
@@ -452,7 +455,11 @@ describe("criação escopada", () => {
       })
     ).rejects.toThrow(/Responsável não encontrado/);
 
-    expect(await prisma.contact.findUnique({ where: { telefone: TELEFONE_NOVO_A } })).toBeNull();
+    // `findFirst` sem empresa DE PROPOSITO, e nao so porque a chave unica
+    // virou composta no Ciclo 1e: a afirmacao e que a linha nao existe em
+    // NENHUMA empresa. Filtrar por `companyId` aqui faria o caso passar
+    // mesmo se o contato tivesse nascido na empresa errada.
+    expect(await prisma.contact.findFirst({ where: { telefone: TELEFONE_NOVO_A } })).toBeNull();
   });
 
   it("criarLead usa a primeira etapa DA EMPRESA do autor (achado D)", async () => {
@@ -468,7 +475,11 @@ describe("criação escopada", () => {
     // inteiro, que hoje é a do seed (`ordem: 0`, `company-migracao-1a`).
     expect(lead.stageId).toBe(ETAPA_A1);
 
-    const contato = await prisma.contact.findUniqueOrThrow({
+    // Sem `companyId` no `where`, e isso importa: o que o caso afirma e que o
+    // contato nasceu na empresa A. Escopar a busca tornaria a assercao
+    // tautologica — ela passaria por encontrar so o que ja procurou.
+    // `findFirstOrThrow` porque a chave unica virou composta no Ciclo 1e.
+    const contato = await prisma.contact.findFirstOrThrow({
       where: { telefone: TELEFONE_NOVO_A },
     });
     expect(contato.companyId).toBe(EMPRESA_A);
@@ -494,26 +505,44 @@ describe("criação escopada", () => {
     expect(lead.stageId).toBe(ETAPA_B1);
   });
 
-  it("encontrarOuCriarContact não reaproveita contato de outra empresa", async () => {
+  it("encontrarOuCriarContact não reaproveita contato de outra empresa — cria um NOVO na sua", async () => {
     // O contato com `TELEFONE_B` existe, mas na empresa B. Sob o escopo da A
-    // ele não é encontrado — e, como `Contact.telefone` é `@unique` GLOBAL,
-    // criar não é uma saída. A recusa é explícita, com o motivo na mensagem,
-    // em vez de um `P2002` cru vindo do Postgres.
-    await expect(
-      encontrarOuCriarContact({ nome: "Roubo", telefone: TELEFONE_B, companyId: EMPRESA_A })
-    ).rejects.toThrow(/outra empresa/i);
+    // ele não é encontrado, e é isso que este caso trava: a A NUNCA fica com o
+    // `Contact` da B pendurado num lead dela.
+    //
+    // O que mudou no Ciclo 1e é o que acontece depois de não encontrar.
+    // Enquanto `Contact.telefone` era `@unique` GLOBAL, criar não era saída e a
+    // função recusava com mensagem própria ("já cadastrado em outra empresa").
+    // Agora a chave é `@@unique([companyId, telefone])`: a A cria o contato
+    // DELA com o mesmo número, que é o caso normal de duas empresas atendendo o
+    // mesmo cliente. A recusa some; o isolamento, que é o que este arquivo
+    // prova, não.
+    const daA = await encontrarOuCriarContact({
+      nome: "Contato da A com o mesmo número",
+      telefone: TELEFONE_B,
+      companyId: EMPRESA_A,
+    });
 
-    const contato = await prisma.contact.findUniqueOrThrow({ where: { telefone: TELEFONE_B } });
-    expect(contato.companyId).toBe(EMPRESA_B);
-    expect(contato.nome).toBe("Contato da B");
+    expect(daA.id).not.toBe(CONTATO_B);
+    expect(daA.companyId).toBe(EMPRESA_A);
 
-    // A segunda metade: sob o escopo CERTO o contato é reaproveitado.
+    // O oráculo é a linha crua da B, lida SEM escopo: ela não foi tocada, nem
+    // renomeada, nem puxada para dentro da A.
+    const daB = await prisma.contact.findUniqueOrThrow({ where: { id: CONTATO_B } });
+    expect(daB.companyId).toBe(EMPRESA_B);
+    expect(daB.nome).toBe("Contato da B");
+
+    // A segunda metade: sob o escopo CERTO o contato é reaproveitado, e o nome
+    // do cadastro existente não é sobrescrito. É a prova de que a dedup DENTRO
+    // da empresa não afrouxou junto — sem ela, "criar sempre um novo" passaria
+    // neste arquivo inteiro.
     const reaproveitado = await encontrarOuCriarContact({
       nome: "Nome novo ignorado",
       telefone: TELEFONE_B,
       companyId: EMPRESA_B,
     });
     expect(reaproveitado.id).toBe(CONTATO_B);
+    expect(reaproveitado.nome).toBe("Contato da B");
   });
 });
 

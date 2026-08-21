@@ -34,9 +34,11 @@ import { listarConversasDoContato } from "../../src/modules/whatsapp/queries";
  * `tests/unit/escopo-empresa.test.ts` exercita o MECANISMO (`prismaDaEmpresa`)
  * com um banco falso. Este arquivo responde outra pergunta: "a agenda chega ao
  * dado da outra empresa?". Essa só tem resposta contra duas empresas de
- * verdade, com FK e `@unique` GLOBAL de verdade — `Contact.telefone` é
- * `@unique` sem empresa (`prisma/schema.prisma`), e é exatamente esse tipo de
- * coluna que faz um filtro por id parecer suficiente.
+ * verdade, com FK e índice único de verdade — desde o Ciclo 1e a chave de
+ * `Contact` é `@@unique([companyId, telefone])` (`prisma/schema.prisma`), e o
+ * que faz um filtro por id parecer suficiente é justamente o telefone ser
+ * chave natural do domínio: quem digita um número no cadastro está perguntando
+ * ao banco quem é o dono dele.
  *
  * ## As DUAS metades, sempre
  *
@@ -93,9 +95,12 @@ const ORDEM_A = 9701;
 const ORDEM_B = 9801;
 
 /**
- * `Contact.telefone` é `@unique` GLOBAL — a mesma pendência de
- * `PipelineStage.ordem`, do outro lado. Família própria deste arquivo
- * ("11922"), sem colisão com o seed (`1199999000{0..3}`), dedupe.test.ts
+ * Família própria deste arquivo ("11922"). Desde o Ciclo 1e a unicidade de
+ * telefone é `[companyId, telefone]`, então famílias distintas deixaram de ser
+ * exigência do banco — continuam porque o banco de teste é o de
+ * desenvolvimento (⚠️ R1 do Ciclo 1a) e um resíduo de execução interrompida de
+ * outro arquivo, na MESMA empresa do seed, ainda derruba um caso por um motivo
+ * que não é o testado. Sem colisão com o seed (`1199999000{0..3}`), dedupe.test.ts
  * ("119977"), lead-notes.test.ts ("119555"), stage-transition.test.ts
  * ("119888"), lead-isolamento.test.ts ("119333"), pipeline-isolamento.test.ts
  * ("11944"), whatsapp-isolamento.test.ts ("11966") nem contacts-service.test.ts
@@ -156,7 +161,8 @@ async function limparTudo() {
  * Recria TODO o estado mutável antes de cada caso.
  *
  * É por caso, e não por arquivo, porque metade das funções sob teste GRAVA:
- * `criarContato` insere linha nova (e o telefone é `@unique` GLOBAL, então um
+ * `criarContato` insere linha nova (e o telefone é único DENTRO da empresa
+ * desde o Ciclo 1e — os casos deste arquivo criam na MESMA empresa A, então um
  * resíduo entre casos derruba o próximo por um motivo que não é o testado) e
  * `atualizarContato` reescreve o cadastro que o caso seguinte afirma.
  */
@@ -401,15 +407,30 @@ describe("criarContato", () => {
     expect((await lerContatoCru(criado.id)).companyId).toBe(EMPRESA_A);
   });
 
-  it("telefone ocupado por contato de OUTRA empresa não revela o nome do dono", async () => {
-    const erro = await criarContato(
+  it("o telefone da OUTRA empresa deixa de ser recusado — e o nome do dono de fora continua invisível", async () => {
+    // Antes do Ciclo 1e isto lançava `ContatoInvalidoError`: `Contact.telefone`
+    // era `@unique` GLOBAL, e o mesmo número não podia existir em duas
+    // empresas. Agora a chave é `[companyId, telefone]` e o caso normal de um
+    // CRM multi-empresa — duas empresas atendendo o mesmo cliente — passa a ser
+    // expressável.
+    const criado = await criarContato(
       EMPRESA_A,
       { nome: "Novo da A", telefone: TELEFONE_B },
       USUARIO_A
-    ).catch((e: unknown) => e);
+    );
 
-    expect(erro).toBeInstanceOf(ContatoInvalidoError);
-    expect((erro as Error).message).not.toContain("Alvo da B");
+    expect(criado.telefone).toBe(TELEFONE_B);
+    expect((await lerContatoCru(criado.id)).companyId).toBe(EMPRESA_A);
+
+    // A metade que SOBREVIVE do caso antigo, e que é a que importa: o cadastro
+    // da B fica intacto e o nome dele não aparece em nada que a A tenha visto.
+    // O oráculo de "quem é o cliente do concorrente neste número" continua
+    // fechado — o que o fechou foi a busca ESCOPADA (Ciclo 1a), não a
+    // constraint.
+    const daB = await lerContatoCru(CONTATO_B);
+    expect(daB.nome).toBe("Alvo da B");
+    expect(daB.companyId).toBe(EMPRESA_B);
+    expect(criado.nome).toBe("Novo da A");
   });
 
   it("telefone ocupado DENTRO da empresa continua nomeando o dono — a segunda metade", async () => {
@@ -454,14 +475,21 @@ describe("atualizarContato", () => {
     expect(depois.companyId).toBe(EMPRESA_B);
   });
 
-  it("trocar o telefone para um de OUTRA empresa não revela o nome do dono", async () => {
-    const erro = await atualizarContato(
+  it("trocar o telefone para um de OUTRA empresa passa a ser permitido — e não revela o dono de lá", async () => {
+    await atualizarContato(
       EMPRESA_A,
       { id: CONTATO_A, nome: "Alvo da A", telefone: TELEFONE_B },
       USUARIO_A
-    ).catch((e: unknown) => e);
+    );
 
-    expect(erro).toBeInstanceOf(ContatoInvalidoError);
-    expect((erro as Error).message).not.toContain("Alvo da B");
+    const daA = await lerContatoCru(CONTATO_A);
+    expect(daA.telefone).toBe(TELEFONE_B);
+    expect(daA.companyId).toBe(EMPRESA_A);
+
+    // Segunda metade: a linha da B não foi tocada nem lida para dentro da A.
+    const daB = await lerContatoCru(CONTATO_B);
+    expect(daB.nome).toBe("Alvo da B");
+    expect(daB.telefone).toBe(TELEFONE_B);
+    expect(daB.companyId).toBe(EMPRESA_B);
   });
 });

@@ -10,7 +10,8 @@ import { prismaDaEmpresa } from "@/core/tenancy/escopo";
  *
  * Existe porque a mesma pessoa acaba digitada de formas diferentes em dias
  * diferentes — "11999998888", "(11) 99999-8888", "+55 11 99999-8888",
- * "11 9 9999-8888" — e `Contact.telefone` é UNIQUE no schema. Sem normalizar
+ * "11 9 9999-8888" — e `Contact` tem `@@unique([companyId, telefone])` no
+ * schema (Ciclo 1e). Sem normalizar
  * antes de comparar/gravar, cada variação de formatação cria uma pessoa nova
  * no banco (a constraint UNIQUE não pega isso, porque as strings são
  * literalmente diferentes) — exatamente a duplicação que esta função existe
@@ -51,8 +52,9 @@ export function normalizarTelefone(telefone: string): string {
   // definir", string vazia), ou algo curto/incompleto demais para ter DDD —
   // não é um telefone de verdade e não deve virar chave de dedupe: duas
   // pessoas diferentes cadastradas sem telefone (ou com lixo no campo)
-  // colidiriam na constraint UNIQUE de `Contact.telefone` e virariam UM
-  // contato só, fundindo o histórico de duas pessoas distintas — o mesmo
+  // colidiriam em `Contact_companyId_telefone_key` (a chave composta do Ciclo
+  // 1e) e virariam UM contato só dentro da empresa, fundindo o histórico de
+  // duas pessoas distintas — o mesmo
   // tipo de dano (fusão irreversível) que a regra do 9º dígito abaixo evita
   // no lado do celular/fixo. Preferimos rejeitar alto e cedo, com uma
   // mensagem clara, a deixar isso silenciosamente virar dedupe key.
@@ -146,7 +148,7 @@ function unificarNonoDigitoCelular(digitos: string): string {
  * Duas chamadas simultâneas para o mesmo telefone podem ambas passar pelo
  * `findFirst` abaixo antes de qualquer uma criar a linha (nenhuma ainda viu
  * o registro da outra) e ambas tentarem `create`. O Postgres permite só uma:
- * a segunda colide na constraint UNIQUE de `Contact.telefone` e o Prisma
+ * a segunda colide em `Contact_companyId_telefone_key` e o Prisma
  * traduz isso em `PrismaClientKnownRequestError` código `P2002`. Em vez de
  * propagar esse erro pra quem chamou — que veria uma falha na criação do
  * lead por causa de uma corrida interna irrelevante pra ela — tratamos como
@@ -197,26 +199,24 @@ export async function encontrarOuCriarContact(dados: {
       const contatoDaCorrida = await db.contact.findFirst({ where: { telefone } });
       if (contatoDaCorrida) return contatoDaCorrida;
 
-      // Chegou aqui: o `P2002` veio de `Contact.telefone`, que é `@unique`
-      // GLOBAL (`prisma/schema.prisma`), e a busca escopada não encontra o
-      // dono — ou seja, o telefone existe em OUTRA empresa.
+      // Chegou aqui, e desde o Ciclo 1e isto NÃO significa mais "o telefone
+      // está em outra empresa". A chave é `@@unique([companyId, telefone])`, e
+      // as duas colunas dela são exatamente as que o `findFirst` acima filtra
+      // (o escopo injeta `where.companyId`). Se o banco disse "já existe", a
+      // busca escopada encontra — o caso está exercitado em
+      // `tests/unit/contact-isolamento.test.ts` ("telefone ocupado DENTRO da
+      // empresa continua nomeando o dono").
       //
-      // Isto não é a corrida tratada acima; é o limite conhecido do schema. A
-      // unicidade global de `telefone` é irmã de `PipelineStage.@@unique([ordem])`:
-      // as duas bloqueiam a segunda empresa de verdade, as duas estão
-      // registradas como pendência do ciclo, e nenhuma delas é mexida aqui —
-      // trocar unicidade global por composta é item à parte, com migração.
-      //
-      // O que muda é a FORMA da falha. Antes desta tarefa o caso não existia
-      // porque a consulta global reaproveitava o contato da outra empresa (o
-      // vazamento). Agora ele existe, e sem esta mensagem sairia como um
-      // `P2002` cru do Postgres — erro que aponta para "constraint violada",
-      // nunca para "este telefone pertence a outra empresa".
+      // O que sobra é uma janela estreita e real: quem venceu a corrida APAGOU
+      // o contato entre a colisão e esta releitura. Continua lançando de
+      // propósito — devolver `undefined` daqui faria a criação de lead seguir
+      // apontando para um contato que não existe, que é o tipo de falha que só
+      // aparece três telas adiante.
       throw new Error(
-        `Telefone já cadastrado em outra empresa: "${telefone}" existe como Contact fora do ` +
-          `escopo ${JSON.stringify(dados.companyId)}. \`Contact.telefone\` é \`@unique\` GLOBAL no ` +
-          `schema — enquanto for, o mesmo número não pode existir em duas empresas. Ver a ` +
-          `pendência gêmea em \`PipelineStage.@@unique([ordem])\` (prisma/schema.prisma).`
+        `Colisão em Contact sem dono encontrável: o banco recusou o telefone ` +
+          `${JSON.stringify(telefone)} na empresa ${JSON.stringify(dados.companyId)} por violação de ` +
+          `\`Contact_companyId_telefone_key\`, mas a busca escopada não achou a linha. O caso esperado ` +
+          `é o contato ter sido APAGADO entre a colisão e esta leitura. Tente de novo.`
       );
     }
     throw erro;

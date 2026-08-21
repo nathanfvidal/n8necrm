@@ -171,7 +171,11 @@ test("vendedor registra o valor, arquiva e desarquiva um lead", async ({ page })
   });
 
   await test.step("CONTINUA no histórico do contato, marcado", async () => {
-    const contato = await prisma.contact.findUnique({
+    // `findFirst`: a chave unica de `Contact` e composta desde o Ciclo 1e
+    // (`@@unique([companyId, telefone])`). Este arquivo grava numa empresa so
+    // (a do seed) e reserva a propria familia de telefone, entao a linha
+    // continua sendo uma.
+    const contato = await prisma.contact.findFirst({
       where: { telefone: TELEFONE },
       select: { id: true },
     });

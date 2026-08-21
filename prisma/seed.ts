@@ -73,7 +73,7 @@ const CORES = ["#94a3b8", "#60a5fa", "#fbbf24", "#f97316", "#22c55e"];
  *   `update: {}` nunca regravava o hash, então `SEED_PASSWORD` definida
  *   depois do primeiro seed não tinha efeito nenhum e a senha antiga
  *   continuava válida.
- * - Contact: upsert por `telefone` (único no schema).
+ * - Contact: upsert por `[companyId, telefone]` (a chave composta do Ciclo 1e).
  * - Lead: não tem chave natural única no schema. Para não duplicar a cada
  *   execução, só cria um Lead para o contato se ainda não existir nenhum
  *   apontando para ele.
@@ -211,7 +211,12 @@ export async function seed(): Promise<void> {
   const nomes = ["Carlos Silva", "Fernanda Lima", "João Pereira", "Marina Costa"];
   for (let i = 0; i < nomes.length; i++) {
     const contact = await prisma.contact.upsert({
-      where: { telefone: `1199999000${i}` },
+      // `companyId_telefone`, e não `telefone`: desde o Ciclo 1e a chave única
+      // é composta (`@@unique([companyId, telefone])`), e o `telefone` sozinho
+      // deixou de existir em `ContactWhereUniqueInput`. Prisma cru aqui é
+      // legítimo — `prisma/seed*.ts` está fora do alcance da catraca por
+      // decisão escrita (`tests/unit/catraca-prisma-cru.test.ts:71`).
+      where: { companyId_telefone: { companyId: empresa.id, telefone: `1199999000${i}` } },
       update: {},
       create: { companyId: empresa.id, nome: nomes[i], telefone: `1199999000${i}` },
     });

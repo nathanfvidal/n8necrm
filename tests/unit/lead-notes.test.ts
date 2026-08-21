@@ -33,7 +33,12 @@ import { criarLead } from "../../src/core/leads/service";
 const TELEFONE_TESTE = "11955556001";
 
 async function limparDadosDeTeste() {
-  const contato = await prisma.contact.findUnique({ where: { telefone: TELEFONE_TESTE } });
+  // `findFirst`, e nao `findUnique`: desde o Ciclo 1e a chave unica de
+  // `Contact` e `@@unique([companyId, telefone])` e o telefone sozinho deixou
+  // de existir em `ContactWhereUniqueInput`. Uma linha so continua sendo o
+  // esperado aqui — este arquivo reserva uma familia de telefone propria (ver
+  // o bloco acima) e todos os casos gravam na mesma empresa.
+  const contato = await prisma.contact.findFirst({ where: { telefone: TELEFONE_TESTE } });
   if (!contato) return;
 
   const leads = await prisma.lead.findMany({ where: { contactId: contato.id } });

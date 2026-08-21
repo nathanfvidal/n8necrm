@@ -118,8 +118,12 @@ const WA_A = `${P}-wa-a`;
 const WA_A_SEM_ESPERA = `${P}-wa-a2`;
 const WA_B = `${P}-wa-b`;
 
-// `Contact.telefone` é `@unique` GLOBAL. Família própria deste arquivo
-// ("11966"), sem colisão com o seed (`1199999000{0..3}`), dedupe.test.ts
+// Família própria deste arquivo ("11966"). Desde o Ciclo 1e o telefone é único
+// POR EMPRESA (`@@unique([companyId, telefone])`), então o banco não exige
+// mais famílias distintas — elas continuam porque o Postgres de teste é o de
+// desenvolvimento (⚠️ R1 do Ciclo 1a) e um resíduo de execução interrompida
+// de outro arquivo derrubaria um caso por um motivo que não é o testado.
+// Sem colisão com o seed (`1199999000{0..3}`), dedupe.test.ts
 // ("119977"), lead-notes.test.ts ("119555"), stage-transition.test.ts
 // ("119888"), lead-isolamento.test.ts ("119333") nem
 // pipeline-isolamento.test.ts ("11944").

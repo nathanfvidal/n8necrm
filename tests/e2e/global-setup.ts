@@ -92,13 +92,18 @@ async function garantirContasDeTeste(prisma: PrismaClient): Promise<void> {
  *
  * ## Para que serve
  *
- * Uma fixture que grava numa coluna com unicidade GLOBAL não pode usar valor
- * fixo: `test.beforeAll` roda uma vez POR WORKER, não por arquivo
+ * Uma fixture que grava numa coluna com unicidade não pode usar valor fixo:
+ * `test.beforeAll` roda uma vez POR WORKER, não por arquivo
  * (`node_modules/playwright/lib/runner/`, `createTestGroups`), então com
  * `workers: 3` o segundo worker bate na constraint. O caso concreto que
  * motivou isto: `seguranca-headers.spec.ts` criava um `Contact` com telefone
- * fixo e `Contact.telefone` é `@unique` global — 22 verdes com `--workers=1`,
+ * fixo — 22 verdes com `--workers=1`,
  * `Unique constraint failed on the fields: (telefone)` com 3.
+ *
+ * O Ciclo 1e compôs essa chave com a empresa (`@@unique([companyId,
+ * telefone])`) e isso NÃO dispensa o carimbo: os três workers rodam contra a
+ * MESMA empresa (a do seed), então a colisão é entre workers e sobrevive à
+ * composição. Ver a seção correspondente em `seguranca-headers.spec.ts`.
  *
  * Só o índice do worker não basta. Ele resolve a colisão DENTRO de uma
  * execução, mas deixa o valor igual entre execuções, e aí a limpeza de

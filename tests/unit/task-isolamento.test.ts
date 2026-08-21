@@ -117,8 +117,12 @@ const TASK_DUPLO_NA_B = `${P}-task-duplo-b`;
 const ORDEM_A = 9201;
 const ORDEM_B = 9202;
 
-// `Contact.telefone` é `@unique` GLOBAL — mesma pendência, do outro lado.
-// Família própria deste arquivo ("119222"), sem colisão com o seed
+// Família própria deste arquivo ("119222"). Desde o Ciclo 1e o telefone é único
+// POR EMPRESA (`@@unique([companyId, telefone])`), então o banco não exige
+// mais famílias distintas — elas continuam porque o Postgres de teste é o de
+// desenvolvimento (⚠️ R1 do Ciclo 1a) e um resíduo de execução interrompida
+// de outro arquivo derrubaria um caso por um motivo que não é o testado.
+// Sem colisão com o seed
 // (`1199999000{0..3}`), dedupe.test.ts ("119977"), lead-notes.test.ts
 // ("119555"), stage-transition.test.ts ("119888") nem lead-isolamento.test.ts
 // ("11933").

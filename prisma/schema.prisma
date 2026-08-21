@@ -177,7 +177,7 @@ model Contact {
   companyId String
   company   Company @relation(fields: [companyId], references: [id])
   nome      String
-  telefone  String  @unique
+  telefone  String
   email     String?
 
   // ─── Cadastro de pessoa ───────────────────────────────────────────────
@@ -223,6 +223,30 @@ model Contact {
   leads         Lead[]
   conversations Conversation[]
   tasks         Task[]
+
+  /// Unicidade POR EMPRESA, não global (Ciclo 1e).
+  ///
+  /// Era `telefone String @unique`. Duas empresas atenderem o mesmo cliente é o
+  /// caso NORMAL de um CRM multi-empresa, e o único global tornava isso um
+  /// `P2002` — a segunda empresa a cadastrar o número era recusada, e
+  /// `core/leads/dedupe.ts` carregava um ramo inteiro só para explicar a
+  /// recusa. `Contact` tem exatamente uma coluna de posse (`companyId`), então
+  /// não há nível intermediário plausível para compor.
+  ///
+  /// Esta chave é a que o escopo já usa sem saber: `dedupe.ts` e
+  /// `contacts/service.ts` buscam por `telefone` num cliente escopado, ou seja
+  /// `WHERE "companyId" = $1 AND telefone = $2` — as duas colunas, nesta
+  /// ordem. É por isso que, depois desta linha, um `P2002` aqui SEMPRE tem dono
+  /// encontrável pela busca escopada (caso em
+  /// `tests/unit/contact-isolamento.test.ts`, "telefone ocupado DENTRO da
+  /// empresa continua nomeando o dono").
+  ///
+  /// NÃO deduz que `findUnique` por `companyId_telefone` virou legítimo em
+  /// `src/`: o escopo continua recusando operação por chave única em modelo de
+  /// tenant, e o motivo está em "Recusa, lançando" (`core/tenancy/escopo.ts`).
+  /// Só os seeds usam a chave composta diretamente, e eles rodam fora do escopo
+  /// por decisão registrada.
+  @@unique([companyId, telefone])
 
   // Ordenação padrão da agenda (`listarContatos`, `criadoEm desc`). NÃO há
   // índice de busca aqui: `ILIKE '%termo%'` não é servido por btree, e a

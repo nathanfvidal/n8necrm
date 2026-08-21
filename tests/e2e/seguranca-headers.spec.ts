@@ -23,12 +23,9 @@ const prisma = new PrismaClient({
  *
  * ## Por que não pode ser um literal
  *
- * `Contact.telefone` é `@unique` GLOBAL (`prisma/schema.prisma`) — uma das
- * quatro unicidades que o Ciclo 1a registrou como bloqueio da segunda
- * empresa, e a única que uma fixture desta suíte grava. `test.beforeAll` roda
- * uma vez por WORKER, não por arquivo, e `playwright.config.ts` tem
- * `fullyParallel: true` com `workers: 3`. Com telefone fixo, o segundo worker
- * a chegar recebia:
+ * `test.beforeAll` roda uma vez por WORKER, não por arquivo, e
+ * `playwright.config.ts` tem `fullyParallel: true` com `workers: 3`. Com
+ * telefone fixo, o segundo worker a chegar recebia:
  *
  *     Invalid `prisma.contact.create()` invocation
  *     Unique constraint failed on the fields: (`telefone`)
@@ -37,6 +34,15 @@ const prisma = new PrismaClient({
  * execução focada deste arquivo dava vermelho SEMPRE. Na suíte inteira o
  * defeito ficava invisível porque a distribuição costumava concentrar os seis
  * casos num worker só.
+ *
+ * ## E o Ciclo 1e NÃO tornou isto desnecessário
+ *
+ * O comentário anterior culpava `Contact.telefone` ser `@unique` GLOBAL. Desde
+ * o Ciclo 1e a chave é `@@unique([companyId, telefone])` — e os três workers
+ * gravam na MESMA empresa (a do seed). Um telefone literal colidiria
+ * exatamente igual. Reverter esta montagem para um literal reabre a quebra;
+ * esta seção existe para que ninguém "limpe" isso achando que a composição
+ * resolveu.
  *
  * ## Como o valor é montado
  *

@@ -117,9 +117,12 @@ const ORDEM_C1 = 9401;
 /** Onde `criarEtapa` na empresa A deve cair: `max(ordem da A) + 1`. */
 const ORDEM_ESPERADA_DA_NOVA = ORDEM_A3 + 1;
 
-// `Contact.telefone` é `@unique` GLOBAL — a mesma pendência de
-// `PipelineStage.ordem`, do outro lado. Família própria deste arquivo
-// ("11944"), sem colisão com o seed (`1199999000{0..3}`), dedupe.test.ts
+// Família própria deste arquivo ("11944"). Desde o Ciclo 1e o telefone é único
+// POR EMPRESA (`@@unique([companyId, telefone])`), então o banco não exige
+// mais famílias distintas — elas continuam porque o Postgres de teste é o de
+// desenvolvimento (⚠️ R1 do Ciclo 1a) e um resíduo de execução interrompida
+// de outro arquivo derrubaria um caso por um motivo que não é o testado.
+// Sem colisão com o seed (`1199999000{0..3}`), dedupe.test.ts
 // ("119977"), lead-notes.test.ts ("119555"), stage-transition.test.ts
 // ("119888") nem lead-isolamento.test.ts ("119333").
 const TELEFONE_A = "11944440001";

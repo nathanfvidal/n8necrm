@@ -114,25 +114,22 @@ function validarTelefone(bruto: string): string {
  *
  * ## Por que a busca é escopada, e por que a mensagem tem dois ramos
  *
- * A versão anterior fazia `findUnique({ where: { telefone } })` no prisma cru.
- * `Contact.telefone` é `@unique` GLOBAL (`prisma/schema.prisma`), então
- * digitar um número qualquer no cadastro devolvia na tela o NOME do contato de
- * outra empresa — um oráculo de "quem é o cliente do concorrente neste
- * número", alcançável por qualquer sessão e sem precisar de id nenhum.
+ * A versão anterior fazia `findUnique({ where: { telefone } })` no prisma cru,
+ * quando `Contact.telefone` era `@unique` GLOBAL: digitar um número qualquer no
+ * cadastro devolvia na tela o NOME do contato de outra empresa — um oráculo de
+ * "quem é o cliente do concorrente neste número", alcançável por qualquer
+ * sessão e sem precisar de id nenhum. Quem fechou isso foi a busca ESCOPADA
+ * (Ciclo 1a), e ela continua escopada.
  *
- * Escopada, a busca não acha o dono de fora, e aí o `P2002` que veio do banco
- * precisa de explicação própria: o número existe, só que fora do alcance desta
- * empresa. É o mesmo limite de schema que `encontrarOuCriarContact`
- * (`core/leads/dedupe.ts`) já trata recusando de forma explicada — a unicidade
- * global de `telefone` é irmã de `PipelineStage.@@unique([ordem])`, as duas
- * bloqueiam a segunda empresa de verdade, e nenhuma é mexida aqui: trocar
- * unicidade global por composta é item à parte, com migração. O que muda é a
- * FORMA da falha, que sem este ramo sairia como "já está cadastrado para outro
- * contato" — mensagem que manda a pessoa procurar na agenda dela por alguém
- * que não está lá.
- *
- * O nome de quem está fora do escopo não entra em nenhum dos dois ramos, e há
- * caso de teste para cada um (`tests/unit/contact-isolamento.test.ts`).
+ * Desde o Ciclo 1e a chave é `@@unique([companyId, telefone])`, e as duas
+ * colunas dela são as mesmas que esta busca filtra. Consequência: quando o
+ * banco devolve `P2002`, o dono ESTÁ dentro do escopo e é encontrado — o
+ * primeiro ramo. O segundo ramo deixou de descrever "existe fora desta
+ * empresa" (que agora é estado legítimo e não gera erro nenhum) e passou a ser
+ * defesa contra uma janela real: o cadastro colidiu e foi APAGADO antes desta
+ * leitura. Os dois ramos continuam sem citar nome de contato de fora, e há caso
+ * de teste para o ramo alcançável (`tests/unit/contact-isolamento.test.ts`,
+ * "telefone ocupado DENTRO da empresa continua nomeando o dono").
  */
 async function erroDeTelefoneOcupado(
   db: ClienteDaEmpresa,
@@ -142,7 +139,7 @@ async function erroDeTelefoneOcupado(
   return new ContatoInvalidoError(
     dono
       ? `Este telefone já está cadastrado para ${dono.nome}.`
-      : "Este telefone já está cadastrado fora desta empresa e não pode ser reaproveitado aqui."
+      : "Este telefone acabou de ser cadastrado e removido por outra operação. Atualize a página e tente de novo."
   );
 }
 
