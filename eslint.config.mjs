@@ -425,12 +425,35 @@ const VIOLADORES_TEMPORARIOS_APP = [];
 //   conhecido, o `findFirstOrThrow` que pega um vínculo ARBITRÁRIO de quem tem
 //   dois. Isso é dívida do Ciclo 2 (a origem passa a ser
 //   `UsuarioAtivo.companyId`), não coisa que converter este arquivo resolva.
+// - `modules/whatsapp/fila/postgres.ts` REIVINDICA o próximo job da fila, e a
+//   empresa é o RESULTADO da reivindicação, não a entrada dela. O consumidor
+//   roda fora de qualquer requisição, sem sessão, e a pergunta que ele faz ao
+//   banco é "qual o próximo job de QUALQUER empresa está pronto".
+//   `prismaDaEmpresa(companyId)` exigiria como parâmetro exatamente o valor que
+//   o `UPDATE ... RETURNING "companyId"` devolve — a mesma circularidade de
+//   `session.ts` e `empresa.ts`, e verificável do mesmo jeito, em uma linha.
+//
+//   É a PRIMEIRA exceção permanente fora de `src/core/**`, e isso está dito de
+//   propósito: quem acrescentar a segunda deve conseguir dizer por que ela não
+//   cabe em `core/`. Aqui a resposta é que a fila de turnos é do módulo de
+//   WhatsApp — `TurnoJob` é a fila DELE, não uma fila genérica (spec do Ciclo
+//   2d, §10) —, e mover o arquivo para `core/` só para caber na lista seria
+//   mudar a arquitetura para agradar a um comentário.
+//
+//   Os outros TRÊS caminhos daquele arquivo (publicar, concluir/falhar, podar)
+//   usam `prismaDaEmpresa`, e o arquivo tem UM SQL cru só. O que a Parte 2b da
+//   catraca deixa de cobrir — ela pula todo arquivo listado aqui — está travado
+//   por `tests/unit/fila-postgres.test.ts`, bloco "a forma do SQL cru deste
+//   módulo": um `$queryRaw` e nenhum `$executeRaw`, `companyId` no `RETURNING`,
+//   e a exigência de que ele saia do cliente CRU e não de um `prismaDaEmpresa`,
+//   que daria a APARÊNCIA de escopo.
 const EXCECAO_PERMANENTE = [
   "src/core/auth/credenciais.ts",
   "src/core/auth/session.ts",
   "src/core/users/empresa.ts",
   "src/core/rate-limit/limiter.ts",
   "src/core/tenancy/escopo.ts",
+  "src/modules/whatsapp/fila/postgres.ts",
 ];
 
 const eslintConfig = defineConfig([
