@@ -20,9 +20,13 @@ const CUSTO_BCRYPT = 10;
  *
  * `upsert` e não `create`: roda antes de toda execução da suíte e não pode
  * quebrar na segunda vez nem depender de o banco estar num estado anterior.
- * O `update` regrava `senhaHash`, `ativo` e `papel` porque cada um desses já
- * foi motivo de suíte quebrada — conta desativada por um teste que falhou no
- * meio, papel trocado por um teste de permissão, senha rotacionada no `.env`.
+ * Os dois `update` regravam `senhaHash`, `ativo` e `papel` porque cada um
+ * desses já foi motivo de suíte quebrada — conta desativada por um teste que
+ * falhou no meio, papel trocado por um teste de permissão, senha rotacionada
+ * no `.env`. São DOIS porque as três coisas moram em duas tabelas: `senhaHash`
+ * e `ativo` no `User`, `papel` no `Membership` — o `upsert` do vínculo, mais
+ * abaixo. Até o Ciclo 1f o `papel` era regravado aqui também, na coluna
+ * espelho `User.papel`, que já não existe.
  */
 async function garantirContasDeTeste(prisma: PrismaClient): Promise<void> {
   const senhaHash = await bcrypt.hash(senhaE2e(), CUSTO_BCRYPT);
@@ -63,10 +67,11 @@ async function garantirContasDeTeste(prisma: PrismaClient): Promise<void> {
 
     // O VÍNCULO, e sem ele a suíte inteira não entra no painel.
     //
-    // Desde o Ciclo 1a `Membership.papel` é a fonte de verdade e `User.papel`
-    // é espelho depreciado (`prisma/schema.prisma`, bloco de `User`):
-    // `usuarioAtual()` resolve `companyId` e `papel` pelo vínculo e LANÇA
-    // quando não há nenhum. Esta função foi escrita antes disso e continuou
+    // Desde o Ciclo 1a `Membership.papel` é a fonte de verdade, e desde o
+    // Ciclo 1f é a ÚNICA: `User.papel` era espelho depreciado e saiu do banco
+    // em `20260821130000_derruba_user_papel_de_vez` (ver o bloco acima de
+    // `model User`, em `prisma/schema.prisma`). `usuarioAtual()` resolve
+    // `companyId` e `papel` pelo vínculo e LANÇA quando não há nenhum. Esta função foi escrita antes disso e continuou
     // criando só o `User` — medido em 2026-08-20, os dois `e2e-*@teste.invalid`
     // tinham ZERO linhas em `Membership`.
     //

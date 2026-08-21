@@ -53,17 +53,20 @@ describe("usuarioAtual — fix round 1/5 (CRITICAL): usuário desativado não po
 
     // Prefixo "teste-fix1-" isola estas linhas do seed (admin@exemplo.com /
     // vendedor@exemplo.com) e de qualquer outro teste — limpo no afterAll.
-    // `papel` na coluna do `User` fica ADMIN, deliberadamente DIFERENTE do
-    // papel do vínculo (VENDEDOR) abaixo — se `usuarioAtual()` algum dia
-    // voltasse a ler `User.papel` em vez de `Membership.papel`, o teste
-    // "retorna o usuário..." pegaria isso (papel devolvido seria ADMIN, não
-    // VENDEDOR). Era assim ATÉ o Ciclo 1f: a coluna espelho `User.papel`
-    // deixou de ser escrita aqui, e com ela foi embora a divergência que este
-    // `beforeAll` montava de propósito. Ela não sumiu do projeto — mudou de
-    // endereço e vive em `LINHA_HOSTIL`, em `tests/unit/usuario-ativo.test.ts`,
-    // que reintroduz um papel divergente na linha falsa de `User` justamente
-    // para a regra de resolução pelo vínculo continuar tendo o que contradizer.
-    // Aqui o vínculo é a única fonte, e é só o que os testes abaixo veem.
+    // Até o Ciclo 1f este `beforeAll` gravava ADMIN na coluna `User.papel` e
+    // VENDEDOR no vínculo, divergentes de propósito: se `usuarioAtual()` lesse
+    // `User.papel` em vez de `Membership.papel`, o teste "retorna o usuário..."
+    // pegaria isso (o papel devolvido seria ADMIN, não VENDEDOR). O Ciclo 1f
+    // primeiro parou de escrever a coluna e depois a derrubou
+    // (`20260821130000_derruba_user_papel_de_vez`): não existe mais coluna em
+    // que divergir, e a `create` abaixo não menciona `papel`.
+    //
+    // A divergência não sumiu do projeto, mudou de endereço: vive em
+    // `LINHA_HOSTIL`, em `tests/unit/usuario-ativo.test.ts`, que reintroduz um
+    // papel divergente na linha FALSA de `User` (um dublê em memória, não uma
+    // coluna) justamente para a regra de resolução pelo vínculo continuar
+    // tendo o que contradizer. Aqui o vínculo é a única fonte, e é só o que os
+    // testes abaixo veem.
     const ativo = await prisma.user.create({
       data: {
         nome: "Teste Fix1 Ativo",

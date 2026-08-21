@@ -178,10 +178,12 @@ describe("autorizarCredenciais — tempo de resposta não revela se a conta exis
       headers: { "x-vercel-forwarded-for": "203.0.113.88" },
     });
 
-  // Sem `papel`: depois do Ciclo 1a a coluna `User.papel` foi derrubada (o
-  // papel mora em `Membership`), e `autorizarCredenciais` nunca leu esse
-  // campo mesmo antes disso — o mock reflete o que `prisma.user.findUnique`
-  // devolve de verdade hoje.
+  // Sem `papel`: a coluna `User.papel` foi derrubada no Ciclo 1f
+  // (`20260821130000_derruba_user_papel_de_vez`) e o papel mora em
+  // `Membership`. Esta frase creditava o DROP ao Ciclo 1a e ficou errada por
+  // dois dias — o Ciclo 1a derrubou e RESTAUROU a coluna no mesmo dia.
+  // `autorizarCredenciais` nunca leu o campo, nem antes nem depois, então o
+  // mock reflete o que `prisma.user.findUnique` devolve de verdade hoje.
   const usuarioAtivo = {
     id: "u1",
     nome: "Fulano",

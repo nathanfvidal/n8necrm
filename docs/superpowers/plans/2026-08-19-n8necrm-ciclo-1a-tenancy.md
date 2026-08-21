@@ -509,6 +509,13 @@ reporte qual, não contorne acrescentando o campo ao tipo.
 Nada mais lê a coluna. Crie uma segunda migração, à mão, com **a verificação
 antes do `DROP`** (o SQL está na Task 1, na seção da ordem da migração).
 
+> **Este Step ficou aberto**, e a afirmação "nada mais lê a coluna" era falsa
+> quando foi escrita: 11 pontos liam, em 8 arquivos de `tests/unit/`. A conta
+> de "26 lugares" da linha 310 também estava baixa — com a coluna fora do
+> schema, o `tsc` aponta 62 erros, dos quais só 10 são leitura. Medido em
+> `.superpowers/sdd/medicao-user-papel.md`; fechado pelo Ciclo 1f em
+> 2026-08-21.
+
 ```bash
 cd "d:/Projetos Programação/N8n + Crm"
 npx prisma migrate deploy

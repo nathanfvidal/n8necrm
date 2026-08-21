@@ -263,6 +263,8 @@ Payload — **seis claims, e nenhum a mais**:
   sobre autorização, que é exatamente a dívida ⚠️ R4 que o Ciclo 1a já carrega
   com `User.papel`. O caminho do navegador filtra por **empresa**, e só.
 
+> **Não vale mais desde 2026-08-21:** a coluna saiu no Ciclo 1f.
+
 **O `iss`, e o risco que ele carrega.** A medição não diz se o Supabase compara
 `iss` quando o provider foi registrado por `jwks_url`/`custom_jwks` — e com
 `custom_jwks` não existe issuer registrado com que comparar, o que torna
@@ -519,6 +521,8 @@ afrouxar um teste também deveria ser, e historicamente não é.
 - **`User.papel` continua de pé** (⚠️ R4 do Ciclo 1a). Não é assunto deste
   ciclo.
 
+> **Não vale mais desde 2026-08-21:** a coluna saiu no Ciclo 1f.
+
 ## 7. Fatos medidos, com a fonte
 
 Tudo abaixo foi medido nesta sessão ou está na medição de referência. Nada é
@@ -701,3 +705,5 @@ dev), R2 (quatro unicidades globais), R4 (`User.papel` como espelho), R5
 (`EVOLUTION_COMPANY_ID` como ponte) e R6 (`companyIdDoUsuario` por vínculo
 arbitrário), todas de `docs/auditorias/2026-08-19-ciclo-1a-tenancy.md`. Nenhuma
 introduzida aqui, nenhuma corrigida aqui.
+
+> **Não vale mais desde 2026-08-21:** a coluna saiu no Ciclo 1f.

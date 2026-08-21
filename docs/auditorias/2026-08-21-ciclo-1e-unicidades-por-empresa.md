@@ -775,6 +775,8 @@ Leitura, item a item:
   continuar**: é justamente porque `connectionId` é anulável que a chave `[connectionId, waId]` não
   seria uma chave (§5). Zero linhas afetadas neste banco (`Conversation: 0`).
 
+> **Não vale mais desde 2026-08-21:** a coluna saiu no Ciclo 1f.
+
 ---
 
 ## ❌ Herdado de infraestrutura, não corrigido aqui

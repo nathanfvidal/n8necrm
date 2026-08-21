@@ -194,6 +194,11 @@ antes de 5 importa: o papel tem que ser copiado **antes** de a coluna
 **`User.papel` sai neste mesmo ciclo**, e essa decisão também mudou durante o
 desenho.
 
+> **Não saiu no Ciclo 1a.** Três tentativas, três grupos de leitores
+> descobertos tarde, e uma migração de restauração no mesmo dia. Saiu no Ciclo
+> 1f, em 2026-08-21 — ver
+> `docs/superpowers/plans/2026-08-21-n8necrm-ciclo-1f-derrubar-user-papel.md`.
+
 A primeira versão mantinha a coluna por um ciclo, com o argumento de que
 "enquanto as duas fontes existirem, divergência é detectável". Detectável por
 quem? Nada iria conferir. E duas fontes de verdade para **autorização** não são

@@ -69,11 +69,14 @@ const PERDOADAS: Record<string, string> = {
   //   novo — um DEFAULT que sobrevivesse ficaria pendurado até lá, mascarando
   //   qualquer `User.create` que uma tarefa futura esquecesse de popular.
   //
-  // - QUANDO ISTO DEIXA DE VALER: no dia em que o CRM for publicado, e
-  //   também no dia em que a tarefa dedicada derrubar "User"."papel" de novo
-  //   (o objetivo declarado desta migração ponte) — qualquer NOT NULL futuro
-  //   nesta ou em outras tabelas vivas volta a precisar da regra sem
-  //   isenção. A isenção é desta migração específica, não da regra.
+  // - ISTO JÁ DEIXOU DE VALER, em 2026-08-21. O Ciclo 1f derrubou
+  //   "User"."papel" de novo (20260821130000_derruba_user_papel_de_vez), que
+  //   era o objetivo declarado desta migração ponte, depois de converter os
+  //   53 pontos que a liam ou escreviam. A entrada continua na lista porque
+  //   ela é HISTÓRIA -- a janela de quebra existiu, e apagar o registro seria
+  //   fingir que não. Mas ela não protege nada mais: qualquer NOT NULL futuro,
+  //   nesta ou em outra tabela viva, precisa da regra sem isenção. A isenção
+  //   sempre foi desta migração específica, nunca da regra.
   //
   // Alternativa considerada — DEFAULT acrescentado e DERRUBADO na mesma
   // migração, depois do backfill (o mesmo padrão que
@@ -216,7 +219,9 @@ describe("migrações", () => {
   });
 
   it("DROP COLUMN não é violação — é o oposto do que a regra vigia", () => {
-    // O Ciclo 1f derruba `User.papel` em duas migrações, as duas mexendo na
+    // O Ciclo 1f derrubou `User.papel` em duas migrações
+    // (`20260821120000_user_papel_aceita_nulo` e
+    // `20260821130000_derruba_user_papel_de_vez`), as duas mexendo na
     // nulidade de uma coluna de uma tabela VIVA — exatamente o vizinho do
     // incidente que originou esta regra (ver o cabeçalho deste arquivo). O
     // plano do ciclo não tem licença para LER o analisador e concluir que ele

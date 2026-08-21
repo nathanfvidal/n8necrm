@@ -567,6 +567,8 @@ roda na Tarefa 8 com `LINHA_DE_BASE_DE_IMPORTADORES_TEMPORARIOS` intacta em 0.
 - **Não fecha o `User.papel`** (⚠️ R4), não mexe em `EVOLUTION_COMPANY_ID`
   (⚠️ R5) nem nas 9 chamadas de `companyIdDoUsuario` (⚠️ R6).
 
+> **Não vale mais desde 2026-08-21:** a coluna saiu no Ciclo 1f.
+
 ## 7. Fatos medidos, com a fonte
 
 **Tabela de rotas — `npm run build`, 2026-08-20, Next.js 16.3.0 (Turbopack):**
@@ -745,3 +747,5 @@ R6 (`companyIdDoUsuario` por vínculo arbitrário), todas de
 `docs/auditorias/2026-08-19-ciclo-1a-tenancy.md`. Nenhuma introduzida aqui,
 nenhuma corrigida aqui. Somam-se as pendências do Ciclo 1b que dependem de ação
 do dono (D3/D4 daquele plano): elas não bloqueiam este ciclo.
+
+> **Não vale mais desde 2026-08-21:** a coluna saiu no Ciclo 1f.

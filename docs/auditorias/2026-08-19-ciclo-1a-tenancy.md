@@ -157,6 +157,9 @@ O que impede a divergência hoje: **nada lê `User.papel` para autorizar.** `usu
 vínculo, e é o `papel` dele que chega nos 26 `hasPermission`. A coluna é espelho de escrita, não
 fonte de decisão — e o teste com valores divergentes citado acima é o que trava isso.
 
+> **Saiu em 2026-08-21** (Ciclo 1f). A frase que abre esta seção descreve
+> corretamente o dia 19; a partir do dia 21, o estado é o oposto.
+
 ---
 
 ## 3. O mecanismo de escopo — e seus pontos cegos DECLARADOS
@@ -564,6 +567,17 @@ Duas colunas carregando papel, e papel é autorização (§ 2). Mitigado por nad
 decidir, e por um teste que trava exatamente isso com valores divergentes. Some quando os leitores
 restantes (`core/audit/alerta.ts`, mais ~17 arquivos de teste unitário e 3 de e2e; ~80 arquivos ao
 todo) migrarem para `Membership` — ciclo próprio.
+
+> **FECHADO em 2026-08-21, pelo Ciclo 1f.** A coluna saiu
+> (`20260821130000_derruba_user_papel_de_vez`) e o dual-write morreu junto.
+> Duas correções ao texto acima, medidas em
+> `.superpowers/sdd/medicao-user-papel.md`: `core/audit/alerta.ts` **já não era
+> leitor** quando esta auditoria foi escrita — ele consulta
+> `db.membership.findMany` desde `3744e64` —, e os "3 arquivos de e2e" eram
+> ESCRITORES, não leitores. A superfície real era de 32 arquivos (11 pontos de
+> leitura, 42 de escrita), não os ~80 do texto: aquele número contava prosa e
+> `Membership.papel` junto. O que impede a volta é
+> `tests/unit/user-papel-nao-volta.test.ts`.
 
 ### R5 — `EVOLUTION_COMPANY_ID` é ponte, e é segunda fonte de verdade sobre a conversa
 

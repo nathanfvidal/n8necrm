@@ -37,9 +37,11 @@
 // escapa; `any` e `JSON.parse` escapam. Isso é aceito de propósito, pelo mesmo
 // raciocínio de `consultas-estreitas.test.ts`: a regra fecha o padrão que de
 // fato apareceu neste projeto — chamada direta ao Prisma — e um analisador de
-// verdade custaria mais que o problema. O que fecha o resíduo é a Task 11 do
-// Ciclo 1f: a suíte rodando contra o Postgres real COM a coluna já fora, que é
-// a única prova de runtime.
+// verdade custaria mais que o problema. O que fechou o resíduo foi a Task 11
+// do Ciclo 1f: com a coluna já fora do Postgres, as 29 suítes que a tocavam
+// rodaram verdes contra o banco real (334 casos, 2026-08-21). É a única prova
+// de runtime, e ela é pontual — vale para o dia em que rodou, não para
+// sempre, e é por isso que a varredura textual acima continua de pé.
 //
 // Um dublê sem `prisma.user.*` fica fora do alcance por construção. Existe um,
 // e é deliberado: `tests/unit/usuario-ativo.test.ts` REINTRODUZ um `papel`

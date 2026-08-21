@@ -686,6 +686,8 @@ isso. Fingir o outro seria a pior das opções.
   desenho, nenhuma entra aqui: cada uma é uma tabela e uma tela próprias, e
   este ciclo entrega uma.
 
+> **Não vale mais desde 2026-08-21:** a coluna saiu no Ciclo 1f.
+
 ---
 
 ## 10. Ações do dono
@@ -778,6 +780,8 @@ entrega:** o cofre protege a apikey **da instância** dentro do CRM, e não faz
 nada contra uma chave global adivinhável **na Evolution**. Cifrar bem uma
 credencial cuja irmã global é o nome da empresa é meia defesa, e ela precisa
 ser dita inteira.
+
+> **Não vale mais desde 2026-08-21:** a coluna saiu no Ciclo 1f.
 
 ---
 

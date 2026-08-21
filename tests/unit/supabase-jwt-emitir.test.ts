@@ -108,7 +108,9 @@ describe("formato do token", () => {
     // `papel` é a exclusão que mais importa: autorização por papel vive no
     // caminho do Prisma (`hasPermission`). Pôr o papel no token criaria uma
     // SEGUNDA fonte de verdade sobre autorização — a mesma dívida que o
-    // Ciclo 1a já carrega com User.papel (R4).
+    // Ciclo 1a carregou com User.papel (R4), FECHADA em 2026-08-21 pelo Ciclo
+    // 1f, que derrubou a coluna. O risco aqui não fecha junto: é a razão de o
+    // `papel` nunca entrar neste token.
     expect(payload.aud).toBeUndefined();
     expect(payload.email).toBeUndefined();
     expect(payload.papel).toBeUndefined();

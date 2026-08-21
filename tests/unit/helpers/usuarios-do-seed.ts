@@ -2,7 +2,8 @@
 //
 // Sete arquivos de teste faziam
 // `prisma.user.findFirstOrThrow({ where: { papel: "ADMIN", ativo: true } })`
-// para achar o autor das fixtures. A coluna `User.papel` sai no Ciclo 1f e o
+// para achar o autor das fixtures. A coluna `User.papel` saiu no Ciclo 1f
+// (`20260821130000_derruba_user_papel_de_vez`) e o
 // papel mora em `Membership.papel` (`prisma/schema.prisma:163-176`), então a
 // consulta parte do VÍNCULO — que é também de onde `usuarioAtual()`
 // (`src/core/auth/session.ts:98-106`) tira o papel em produção. Os testes passam a

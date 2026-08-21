@@ -4,8 +4,10 @@ import type { Role } from "@prisma/client";
 
 /**
  * Projeção segura de `User`, sem o papel — que a partir do Ciclo 1a mora em
- * `Membership`, não em `User` (a coluna `User.papel` foi derrubada depois que
- * a gestão de equipe passou a gravar o vínculo).
+ * `Membership`, não em `User`. A coluna `User.papel` foi derrubada no Ciclo 1f
+ * (`20260821130000_derruba_user_papel_de_vez`) — esta frase esteve ERRADA
+ * entre 2026-08-19 e 2026-08-21, período em que a coluna existiu restaurada
+ * como espelho; ela agora descreve o estado real.
  *
  * **Enumerada campo a campo de propósito, e nunca com `include` ou com o
  * modelo inteiro.** `User.senhaHash` é uma coluna como qualquer outra: um
@@ -40,7 +42,7 @@ export type UsuarioListado = {
 /**
  * Lista as pessoas da equipe DA EMPRESA de quem consulta: só quem tem
  * `Membership` com `companyId`, com o papel vindo desse vínculo (não mais de
- * `User.papel`, que não existe mais). Ativos primeiro, depois por nome.
+ * `User.papel`, derrubada no Ciclo 1f). Ativos primeiro, depois por nome.
  *
  * A consulta parte de `Membership`, não de `User` filtrado por relação — é o
  * vínculo que define "pertence a esta empresa", e é dele que vem o papel que

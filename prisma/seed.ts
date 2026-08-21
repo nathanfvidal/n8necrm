@@ -257,9 +257,11 @@ export async function seed(): Promise<void> {
  *
  * A coluna `User.papel` foi derrubada no Ciclo 1a e RESTAURADA no mesmo ciclo,
  * quando o DROP revelou leitores tarde demais; este docstring afirmava que ela
- * já não existia e ficou errado nesse intervalo. Desde o Ciclo 1f nada mais a
- * escreve — nem este arquivo, nem `core/users/service.ts` — e ela sai do
- * schema ainda neste ciclo.
+ * já não existia e ficou errado nesse intervalo. O Ciclo 1f tirou o último
+ * escritor (nem este arquivo, nem `core/users/service.ts` a escrevem) e então
+ * a derrubou do banco e do schema, em
+ * `20260821130000_derruba_user_papel_de_vez`. A frase voltou a ser verdadeira,
+ * e agora é `tests/unit/user-papel-nao-volta.test.ts` quem a sustenta.
  *
  * `upsert` por `userId_companyId` (a chave de `@@unique([userId, companyId])`)
  * em vez de "existe? não cria de novo": mesma forma que o resto deste arquivo

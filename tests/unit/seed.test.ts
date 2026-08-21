@@ -142,8 +142,10 @@ describe("prisma/seed.ts", () => {
         expect(usuario.ativo).toBe(false);
         expect(usuario.email).toBe("whatsapp-bot@sistema.invalid");
 
-        // `papel` não é mais coluna de `User` (derrubada nesta tarefa) — é
-        // `vincularAEmpresa()` quem grava "ADMIN" no `Membership`.
+        // `papel` não é coluna de `User` — é `vincularAEmpresa()` quem grava
+        // "ADMIN" no `Membership`. "Derrubada nesta tarefa" era o Ciclo 1a, e
+        // a frase ficou falsa por dois dias quando a coluna foi restaurada
+        // como espelho; quem a derrubou de vez foi o Ciclo 1f.
         const vinculo = await prisma.membership.findFirstOrThrow({
           where: { userId: WHATSAPP_SYSTEM_USER_ID },
         });

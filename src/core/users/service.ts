@@ -245,7 +245,8 @@ export async function criarUsuario(
     // escrita aqui em dual-write entre 2026-08-19 e 2026-08-21, como ponte
     // para leitores que o DROP do Ciclo 1a revelou tarde demais; o Ciclo 1f
     // migrou todos eles e esta linha é o último escritor de produção a sair.
-    // A coluna já é nula desde `21f0912` e some do schema ainda neste ciclo.
+    // A coluna aceitou nulo desde `21f0912` e saiu do banco e do schema logo
+    // depois, em `20260821130000_derruba_user_papel_de_vez`.
     //
     // O parâmetro continua aqui porque o VÍNCULO precisa dele — papel é
     // atributo do vínculo, e é de lá que `usuarioAtual()` o lê

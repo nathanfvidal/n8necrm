@@ -200,8 +200,11 @@ export async function avaliarAtividadeSuspeita(input: {
   // cliente que não é dele. Alerta de segurança de um cliente não pode
   // vazar para outro — a consulta agora parte de `Membership`, o vínculo que
   // define "ADMIN desta empresa" (mesmo padrão de `listarUsuarios`,
-  // `core/users/queries.ts`), não de `User.papel`, que é espelho depreciado
-  // (ver comentário do campo em `prisma/schema.prisma`).
+  // `core/users/queries.ts`), não de `User.papel`. Aquela coluna era espelho
+  // depreciado e saiu do banco no Ciclo 1f
+  // (`20260821130000_derruba_user_papel_de_vez`); o comentário de campo que
+  // esta linha citava saiu junto, e o que restou está no bloco acima de
+  // `model User`, em `prisma/schema.prisma`.
   //
   // Excluir o autor não é cortesia — avisar o suspeito não protege nada e só
   // entrega que ele foi percebido. Se o autor for o ÚNICO ADMIN ativo desta

@@ -637,6 +637,8 @@ Leitura, item a item:
 - **R5 — `EVOLUTION_COMPANY_ID` é ponte, e é segunda fonte de verdade sobre a conversa.**
 - **R6 — nove chamadas ainda resolvem a empresa por um vínculo arbitrário** (`companyIdDoUsuario`).
 
+> **Não vale mais desde 2026-08-21:** a coluna saiu no Ciclo 1f.
+
 ---
 
 ## ❌ Herdado, não corrigido aqui

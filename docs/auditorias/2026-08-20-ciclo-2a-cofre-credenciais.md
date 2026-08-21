@@ -697,6 +697,8 @@ previa:
 - **R6 — `companyIdDoUsuario`** continua.
 - **R5 está FECHADA por este ciclo.** `EVOLUTION_COMPANY_ID` não é lida em lugar nenhum de `src/`.
 
+> **Não vale mais desde 2026-08-21:** a coluna saiu no Ciclo 1f.
+
 ---
 
 ## ❌ Herdado, não corrigido aqui — e o vizinho direto do que este ciclo entrega
