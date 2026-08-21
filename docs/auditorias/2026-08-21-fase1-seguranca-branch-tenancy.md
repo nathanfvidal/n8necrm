@@ -92,13 +92,34 @@ lista do que não foi executado.
 - **R-A** — `public.rls_auto_enable()` é SECURITY DEFINER com EXECUTE para `anon`
   (os 2 WARN do advisor). É da plataforma, tem `search_path` fixo e retorna
   `event_trigger` — linha de base aceita em 4 ciclos, mas nunca decidida.
+
+  **MEDIDO em 2026-08-21 contra a API real, com a chave `anon` legada:**
+  `POST /rest/v1/rpc/rls_auto_enable` responde **HTTP 400**, não 403 — ou seja, a
+  função **é alcançável**, e para na serialização do retorno
+  (`0A000: cannot display a value of type event_trigger`). Função de gatilho de
+  evento chamada fora do contexto dela não recebe dado de evento, então o
+  impacto prático é baixo. **Continua risco, deixa de ser incógnita.**
+
+  Não foi revogado: é função gerida pela plataforma, e a correção é ação do dono
+  — `REVOKE EXECUTE ON FUNCTION public.rls_auto_enable() FROM anon, authenticated;`
+  Revogar muda a linha de base do advisor (2 WARN somem) e os documentos de
+  auditoria que a citam precisam ser atualizados junto.
 - **R-B** — `pg_default_acl` de `supabase_admin` em `public` ainda concede a
   `anon`/`authenticated`. A migration `20260813180000` admite não alcançar, mas
   descreve essas entradas como sendo de `auth/storage/realtime` — a linha medida
   é `public`. O e2e filtra só `defaclrole='postgres'`: ponto cego assumido.
-- **R-C** — `realtime.subscription` com RLS **desligada** e `SELECT` para `anon`,
-  a única tabela do projeto nessa combinação. O `CLAUDE.md` cobre
-  `realtime.messages`, não `subscription`.
+- **R-C** — ~~`realtime.subscription` com RLS **desligada** e `SELECT` para
+  `anon`~~ — **REBAIXADO em 2026-08-21, medido contra a API real.**
+  A combinação existe, mas **não tem porta**: o schema `realtime` não está
+  exposto na Data API. `GET /rest/v1/subscription` com a chave `anon` devolve
+  `PGRST205: Could not find the table 'public.subscription' in the schema cache`.
+  Fica registrado como observação, não como risco. Volta a ser risco no dia em
+  que alguém expuser o schema `realtime` — o que o Ciclo 3 pode querer fazer.
+
+  **De graça, na mesma medição: a blindagem foi confirmada ao vivo.**
+  `GET /rest/v1/Contact` com a chave `anon` devolve
+  `401 / 42501: permission denied for table Contact`. Não é só teste e migration
+  — é o comportamento da API pública hoje.
 - **F26/F27 — o `storage.ts` afirma uma rede que não existe.** O JSDoc diz que o
   bucket é privado e que há limite de tamanho e allowlist de MIME configurados no
   Supabase "em duplicidade" com o código. Medido: **zero buckets no projeto**,
