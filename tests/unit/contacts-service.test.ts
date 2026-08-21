@@ -361,6 +361,9 @@ describe("core/contacts", () => {
           uf: "SP",
           observacoesTamanho: texto.length,
           documentoPreenchido: true,
+          // A metade legítima: o retrato continua dizendo que HAVIA endereço.
+          // Sem esta asserção, apagar o campo de vez também passaria.
+          enderecoPreenchido: true,
         });
 
         // As duas metades que importam, e são o achado R1 da auditoria: nem o
@@ -376,6 +379,15 @@ describe("core/contacts", () => {
         // Nem parcial: metade de um CPF ainda é CPF de alguém.
         expect(gravado).not.toContain("123456");
         expect(gravado).not.toContain("678901");
+        // Terceira metade, do achado A7 da Fase 1: o ENDEREÇO seguia o
+        // critério oposto ao do CPF no mesmo objeto. Nem inteiro, nem em
+        // pedaço — "Rua das Flores" sozinho já é endereço de alguém.
+        expect(gravado).not.toContain("Rua das Flores, 100");
+        expect(gravado).not.toContain("Rua das Flores");
+        // `cidade` e `uf` CONTINUAM por valor, e é decisão, não descuido:
+        // dizem "São Paulo/SP", não onde a pessoa dorme. Ver o critério em
+        // `instantaneoParaAuditoria` (`core/contacts/service.ts`).
+        expect(gravado).toContain("São Paulo");
       } finally {
         await prisma.auditLog.deleteMany({ where: { entidadeId: criado.id } });
         await prisma.contact.delete({ where: { id: criado.id } });
@@ -440,6 +452,48 @@ describe("core/contacts", () => {
 
         expect(log.antes).toMatchObject({ observacoesTamanho: 5 });
         expect(log.depois).toMatchObject({ observacoesTamanho: 5, observacoesAlterada: true });
+      } finally {
+        await prisma.auditLog.deleteMany({ where: { entidadeId: criado.id } });
+        await prisma.contact.delete({ where: { id: criado.id } });
+      }
+    });
+
+    // Achado A7 da Fase 1, as duas metades juntas: a mudança de endereço
+    // continua VISÍVEL na trilha (senão a correção seria "esconder o campo e
+    // perder o evento"), e o texto do endereço não aparece em lugar nenhum do
+    // par antes/depois.
+    it("acusa endereço trocado sem gravar nenhum dos dois endereços", async () => {
+      const criado = await criarCompleto();
+      try {
+        await atualizarContato(companyId,
+          {
+            id: criado.id,
+            nome: criado.nome,
+            telefone: TELEFONE_CADASTRO,
+            endereco: "Avenida Paulista, 900",
+          },
+          autorId
+        );
+
+        const log = await prisma.auditLog.findFirstOrThrow({
+          where: { entidade: "Contact", entidadeId: criado.id, acao: "editar_contato" },
+        });
+
+        expect(log.antes).toMatchObject({ enderecoPreenchido: true });
+        expect(log.depois).toMatchObject({
+          enderecoPreenchido: true,
+          enderecoAlterado: true,
+        });
+
+        const gravado = `${JSON.stringify(log.antes)}${JSON.stringify(log.depois)}`;
+        expect(gravado).not.toContain("Rua das Flores");
+        expect(gravado).not.toContain("Avenida Paulista");
+
+        // A linha do contato continua com o endereço NOVO — o que saiu foi a
+        // cópia na auditoria, não o dado. Sem esta asserção, uma correção que
+        // parasse de gravar o campo passaria neste teste.
+        const noBanco = await prisma.contact.findUniqueOrThrow({ where: { id: criado.id } });
+        expect(noBanco.endereco).toBe("Avenida Paulista, 900");
       } finally {
         await prisma.auditLog.deleteMany({ where: { entidadeId: criado.id } });
         await prisma.contact.delete({ where: { id: criado.id } });

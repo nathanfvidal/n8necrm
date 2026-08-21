@@ -197,6 +197,48 @@ function validarCadastrais(dados: DadosCadastrais): CamposCadastrais {
  * viram 8000 caracteres por linha de auditoria — `AuditLog` incha rápido e
  * nenhum investigador precisa do texto para responder "quem mexeu e quando".
  * O tamanho basta para ver que mudou; o texto atual está no próprio contato.
+ *
+ * ## O CRITÉRIO, escrito uma vez para os onze campos
+ *
+ * Até a Fase 2 da auditoria de 2026-08-21 este arquivo aplicava DOIS critérios
+ * opostos sem dizer que eram dois: `documento` saía do retrato com um
+ * argumento de dado pessoal, e `endereco` — do mesmo tipo, com o mesmo prazo
+ * de descarte inexistente — entrava inteiro, duas vezes por edição. A
+ * incoerência é o achado A7 de `docs/auditorias/2026-08-21-fase1-seguranca-branch-tenancy.md`.
+ *
+ * O critério que vale agora, e que decide qualquer campo futuro:
+ *
+ * 1. **É o IDENTIFICADOR da linha auditada?** Então entra por valor.
+ *    `AuditLog` não tem FK para `Contact` (schema, `model AuditLog`): o
+ *    `entidadeId` é um id solto, e no dia em que houver exclusão de contato
+ *    ele não resolve para nada. Sem `nome`/`telefone` a linha de auditoria
+ *    deixa de ser LEGÍVEL — não fica menos detalhada, fica inútil. `telefone`
+ *    é ainda a chave natural do modelo (é ele que é UNIQUE e que o dedupe
+ *    usa), e `email` é o segundo canal de contato pelo qual uma pessoa é
+ *    reconhecida numa investigação.
+ * 2. **É ATRIBUTO da pessoa, sensível, e a pergunta "qual era antes" tem
+ *    valor investigativo baixo?** Então entra como BOOLEANO de presença mais
+ *    booleano de alteração. É o caso de `documento` (CPF/CNPJ) e de
+ *    `endereco` (onde a pessoa mora). Os dois duplicam dado pessoal numa
+ *    segunda tabela sem prazo de descarte e sem FK — sobreviveriam à exclusão
+ *    de quem pedisse para ser apagado. "Mudou" é tudo que a trilha precisa; o
+ *    valor atual está no próprio contato, que é onde dado de pessoa deve
+ *    morar: em um lugar só.
+ * 3. **É dado de baixa granularidade, que não localiza ninguém?** Entra por
+ *    valor. `cidade` e `uf` dizem "São Paulo/SP", não onde a pessoa dorme, e
+ *    o schema criou `cidade` como coluna separada justamente para agrupar
+ *    ("permite leads por cidade depois sem migração"). `empresa` e `cargo`
+ *    são dado profissional, público por natureza — o que está no cartão de
+ *    visita.
+ *
+ * `observacoes` é o caso 2 por outra porta: texto livre pode conter qualquer
+ * coisa, e o tamanho + `observacoesAlterada` já cobrem.
+ *
+ * A alternativa que NÃO foi escolhida, e por quê: reduzir também
+ * `nome`/`telefone`/`email` a booleanos deixaria a trilha sem nenhum jeito de
+ * dizer SOBRE QUEM ela fala, porque não existe FK para recuperar isso depois.
+ * Seria trocar um risco de retenção por perda total da capacidade de
+ * auditoria, que é o oposto do que uma auditoria quer.
  */
 function instantaneoParaAuditoria(contato: Contact) {
   return {
@@ -219,7 +261,12 @@ function instantaneoParaAuditoria(contato: Contact) {
     // QUEM mexeu, QUANDO, e SE o documento mudou. O valor atual está no
     // próprio contato, que é onde dado de pessoa deve morar — em um lugar só.
     documentoPreenchido: contato.documento !== null,
-    endereco: contato.endereco,
+    // `endereco` NÃO entra por valor, pelo caso 2 do critério acima. Era a
+    // incoerência do achado A7: o mesmo argumento que tirou o CPF vale
+    // inteiro para o endereço residencial, e ele ficava gravado em `antes` E
+    // em `depois` a cada edição — duas cópias por edição, numa tabela que
+    // sobrevive ao contato.
+    enderecoPreenchido: contato.endereco !== null,
     cidade: contato.cidade,
     uf: contato.uf,
     observacoesTamanho: contato.observacoes?.length ?? 0,
@@ -343,6 +390,11 @@ export async function atualizarContato(
       // trilha — que é justamente o evento mais suspeito que ela deveria
       // registrar.
       documentoAlterado: antes.documento !== depois.documento,
+      // Mesmo par para o endereço, pela mesma razão: `enderecoPreenchido` não
+      // muda quando uma rua vira outra rua, então sem este booleano a mudança
+      // de endereço de alguém — evento que importa numa investigação de
+      // cobrança ou de entrega — seria invisível na trilha.
+      enderecoAlterado: antes.endereco !== depois.endereco,
     },
   });
 
