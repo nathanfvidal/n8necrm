@@ -127,6 +127,78 @@ export const LIMITE_ALERTA = 10;
 export const JANELA_ALERTA_MS = 5 * 60_000;
 
 /**
+ * A DECISÃO do gatilho, escrita como valor — a trava contra a deriva que a
+ * auditoria de 2026-08-21 mediu.
+ *
+ * ## A deriva, com números
+ *
+ * `ACOES_SENSIVEIS` cresceu **6 → 7 → 9 → 10 → 14** ao longo dos ciclos.
+ * `LIMITE_ALERTA` aparece **uma única vez** em toda a história do repositório
+ * (commit `4f4fb1d`, valor 10) e nunca foi revisitado.
+ *
+ * Isso não é um detalhe de contabilidade: o conjunto é contado JUNTO (ver o
+ * `acao: { in: ... }` do `count`, mais abaixo). Cada ação nova que entra no
+ * conjunto aumenta quantos eventos por hora um usuário normal produz dentro
+ * dele — ou seja, **ampliar o conjunto BAIXA o gatilho de fato**, sem ninguém
+ * decidir baixar nada. Foram quatro ampliações; nenhuma delas foi uma decisão
+ * sobre sensibilidade, e todas mudaram a sensibilidade.
+ *
+ * O dano prático foi baixo porque a direção é a segura (o próprio comentário
+ * de `LIMITE_ALERTA` diz: "baixar é seguro; subir é que custa"), e ficou menos
+ * confortável desde que o alerta passou a sair também por e-mail. Mas o
+ * problema nunca foi o valor — foi o silêncio: a próxima ampliação continuaria
+ * acontecendo sem ninguém perceber.
+ *
+ * ## O que esta constante faz
+ *
+ * Ela é a fotografia do par no momento em que ele foi decidido junto.
+ * `tests/unit/alerta-gatilho-decidido.test.ts` lê o CÓDIGO-FONTE deste arquivo
+ * e exige que ela bata com o que está escrito: 15ª ação no conjunto sem tocar
+ * aqui reprova, dizendo o que mudou e o que não foi revisitado. Não é um
+ * número novo, é a obrigação de que os três (conjunto, limite, janela) mudem
+ * como uma decisão só.
+ *
+ * `porque` não é decoração: o mesmo teste exige que ele CITE os números
+ * vigentes. Bumpar o contador sem escrever por que o limite continua servindo
+ * deixa a prosa contradizendo os números, e a trava acusa — mesmo desenho da
+ * lista `PERDOADAS` de `tests/unit/migracoes-seguras.test.ts`, onde entrada
+ * nova exige justificativa escrita e a lista existe para registrar história,
+ * não para dar passagem.
+ *
+ * ## A revisão de 2026-08-21 (Fase 2 da auditoria), e por que o valor FICA 10
+ *
+ * Com 14 ações vigiadas, 10 em 5 minutos continua sendo o que o comentário de
+ * `LIMITE_ALERTA` descreve: destruição sustentada, não faxina. As quatro ações
+ * acrescentadas no Ciclo 2a são de CONEXÃO (apagar, desativar, regenerar
+ * webhook, substituir segredo) — uma empresa tem poucas conexões, então elas
+ * quase não somam volume em uso legítimo; e as de fluxo, idem. Não é um
+ * conjunto que um dia normal de trabalho encoste.
+ *
+ * Baixar para 8 ou 6 foi considerado e recusado AGORA que o alerta também
+ * manda e-mail: a assimetria "falso positivo é barato" era mais forte quando o
+ * custo era um badge. Subir foi recusado pelo motivo de sempre — falso
+ * negativo custa a empresa não descobrir a tempo.
+ */
+export const DECISAO_DO_GATILHO = {
+  /** Quantas ações havia em `ACOES_SENSIVEIS` quando o par foi revisado. */
+  acoesVigiadas: 14,
+  /** O valor de `LIMITE_ALERTA` nessa revisão. */
+  limite: 10,
+  /** `JANELA_ALERTA_MS` em minutos — a terceira perna do mesmo gatilho. */
+  janelaMinutos: 5,
+  revisadoEm: "2026-08-21",
+  porque:
+    "14 acoes vigiadas, contadas juntas, com limite 10 em janela de 5 minutos. " +
+    "As 14 destroem conteudo, tiram alguem do sistema ou extraem dado em massa, " +
+    "e nenhuma delas aparece em volume num dia normal de trabalho: as de conexao " +
+    "e de fluxo mexem em recurso que a empresa tem poucos. 10 em 5 minutos segue " +
+    "sendo destruicao sustentada, nao faxina. Baixar de 10 foi recusado nesta " +
+    "revisao porque o alerta passou a sair TAMBEM por e-mail (achado 40): falso " +
+    "positivo deixou de custar so um badge no sino. Subir foi recusado pelo motivo " +
+    "de sempre, falso negativo custa a empresa nao descobrir a tempo.",
+} as const;
+
+/**
  * Silêncio depois de um alerta, por conta. Sem isto, a 11ª, 12ª e 13ª ação
  * gerariam um alerta cada uma, e o sino do ADMIN viraria ruído exatamente
  * durante o incidente que ele deveria tornar visível.
