@@ -215,6 +215,41 @@ describe("migrações", () => {
     expect(analisar("teste", nova)).toHaveLength(0);
   });
 
+  it("DROP COLUMN não é violação — é o oposto do que a regra vigia", () => {
+    // O Ciclo 1f derruba `User.papel` em duas migrações, as duas mexendo na
+    // nulidade de uma coluna de uma tabela VIVA — exatamente o vizinho do
+    // incidente que originou esta regra (ver o cabeçalho deste arquivo). O
+    // plano do ciclo não tem licença para LER o analisador e concluir que ele
+    // não morde; a conclusão vira este caso executado.
+    //
+    // Por que não morde, e por que isso é correto e não uma brecha: a regra
+    // protege o INSERT do código antigo contra uma coluna que passou a exigir
+    // valor (o `23502` do incidente). `DROP NOT NULL` e `DROP COLUMN` removem
+    // exigência em vez de criá-la. O INSERT antigo que ainda informasse a
+    // coluna derrubada quebraria por outro motivo — coluna inexistente — e é
+    // por isso que o Ciclo 1f limpa TODOS os escritores ANTES de derrubar, em
+    // vez de confiar nesta guarda para pegá-los.
+    const doCiclo1f = `
+      ALTER TABLE "User" ALTER COLUMN "papel" DROP NOT NULL;
+      ALTER TABLE "User" DROP COLUMN "papel";
+    `;
+    expect(analisar("teste", doCiclo1f)).toEqual([]);
+  });
+
+  it("SET NOT NULL continua sendo violação mesmo colado num DROP NOT NULL", () => {
+    // A metade que impede o caso acima de virar brecha: se alguém escrever uma
+    // migração que afrouxa uma coluna e endurece outra no mesmo arquivo, a
+    // segunda ainda precisa do DEFAULT. Sem esta asserção, "DROP COLUMN não é
+    // violação" poderia ser lido como "migração que mexe em nulidade passa".
+    const misturado = `
+      ALTER TABLE "User" ALTER COLUMN "papel" DROP NOT NULL;
+      ALTER TABLE "User" ADD COLUMN "apelido" TEXT;
+      UPDATE "User" SET "apelido" = nome;
+      ALTER TABLE "User" ALTER COLUMN "apelido" SET NOT NULL;
+    `;
+    expect(analisar("teste", misturado)).toHaveLength(1);
+  });
+
   it("prosa em comentário não conta como SQL", () => {
     const sóComentario = `
       -- ALTER TABLE "Contact" ALTER COLUMN "x" SET NOT NULL sem default seria ruim
