@@ -1,5 +1,7 @@
 // Prova que `usuarioAtual()` resolve empresa e papel pelo VÍNCULO
-// (`Membership`), não mais pela coluna `User.papel` (Ciclo 1a, Task 2).
+// (`Membership`). A coluna `User.papel` que ele substituiu não existe mais
+// desde o Ciclo 1f -- e a trava que impede a volta está em `LINHA_HOSTIL`,
+// abaixo, porque nem o `tsc` nem a varredura textual alcançam este arquivo.
 //
 // Prisma e `auth()` mockados aqui, ao contrário de `session.test.ts`
 // (Postgres real) -- o que este arquivo prova é a REGRA de resolução (qual
@@ -19,16 +21,36 @@ vi.mock("@/lib/auth", () => ({ auth: authMock }));
 import { usuarioAtual } from "../../src/core/auth/session";
 import { EmpresaAmbiguaError } from "../../src/core/auth/usuario-ativo";
 
-// `papel: "ADMIN"` aqui é a coluna ANTIGA (`User.papel`) -- de propósito
-// diferente do papel usado nos vínculos abaixo, para que nenhum teste passe
-// por acidente caso `usuarioAtual()` volte a ler a coluna em vez do vínculo.
+// A linha de `User` como ela é DEPOIS do Ciclo 1f: sem `papel`. A coluna foi
+// derrubada, e o papel mora em `Membership`.
 const USUARIO_BASE = {
   id: "user-1",
   nome: "Usuária Teste",
   email: "teste-usuario-ativo@exemplo.local",
   ativo: true,
-  papel: "ADMIN",
 };
+
+// A linha HOSTIL: `USUARIO_BASE` com a coluna derrubada de volta, e com valor
+// DIVERGENTE do vínculo (ADMIN aqui, VENDEDOR lá).
+//
+// Ela existe porque a trava que este arquivo carregava desde o Ciclo 1a --
+// "nenhum teste passa por acidente caso `usuarioAtual()` volte a ler a coluna"
+// -- perderia a premissa quando a coluna sumisse, e sumiria EM SILÊNCIO: o
+// objeto é um literal sem tipo, então nem o `tsc` nem a varredura textual de
+// `user-papel-nao-volta.test.ts` (que só olha chamadas a `prisma.user.*`, e
+// aqui é `prismaMock`) acusariam a perda. Apagar a trava junto com a coluna
+// custaria a única asserção do projeto que separa "resolveu pelo vínculo" de
+// "resolveu pela linha de `User`".
+//
+// Reancorada, ela deixa de descrever o presente e passa a descrever a
+// REGRESSÃO: se alguém voltar a resolver o papel pela linha, o caso abaixo
+// devolve "ADMIN" e fica vermelho. É a forma que uma trava deve ter, e o
+// Ciclo 1f a exercitou de verdade: a regressão foi feita à mão em
+// `src/core/auth/session.ts` e o caso ficou vermelho antes de ser desfeita.
+//
+// Este é o único ponto do repositório onde `papel` numa linha de `User` é
+// deliberado. Ver `.superpowers/sdd/medicao-user-papel.md` § 1, item 11.
+const LINHA_HOSTIL = { ...USUARIO_BASE, papel: "ADMIN" };
 
 function membership(papel: string, companyId = "empresa-1") {
   return { id: `membership-${companyId}`, userId: USUARIO_BASE.id, companyId, papel, criadoEm: new Date() };
@@ -53,19 +75,19 @@ describe("usuarioAtual — resolve empresa e papel pelo vínculo", () => {
   });
 
   it(
-    "o papel devolvido é o do vínculo, e NÃO o de User.papel -- os dois valores divergem de " +
-      "propósito neste caso (vínculo VENDEDOR, coluna antiga ADMIN) para que o teste não passe " +
-      "por acidente se alguém reintroduzir a leitura da coluna",
+    "com a coluna derrubada REINTRODUZIDA na linha, o papel devolvido continua sendo o do " +
+      "vínculo -- os dois valores divergem de propósito (vínculo VENDEDOR, coluna ADMIN) para " +
+      "que este caso fique vermelho se alguém voltar a resolver o papel pela linha de User",
     async () => {
       prismaMock.user.findUniqueOrThrow.mockResolvedValue({
-        ...USUARIO_BASE, // papel: "ADMIN" na coluna antiga
+        ...LINHA_HOSTIL, // papel: "ADMIN" na coluna que não existe mais
         memberships: [membership("VENDEDOR")], // papel: "VENDEDOR" no vínculo
       });
 
       const usuario = await usuarioAtual();
 
       expect(usuario.papel).toBe("VENDEDOR");
-      expect(usuario.papel).not.toBe(USUARIO_BASE.papel);
+      expect(usuario.papel).not.toBe(LINHA_HOSTIL.papel);
     }
   );
 
