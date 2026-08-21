@@ -1,5 +1,6 @@
 import { prismaDaEmpresa } from "@/core/tenancy/escopo";
 import { encontrarOuCriarContact } from "./dedupe";
+import { checarEmail, checarNome } from "@/core/contacts/schema";
 import { registrarAuditoria } from "@/core/audit/log";
 import { notificarNovoLead } from "@/core/notifications/dispatch";
 import { companyIdDoUsuario } from "@/core/users/empresa";
@@ -28,6 +29,56 @@ export class LeadInvalidoError extends Error {
  * sem repetir o `ReturnType` em cada assinatura.
  */
 type ClienteDaEmpresa = ReturnType<typeof prismaDaEmpresa>;
+
+/**
+ * `nome` e `email` do CONTATO que nasce junto com o lead, validados pelas
+ * MESMAS regras do caminho de contato — achado 18 da auditoria de 2026-08-21.
+ *
+ * ## A assimetria que isto fecha
+ *
+ * `criarContato` (`core/contacts/service.ts`) valida os três campos de
+ * identificação antes de tocar o banco. `criarLead` validava um: `telefone`,
+ * porque `encontrarOuCriarContact` (`./dedupe.ts`) chama `normalizarTelefone`
+ * e lança. `nome` e `email` chegavam INTACTOS ao `db.contact.create` de
+ * `dedupe.ts` — sem obrigatoriedade, sem teto, sem formato.
+ *
+ * As regras existiam, mas no lugar errado: no Zod de
+ * `components/leads/lead-form.tsx`, que é do CLIENTE. Server Action é endpoint
+ * HTTP público — o formulário não é fronteira, o serviço é. `Contact.nome` é
+ * `text` sem limite no schema, então o teto de fato era o `bodySizeLimit` de 1
+ * MB: um POST direto criava contato com nome de um megabyte, e ele passaria a
+ * aparecer em toda listagem, todo CSV e toda notificação.
+ *
+ * ## Por que a regra veio de `contacts/schema.ts`, e não foi reescrita aqui
+ *
+ * Porque uma regra escrita duas vezes é uma regra que diverge — e a
+ * divergência é o próprio achado. `checarNome`/`checarEmail` são as funções
+ * que `contacts/service.ts` usa; o que cada módulo faz de diferente é só a
+ * classe de erro que lança, e `LeadInvalidoError` é a que `paraResultadoErro`
+ * (`./actions.ts`) repassa verbatim para a tela.
+ *
+ * O servidor fica um pouco MAIS permissivo que o formulário em `nome` (aceita
+ * 1 caractere, o Zod do cliente pede 2), e isso é deliberado: o cliente pode
+ * ser mais estrito, nunca menos — é a mesma regra que `lead-form.tsx` já
+ * documenta para o telefone.
+ *
+ * Os dois casos estão em `tests/unit/leads-validacao-identificacao.test.ts`,
+ * recusa e aceitação, incluindo o valor EXATAMENTE no teto.
+ */
+function validarNomeDeLead(bruto: string): string {
+  const checado = checarNome(bruto);
+  if (!checado.ok) throw new LeadInvalidoError(checado.mensagem);
+  return checado.valor;
+}
+
+function validarEmailDeLead(bruto: string | undefined): string | undefined {
+  const checado = checarEmail(bruto);
+  if (!checado.ok) throw new LeadInvalidoError(checado.mensagem);
+  // `undefined` e não `null`: `encontrarOuCriarContact` recebe `email?: string`
+  // e o repassa ao `create`, onde `undefined` significa "não informado". `null`
+  // ali seria um tipo que a assinatura não aceita.
+  return checado.valor ?? undefined;
+}
 
 /**
  * Confere que `responsavelId` é **pessoa DESTA empresa**, e devolve o que as
@@ -178,6 +229,13 @@ export async function criarLead(input: {
   responsavelId: string;
   autorId: string;
 }): Promise<Lead> {
+  // Validação ANTES de qualquer ida ao banco: é pura, é barata, e recusar aqui
+  // evita gastar três consultas para depois gravar lixo — e, principalmente,
+  // evita deixar um `Contact` criado para um `Lead` que não vai existir. Ver
+  // `validarNomeDeLead` acima para o achado que a trouxe.
+  const nome = validarNomeDeLead(input.nome);
+  const email = validarEmailDeLead(input.email);
+
   // A empresa é resolvida ANTES de qualquer consulta, porque agora ela é o
   // ESCOPO de todas elas — inclusive da checagem do responsável, que antes era
   // global. `Lead.companyId` é `NOT NULL` desde a Task 1 do Ciclo 1a; o lead
@@ -205,9 +263,9 @@ export async function criarLead(input: {
   }
 
   const contact = await encontrarOuCriarContact({
-    nome: input.nome,
+    nome,
     telefone: input.telefone,
-    email: input.email,
+    email,
     companyId,
   });
 
@@ -506,6 +564,14 @@ export async function criarLeadDeWhatsapp(input: {
   responsavelId: string;
   autorId: string;
 }): Promise<Lead> {
+  // Mesma validação de `criarLead`, e aqui ela pesa MAIS: este caminho não
+  // tem formulário nenhum na frente. O `nome` vem do `pushName` que a
+  // Evolution repassa do WhatsApp — texto escolhido pelo dono do aparelho do
+  // outro lado, ou seja, por quem manda a mensagem. Sem chamador hoje (ver o
+  // JSDoc acima); ligado sem esta linha, o teto do nome de um contato passaria
+  // a ser decidido por um desconhecido. Achado 18, parte menor.
+  const nome = validarNomeDeLead(input.nome);
+
   // Mesmo raciocínio de `criarLead` acima: lead nascendo agora, sem registro
   // prévio de onde ler a empresa — a origem é o vínculo do autor, resolvida
   // ANTES de tudo porque é o escopo das consultas seguintes.
@@ -522,7 +588,7 @@ export async function criarLeadDeWhatsapp(input: {
   await responsavelDaEmpresa(db, input.responsavelId);
 
   const contact = await encontrarOuCriarContact({
-    nome: input.nome,
+    nome,
     telefone: input.telefone,
     companyId,
   });

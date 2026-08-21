@@ -1,7 +1,12 @@
 import { prismaDaEmpresa } from "@/core/tenancy/escopo";
 import { registrarAuditoria } from "@/core/audit/log";
 import { normalizarTelefone } from "@/core/leads/dedupe";
-import { camposCadastraisSchema, type CamposCadastrais } from "./schema";
+import {
+  camposCadastraisSchema,
+  checarEmail,
+  checarNome,
+  type CamposCadastrais,
+} from "./schema";
 import type { Contact } from "@prisma/client";
 
 /** O cliente Prisma já amarrado a uma empresa. */
@@ -60,34 +65,23 @@ type ClienteDaEmpresa = ReturnType<typeof prismaDaEmpresa>;
 /** Erro esperado e seguro de mostrar na tela — mesmo papel de `UsuarioInvalidoError`. */
 export class ContatoInvalidoError extends Error {}
 
-const MAX_NOME = 120;
-const MAX_EMAIL = 254;
-
+/**
+ * As regras de `nome` e `email` moram em `./schema.ts` desde a Fase 2 da
+ * auditoria de 2026-08-21, e o motivo está lá: elas eram privadas deste
+ * arquivo, e `core/leads/service.ts` criava `Contact` por outro caminho sem
+ * nenhuma delas (achado 18). O que sobra aqui é a tradução para o erro de
+ * domínio DESTE módulo — `leads/service.ts` faz a mesma tradução para o dele.
+ */
 function validarNome(bruto: string): string {
-  const nome = bruto.trim();
-  if (nome.length === 0) throw new ContatoInvalidoError("O nome é obrigatório.");
-  if (nome.length > MAX_NOME) {
-    throw new ContatoInvalidoError(`O nome pode ter no máximo ${MAX_NOME} caracteres.`);
-  }
-  return nome;
+  const checado = checarNome(bruto);
+  if (!checado.ok) throw new ContatoInvalidoError(checado.mensagem);
+  return checado.valor;
 }
 
-/**
- * E-mail é opcional aqui (ao contrário de `User`): muito lead de WhatsApp
- * chega só com telefone, e exigir e-mail obrigaria a inventar um. String
- * vazia vira `null`, não `""` — senão a coluna passa a ter dois jeitos de
- * dizer "não tem", e toda consulta futura precisa lembrar dos dois.
- */
 function validarEmail(bruto: string | undefined): string | null {
-  const email = bruto?.trim().toLowerCase() ?? "";
-  if (email.length === 0) return null;
-  if (email.length > MAX_EMAIL) {
-    throw new ContatoInvalidoError(`O e-mail pode ter no máximo ${MAX_EMAIL} caracteres.`);
-  }
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-    throw new ContatoInvalidoError("E-mail inválido.");
-  }
-  return email;
+  const checado = checarEmail(bruto);
+  if (!checado.ok) throw new ContatoInvalidoError(checado.mensagem);
+  return checado.valor;
 }
 
 /**
