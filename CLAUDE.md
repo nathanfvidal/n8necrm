@@ -81,6 +81,25 @@ que dependem dela — ver `docs/superpowers/specs/2026-08-19-n8necrm-fundacao-de
    que motivaram a pergunta (atribuição, etiquetas, respostas prontas, notas,
    CSAT) viram ciclo próprio dentro deste modelo de dados. Instagram Direct sai
    pela Graph API que o Ciclo 2 já liga para a Meta Cloud API.
+10. **O produto é um CRM com o WhatsApp como canal. `nathanfvidal/zapz`
+    considerado como base alternativa e recusado** (2026-08-21). Medido no
+    repositório: 63.427 linhas, 51 tabelas, 36 Edge Functions, RLS de verdade
+    (36 arquivos habilitam, 197 políticas) — e **zero testes**, último commit
+    em 2026-03-07, e o dono não sabe se ainda sobe. Como *produto de WhatsApp*
+    ele é mais completo que este: tem `embedded-signup` da Meta, campanhas com
+    opt-out, agente com RAG, CSAT, operadores com permissão, push e cobrança
+    por uso. **O que não transfere é o que importa:** ele é SPA Vite +
+    Supabase, com toda a autorização em política RLS, contra Next.js
+    renderizado no servidor com Prisma e escopo obrigatório aqui — portar é
+    reescrever, e os 1.679 testes não atravessam. E os modelos de tenancy são
+    incompatíveis: `crm_deals` usa `auth.uid() = user_id`, ou seja **o negócio
+    pertence a uma pessoa e a equipe não enxerga**, o oposto dos oito ciclos
+    que tornaram `companyId` obrigatório aqui.
+    **O zapz continua valendo como REFERÊNCIA**, e a mais útil que existe para
+    o Ciclo 2b: `supabase/functions/embedded-signup/` e
+    `supabase/functions/whatsapp-api-v2/` já resolvem o onboarding oficial da
+    Meta, que é a parte mais chata da API oficial. Também tem
+    `source: 'ctwa'` em `crm_deals` — atribuição de clique-para-WhatsApp.
 
 ## Armadilhas conhecidas
 
