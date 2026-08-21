@@ -13,6 +13,7 @@ import {
   excluirEtapa,
   EtapaInvalidaError,
 } from "./service";
+import { direcaoDaEtapaSchema } from "./schema";
 
 /**
  * Server Actions da gestão do funil.
@@ -127,7 +128,19 @@ export async function moverEtapaNaOrdemAction(dados: {
 }): Promise<ResultadoAcao> {
   try {
     const autor = await exigirGestorDoFunil();
-    await moverNaOrdem({ ...dados, autorId: autor.id, companyId: autor.companyId });
+    // Conferência de RUNTIME, e não só a anotação de tipo: a anotação some na
+    // compilação e esta função responde a qualquer POST. Ver
+    // `direcaoDaEtapaSchema`.
+    const direcao = direcaoDaEtapaSchema.safeParse(dados.direcao);
+    if (!direcao.success) {
+      throw new EtapaInvalidaError("Direção inválida: use 'cima' ou 'baixo'.");
+    }
+    await moverNaOrdem({
+      etapaId: dados.etapaId,
+      direcao: direcao.data,
+      autorId: autor.id,
+      companyId: autor.companyId,
+    });
   } catch (erro) {
     return paraResultadoErro(erro, "Não foi possível reordenar o funil. Tente novamente.");
   }

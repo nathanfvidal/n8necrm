@@ -5,6 +5,7 @@ import type { CanalConexao } from "@prisma/client";
 import { prismaDaEmpresa } from "@/core/tenancy/escopo";
 import { cifrar, PROPOSITO_APIKEY_CONEXAO } from "@/core/cofre";
 import { registrarAuditoria } from "@/core/audit/log";
+import { conferirDestino } from "./destino";
 
 import { gerarWebhookToken, hashWebhookToken } from "./webhook-token";
 
@@ -119,12 +120,14 @@ function validarCampos(
     );
   }
 
-  const url = (dominio ?? "").trim();
-  if (!/^https?:\/\/[^\s/]+/.test(url)) {
-    throw new ConexaoInvalidaError(
-      `O domínio precisa ser uma URL começando com http:// ou https:// (recebido: ${JSON.stringify(url)}).`
-    );
-  }
+  // A regex que morreu aqui era `/^https?:\/\/[^\s/]+/`, e ela aceitava
+  // `http://localhost:8080` e `http://169.254.169.254` — o endereço de
+  // metadados das nuvens. Achado da auditoria de 2026-08-21, fora da checklist:
+  // um ADMIN (que num sistema multiempresa é um CLIENTE, não quem opera a
+  // infraestrutura) podia apontar a conexão para dentro da rede do servidor e
+  // usar o CRM como proxy. O porquê de cada recusa está em `./destino`.
+  const destino = conferirDestino(dominio ?? "");
+  if (!destino.ok) throw new ConexaoInvalidaError(destino.motivo);
 
   const inst = (instancia ?? "").trim();
   if (inst.length === 0) {
@@ -136,8 +139,8 @@ function validarCampos(
 
   // Barra no fim produziria `//message/sendText` no envio. O adapter já apara
   // (`replace(/\/$/, "")`), mas aparar na GRAVAÇÃO evita que a tela mostre uma
-  // coisa e o gateway use outra.
-  return { dominio: url.replace(/\/$/, ""), instancia: inst };
+  // coisa e o gateway use outra. Quem apara agora é `conferirDestino`.
+  return { dominio: destino.url, instancia: inst };
 }
 
 /**

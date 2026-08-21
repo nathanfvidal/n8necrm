@@ -48,3 +48,22 @@ export const etapaSchema = z.object({
 });
 
 export type CamposDaEtapa = z.infer<typeof etapaSchema>;
+
+/**
+ * A direção de `moverEtapaNaOrdemAction`.
+ *
+ * Achado menor da auditoria de 2026-08-21: o parâmetro era tipado
+ * `"cima" | "baixo"` e nada o conferia em RUNTIME. Anotação de tipo some na
+ * compilação, e Server Action é endpoint HTTP público — `moverNaOrdem` tratava
+ * qualquer valor diferente de `"cima"` como `"baixo"`.
+ *
+ * O dano prático é baixo (o pior caso é a etapa andar para o lado errado, com
+ * o mesmo escopo de empresa e a mesma permissão de ADMIN), e é exatamente por
+ * isso que vale fechar agora: um campo sem validação de runtime num endpoint
+ * público é uma classe de defeito que este projeto já pagou caro — o `typeof`
+ * em `autorizarCredenciais` nasceu do mesmo jeito, e lá o resultado era 500
+ * num endpoint aberto.
+ */
+export const direcaoDaEtapaSchema = z.enum(["cima", "baixo"]);
+
+export type DirecaoDaEtapa = z.infer<typeof direcaoDaEtapaSchema>;

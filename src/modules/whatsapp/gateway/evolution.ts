@@ -44,7 +44,14 @@ const evolutionDataSchema = z
     key: evolutionMessageKeySchema,
     message: evolutionMessageContentSchema,
     messageType: z.string().optional(),
-    pushName: z.string().optional(),
+    // `.max()` acrescentado na Fase 2 da auditoria de 2026-08-21 (achado menor
+    // do mesmo levantamento do SSRF). O webhook e um endpoint PUBLICO, e
+    // `pushName` e o nome de perfil que o REMETENTE escolhe: sem teto, ele
+    // decide o tamanho de `Conversation.nomeExibicao` e, por ele, de toda
+    // tela que lista conversa. 120 e folgado para nome de perfil de WhatsApp
+    // (o app limita bem abaixo disso) e fecha o campo como entrada de
+    // tamanho controlado por terceiro.
+    pushName: z.string().max(120).optional(),
     messageTimestamp: z.union([z.number(), z.string()]).optional(),
   })
   .passthrough();
@@ -332,6 +339,21 @@ export class EvolutionGateway implements WhatsappGateway {
 
     const resposta = await fetch(url, {
       method: "POST",
+      // A OUTRA METADE da defesa de SSRF de `core/conexoes/destino.ts`.
+      //
+      // Lá, o destino gravado e conferido: HTTPS, host publico, nada de faixa
+      // interna. Aqui, a fuga classica que aquela conferencia nao alcanca — o
+      // host publico responde `302 Location: http://169.254.169.254/...` e o
+      // `fetch`, que segue redirecionamento por PADRAO, entrega a requisicao
+      // (e a apikey no header) ao endereco de metadados da nuvem. A validacao
+      // do que foi digitado nao tem como prever para onde o servidor do outro
+      // lado vai mandar depois.
+      //
+      // `"error"` e nao `"manual"`: a Evolution API v2 nao redireciona neste
+      // endpoint, entao um `302` aqui e anomalia — falhar alto e o
+      // comportamento certo, e nao seguir em silencio um destino que ninguem
+      // conferiu.
+      redirect: "error",
       headers: {
         "Content-Type": "application/json",
         apikey: this.config.apiKey,
