@@ -33,7 +33,8 @@ import { clientConfigSchema } from "./client.schema";
  *
  * Validar em escopo de módulo já derrubou o deploy deste projeto uma vez: o
  * módulo `whatsapp` validava VARIÁVEIS DE AMBIENTE na importação, e
- * `next build` fazia a validação rodar sem elas na Vercel. Aqui é seguro pelo
+ * `next build` fazia a validação rodar sem elas na Vercel (o deploy de
+ * 2026-08, quando o projeto ainda era hospedado lá). Aqui é seguro pelo
  * motivo oposto — os valores estão neste arquivo versionado, não no ambiente,
  * e não há como faltarem no build. É essa propriedade que faz o arquivo ser o
  * padrão e o banco a sobreposição, e não o contrário.

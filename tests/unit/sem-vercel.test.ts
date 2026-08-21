@@ -13,15 +13,18 @@
 // funcionar num lugar. Nada mais quebraria: instala, compila, roda em
 // desenvolvimento, e a descoberta acontece no deploy fora da Vercel.
 //
-// ## O que NÃO está aqui, e é decisão
+// ## O cabeçalho de IP, que era a pendência declarada aqui
 //
-// `x-vercel-forwarded-for`, em `src/lib/ip.ts`, continua sendo lido e continua
-// tendo precedência sobre `x-real-ip` e `x-forwarded-for`. Isso é uma pendência
-// REPORTADA ao dono no relatório do Ciclo 2d, não um esquecimento: fora da
-// Vercel ninguém sobrescreve esse cabeçalho, então ele passa a ser forjável, e
-// qual cabeçalho confiar depende do proxy que ficar na frente — decisão que
-// este ciclo não tem como tomar. Uma varredura que reprovasse aquele arquivo
-// hoje só ensinaria a suíte a ser silenciada.
+// Este bloco dizia que `src/lib/ip.ts` continuava lendo `x-vercel-forwarded-for`
+// com precedência, como pendência REPORTADA ao dono. Ela foi FECHADA na Task 8
+// do mesmo ciclo: nenhum cabeçalho é lido até `IP_CABECALHO_CONFIAVEL` nomear o
+// que a borda sobrescreve. O nome da plataforma continua aparecendo naquele
+// arquivo, mas só como EXEMPLO de valor da variável e como relato do que
+// quebrou — nunca mais como cabeçalho que o código presume não forjável.
+//
+// Por isso a varredura de leitura de ambiente abaixo é por `process.env.VERCEL`,
+// e não pelo nome da plataforma em qualquer lugar: o que não pode voltar é o
+// código DEPENDER da plataforma, não a prosa citá-la.
 //
 // A varredura é do TEXTO sem comentário, pelo motivo de sempre nesta base
 // (`tests/unit/helpers/codigo-fonte.ts`): a prosa que EXPLICA a saída da Vercel
@@ -107,6 +110,31 @@ describe("a Vercel saiu, e continua fora", () => {
     const todas = Object.keys({ ...pkg.dependencies, ...pkg.devDependencies });
 
     expect(todas.filter((nome) => nome === "vercel" || nome.startsWith(ESCOPO))).toEqual([]);
+  });
+
+  it("nenhum codigo LE uma variavel de ambiente da plataforma", () => {
+    // `VERCEL_ENV` estava no meio da cadeia de fallback do rótulo do Sentry
+    // (`src/instrumentation.ts`) e saiu no Ciclo 2d. Uma variável que nunca mais
+    // vai existir dentro de um `??` não quebra nada — ela só faz o próximo
+    // leitor sair procurando onde é definida, e não achar. As da plataforma vêm
+    // todas com o mesmo prefixo (`VERCEL`, `VERCEL_ENV`, `VERCEL_URL`,
+    // `VERCEL_REGION`), então um prefixo pega a família inteira.
+    //
+    // A varredura é do texto SEM comentário: o parágrafo que explica por que
+    // `VERCEL_ENV` saiu precisa poder citá-la pelo nome.
+    const culpados: string[] = [];
+    for (const diretorio of DIRETORIOS) {
+      for (const arquivo of arquivosDeCodigo(resolve(RAIZ, diretorio))) {
+        const codigo = semComentarios(readFileSync(arquivo, "utf8"));
+        if (/process\.env\.VERCEL/.test(codigo)) culpados.push(relativoPosix(arquivo));
+      }
+    }
+
+    expect(
+      culpados,
+      "variavel de ambiente da plataforma lida em codigo: fora da Vercel ela nunca existe, " +
+        "entao o ramo que depende dela e um ramo morto que parece vivo."
+    ).toEqual([]);
   });
 
   it("vercel.json nao existe", () => {

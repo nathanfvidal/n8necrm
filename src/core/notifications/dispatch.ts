@@ -297,8 +297,14 @@ export async function podarNotificacoes(
 /**
  * Mesma poda probabilística do limitador de taxa
  * (`core/rate-limit/limiter.ts`), pelo mesmo motivo: cron exigiria rota nova,
- * segredo próprio e configuração no painel da Vercel, e correção que depende
- * de configuração pode nunca entrar em vigor. Aqui vale sozinha.
+ * segredo próprio e alguém configurando um agendador, e correção que depende de
+ * configuração pode nunca entrar em vigor. Aqui vale sozinha.
+ *
+ * O argumento original citava "o painel da Vercel". A Vercel saiu no Ciclo 2d e
+ * ele sobreviveu à troca inteiro, porque nunca foi sobre AQUELA plataforma — o
+ * porquê longo está no bloco de `CHANCE_DE_PODA` do limitador, inclusive por
+ * que o laço de `npm run fila:worker`, que existe desde o Ciclo 2d, não passou
+ * a ser o lugar disto.
  *
  * O gancho é a listagem porque ela roda a cada navegação sob o layout do
  * painel — é o caminho frequente. 1% mantém a tabela sob controle deixando 99

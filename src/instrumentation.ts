@@ -88,13 +88,18 @@ export async function register() {
     // Observabilidade que mente sobre a origem é pior que não ter, porque a
     // reação a "erro em produção" é diferente da reação a "erro no meu teste".
     //
-    // `VERCEL_ENV` só existe dentro da Vercel e vale `production`, `preview` ou
-    // `development`. Fora dela é a máquina de alguém — a menos que um deploy
-    // próprio declare `SENTRY_ENVIRONMENT` de propósito.
+    // `SENTRY_ENVIRONMENT` e depois `"local"`. `VERCEL_ENV` estava no meio da
+    // cadeia e saiu no Ciclo 2d junto com a plataforma: uma variável que nunca
+    // mais vai existir dentro de um fallback é ruído que faz o próximo leitor
+    // sair procurando onde ela é definida — e não achar.
+    //
+    // Consequência direta da saída, e ela é do DONO: sem `SENTRY_ENVIRONMENT`
+    // definida no deploy, TODO evento de produção chega ao painel rotulado
+    // `local`. Está na lista de ações pendentes em `docs/ESTADO.md`.
     //
     // Para não mandar nada da máquina local, basta remover `SENTRY_DSN` do
     // `.env`: `register()` retorna antes de inicializar.
-    environment: process.env.SENTRY_ENVIRONMENT ?? process.env.VERCEL_ENV ?? "local",
+    environment: process.env.SENTRY_ENVIRONMENT ?? "local",
 
     /**
      * Último portão antes do envio. O SDK não olha dentro do TEXTO do erro, e
