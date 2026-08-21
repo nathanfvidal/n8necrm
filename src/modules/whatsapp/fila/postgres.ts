@@ -324,3 +324,92 @@ export async function podarJobsMortos(
   });
   return count;
 }
+
+/**
+ * Há quanto tempo a fila pode ficar parada antes de isso ser FALHA.
+ *
+ * O piso não é arbitrário: um turno legítimo pode consumir
+ * `TEMPO_MAX_TURNO_MS` (60s, em `./consumidor.ts`) e ser reentregue depois de
+ * `RETRY_APOS_MS` (30s). Um limiar abaixo disso acusaria trabalho normal, e
+ * vigia que dá alarme falso é vigia que alguém desliga — depois disso ela não
+ * protege mais nada. Cinco minutos é folga de mais de 3x sobre o pior caso
+ * legítimo, e ainda assim é uma fração do tempo que alguém levaria para
+ * reparar sozinho que o WhatsApp emudeceu.
+ *
+ * `tests/unit/fila-saude.test.ts` LÊ as três constantes e afirma a ordem em
+ * vez de repetir os números — se alguém subir `TEMPO_MAX_TURNO_MS`, o caso
+ * morde aqui.
+ */
+export const LIMIAR_FILA_PARADA_MS = 5 * 60_000;
+
+/** O retrato que `medirSaudeDaFila` devolve. */
+export interface SaudeDaFila {
+  /** Jobs prontos para serem pegos AGORA e que ninguém pegou. */
+  prontos: number;
+  /** Idade do job pronto mais velho. `null` quando não há nenhum pronto. */
+  idadeDoMaisVelhoMs: number | null;
+  /** Jobs que morreram na última hora — envenenamento, não parada. */
+  mortosRecentes: number;
+}
+
+/**
+ * A pergunta que `systemctl is-active` NÃO responde.
+ *
+ * ## Por que a vigia olha para o efeito, e não para o processo
+ *
+ * `systemctl is-active` responde `active` para um processo que EXISTE. Um
+ * worker preso numa consulta que não volta existe, responde `active`, e não
+ * drena nada — e o modo de falha que `.env.example` chama de pior possível
+ * ("mensagem entra, vira linha em TurnoJob, e NUNCA é respondida, sem erro
+ * aparecer em lugar nenhum") acontece exatamente assim. Só o banco sabe.
+ *
+ * ## Por que ela vive AQUI, e não num arquivo novo
+ *
+ * Esta consulta é cross-tenant por construção — a pergunta é "há job parado de
+ * QUALQUER empresa", a mesma de `reivindicarJob` e pela mesma razão. Este
+ * arquivo já é a exceção NOMEADA de prisma cru no `eslint.config.mjs`
+ * (`EXCECAO_PERMANENTE`, conferida em 2026-08-21), com a justificativa escrita
+ * no cabeçalho. Pôr a consulta num arquivo novo exigiria uma exceção nova para
+ * a MESMA justificativa, e `tests/unit/catraca-prisma-cru.test.ts` gira num
+ * sentido só.
+ *
+ * ## Três medidas, e não uma
+ *
+ * `prontos: 0` é o estado normal de madrugada, não é falha; falha é
+ * `idadeDoMaisVelhoMs` acima de `LIMIAR_FILA_PARADA_MS`. `mortosRecentes` é a
+ * terceira e é diferente das outras duas: job envenenado que morre na última
+ * entrega SOME da contagem de prontos, então uma fila que mata tudo o que
+ * entra teria a assinatura idêntica à da madrugada tranquila.
+ */
+export async function medirSaudeDaFila(): Promise<SaudeDaFila> {
+  const agora = new Date();
+
+  // "Pronto" tem três condições, e as três são as MESMAS que o `WHERE` de
+  // `reivindicarJob` usa — de propósito. Uma vigia que definisse "pronto" com
+  // outro critério responderia sobre uma fila que não é a que o worker vê. O
+  // caso "a consulta do MAIS VELHO usa o MESMO filtro da contagem" trava as
+  // duas metades daqui uma contra a outra.
+  const onde = {
+    mortoEm: null,
+    disponivelEm: { lte: agora },
+    OR: [{ leaseAte: null }, { leaseAte: { lt: agora } }],
+  };
+
+  const [prontos, maisVelho, mortosRecentes] = await Promise.all([
+    prisma.turnoJob.count({ where: onde }),
+    prisma.turnoJob.findFirst({
+      where: onde,
+      orderBy: { criadoEm: "asc" },
+      select: { criadoEm: true },
+    }),
+    prisma.turnoJob.count({
+      where: { mortoEm: { gte: new Date(agora.getTime() - 60 * 60_000) } },
+    }),
+  ]);
+
+  return {
+    prontos,
+    idadeDoMaisVelhoMs: maisVelho ? agora.getTime() - maisVelho.criadoEm.getTime() : null,
+    mortosRecentes,
+  };
+}
