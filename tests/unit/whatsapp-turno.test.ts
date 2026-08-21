@@ -98,10 +98,13 @@ async function limparDadosDeTeste() {
 describe("processarTurno", () => {
   beforeEach(async () => {
     EMPRESA = await companyIdSemeada();
-    // Cada chamada precisa de um idExterno ÚNICO (a coluna é @unique) — um
-    // teste que envia mais de uma mensagem de saída (ex.: texto + fallback
-    // de mídia) colidiria na constraint se todas as chamadas devolvessem o
-    // mesmo valor fixo.
+    // Cada chamada precisa de um idExterno ÚNICO — um teste que envia mais de
+    // uma mensagem de saída (ex.: texto + fallback de mídia) colidiria na
+    // constraint se todas as chamadas devolvessem o mesmo valor fixo. Desde o
+    // Ciclo 1e a chave é `@@unique([companyId, idExterno])` e não mais
+    // `idExterno @unique`, e isto NÃO afrouxa nada aqui: todas as mensagens
+    // deste arquivo nascem na empresa de `companyIdSemeada()`, uma só, onde a
+    // unicidade continua valendo integralmente.
     enviarTextoMock
       .mockReset()
       .mockImplementation(async () => ({ idExterno: `${PREFIXO}saida-${crypto.randomUUID()}` }));

@@ -218,6 +218,15 @@ describe("ingerirMensagem", () => {
     "idempotência: o MESMO idExterno submetido duas vezes cria exatamente UMA WhatsappMessage, sem " +
       "incrementar bufferSeq na segunda vez (prova a defesa contra redelivery do webhook)",
     async () => {
+      // Desde o Ciclo 1e a chave que sustenta este caso é
+      // `@@unique([companyId, idExterno])`, não mais `idExterno @unique`. Este
+      // é o lado FUNÇÃO da prova: a reentrega devolve `duplicada: true` e não
+      // incrementa `bufferSeq`. O lado BANCO — duas empresas com o mesmo
+      // `idExterno` coexistindo, e a segunda gravação dentro da mesma empresa
+      // sendo `P2002` — está em `tests/unit/whatsapp-isolamento.test.ts`,
+      // `describe` "o mesmo número em duas empresas". Uma sem a outra deixaria
+      // passar tanto "apaguei a constraint" quanto "escopei e quebrei o
+      // tratamento dela".
       const waId = `${PREFIXO}5511999990003`;
       const idExterno = `${PREFIXO}msg-duplicada-${crypto.randomUUID()}`;
       const mensagem = evento({ waId, idExterno });
@@ -234,8 +243,20 @@ describe("ingerirMensagem", () => {
       // bufferSeq não avança na redelivery — continua 1, não 2.
       expect(segunda.bufferSeq).toBe(1);
 
+      // Contagem SEM empresa no `where`, de propósito: com a chave composta,
+      // contar só dentro de `EMPRESA` deixaria passar uma segunda linha gravada
+      // em qualquer outra empresa. O oráculo continua sendo "uma linha com este
+      // `idExterno` no banco inteiro" — e o `crypto.randomUUID()` no valor é o
+      // que torna isso afirmável sem depender de a tabela estar vazia.
       const total = await prisma.whatsappMessage.count({ where: { idExterno } });
       expect(total).toBe(1);
+
+      // E ela é da empresa do contexto: dedup que sobrevive trocando o dono da
+      // linha seria dedup "funcionando" com roteamento quebrado — o defeito que
+      // a §4.4 do spec do Ciclo 1e recusa por escrito.
+      const unica = await prisma.whatsappMessage.findFirstOrThrow({ where: { idExterno } });
+      expect(unica.companyId).toBe(EMPRESA);
+      expect(unica.conversationId).toBe(primeira.conversationId);
 
       const conversation = await prisma.conversation.findUniqueOrThrow({
         where: { id: primeira.conversationId },

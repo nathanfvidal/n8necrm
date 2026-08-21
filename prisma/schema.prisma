@@ -728,11 +728,13 @@ model WhatsappConnection {
 /**
  * Uma mensagem individual (recebida ou enviada) dentro de uma `Conversation`.
  * `idExterno` é o id que a Evolution atribui à mensagem (`data.key.id` no
- * payload do webhook) — é a chave de idempotência que faz uma redelivery do
- * mesmo webhook (retry da própria Evolution, ou reenvio manual) não duplicar
- * a mensagem no banco: `ingest.ts` trata a violação dessa constraint UNIQUE
- * exatamente como `encontrarOuCriarContact` trata a corrida em
- * `Contact.telefone` (core/leads/dedupe.ts) — "alguém já gravou isso,
+ * payload do webhook) — e, desde o Ciclo 1e, compõe
+ * `@@unique([companyId, idExterno])`: é a chave de idempotência que faz uma
+ * redelivery do mesmo webhook (retry da própria Evolution, ou reenvio manual)
+ * não duplicar a mensagem no banco, DENTRO da empresa, que é a unidade em que a
+ * reentrega acontece. `ingest.ts` trata a violação dessa constraint UNIQUE
+ * exatamente como `encontrarOuCriarContact` trata a corrida em `Contact`
+ * (`[companyId, telefone]`, core/leads/dedupe.ts) — "alguém já gravou isso,
  * devolve sem duplicar" em vez de deixar o erro cru do Postgres subir.
  * `processadoEm` marca quando esta mensagem ENTRADA foi incluída numa
  * resposta gerada por `turno.ts` — mensagens SAIDA já nascem com
@@ -746,7 +748,7 @@ model WhatsappMessage {
   company        Company         @relation(fields: [companyId], references: [id])
   conversationId String
   conversation   Conversation    @relation(fields: [conversationId], references: [id], onDelete: Cascade)
-  idExterno      String          @unique
+  idExterno      String
   direcao        WhatsappDirecao
   autor          WhatsappAutor
   tipo           WhatsappTipo
@@ -754,6 +756,40 @@ model WhatsappMessage {
   processadoEm   DateTime?
   criadoEm       DateTime        @default(now())
 
+  /// Idempotência POR EMPRESA (Ciclo 1e). Era `idExterno @unique`, GLOBAL.
+  ///
+  /// ## Por que `companyId`, e não `conversationId`
+  ///
+  /// A chave tem de casar com a consulta que a lê. O `catch` de `P2002` em
+  /// `ingest.ts` faz `whatsappMessage.findFirst({ where: { idExterno } })` num
+  /// cliente ESCOPADO — ou seja, `WHERE "companyId" = $1 AND "idExterno" = $2`,
+  /// que é exatamente esta chave. Uma chave por `conversationId` deixaria o
+  /// mesmo `idExterno` existir duas vezes dentro da mesma empresa, aquele
+  /// `findFirst` devolveria uma linha ARBITRÁRIA entre as duas, e o
+  /// `findFirstOrThrow` seguinte devolveria a conversa errada para o job de
+  /// fila. Dedup "funcionando" com roteamento quebrado é pior que dedup
+  /// falhando alto.
+  ///
+  /// ## Por que não continuar global
+  ///
+  /// A unidade de reentrega é a ENTREGA, e a entrega se resolve em empresa: o
+  /// webhook chega por uma `WhatsappConnection`, que tem `companyId`. Global
+  /// significava que o id de uma mensagem da empresa B bloqueava a gravação de
+  /// uma mensagem da A — e `gateway/evolution.ts` chega a inventar
+  /// `evolution-sem-id-<uuid>` quando o payload não traz `key.id`, então
+  /// confiar em unicidade global de um id de terceiro é a suposição que este
+  /// ciclo existe para desfazer.
+  ///
+  /// ## As duas metades, e onde cada uma mora
+  ///
+  /// `tests/unit/whatsapp-isolamento.test.ts`, `describe` "o mesmo número em
+  /// duas empresas": duas empresas com o mesmo `idExterno` coexistem, E a
+  /// segunda gravação do mesmo `idExterno` DENTRO da mesma empresa continua
+  /// sendo `P2002`. No nível da FUNÇÃO — reentrega devolvendo `duplicada: true`
+  /// sem incrementar `bufferSeq` — a prova é
+  /// `tests/unit/whatsapp-ingest.test.ts` ("idempotência: o MESMO idExterno
+  /// submetido duas vezes…"), que monta contexto de conexão de verdade.
+  @@unique([companyId, idExterno])
   // turno.ts filtra por (conversationId, direcao=ENTRADA, processadoEm=null)
   // a cada job — mesmo raciocínio do índice em Conversation.processandoAte.
   //

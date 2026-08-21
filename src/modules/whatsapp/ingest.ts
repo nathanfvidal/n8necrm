@@ -65,14 +65,17 @@ export interface ContextoDeIngestao {
  *
  * ## Idempotência (redelivery do webhook)
  *
- * `WhatsappMessage.idExterno` é `@unique` — é a chave de idempotência que
+ * `WhatsappMessage` tem `@@unique([companyId, idExterno])` (Ciclo 1e) — é a
+ * chave de idempotência DENTRO DA EMPRESA, que é a unidade em que a Evolution
+ * reentrega: o webhook chega por uma conexão, e a conexão tem empresa. Ela
  * garante que a MESMA mensagem, entregue duas vezes pela Evolution (retry
  * de rede dela, ou um reenvio manual do mesmo payload), nunca vira duas
  * linhas. Duas chamadas concorrentes com o mesmo `idExterno` podem ambas
  * passar da checagem inicial antes de qualquer uma commitar — o Postgres
  * permite só uma: a segunda colide na constraint UNIQUE e o Prisma traduz
  * isso em `P2002`. Tratamos exatamente como `encontrarOuCriarContact`
- * (core/leads/dedupe.ts) trata a mesma corrida em `Contact.telefone`:
+ * (core/leads/dedupe.ts) trata a mesma corrida em `Contact`
+ * (`[companyId, telefone]`):
  * "alguém já gravou isso" — buscamos a mensagem existente e devolvemos
  * `duplicada: true` com o `bufferSeq` ATUAL da conversa (sem incrementar de
  * novo), em vez de deixar o erro cru subir e a rota do webhook devolver
@@ -195,6 +198,12 @@ export async function ingerirMensagem(
       //
       // - `WhatsappMessage.idExterno` — redelivery do webhook. A mensagem já
       //   está gravada; devolvemos `duplicada: true` com o `bufferSeq` ATUAL.
+      //   A busca abaixo é escopada por empresa, o que é exatamente o par de
+      //   colunas da chave (`[companyId, idExterno]`, Ciclo 1e) — por isso ela
+      //   nunca devolve mensagem de outra empresa nem mensagem ambígua dentro
+      //   desta. Era esse casamento que uma chave por `conversationId` teria
+      //   quebrado: duas linhas elegíveis, `findFirst` escolhendo uma, e a
+      //   conversa errada indo para o job de fila.
       // - `Conversation.waId` — a corrida que o `upsert` resolvia no banco e
       //   que `findFirst` + `create` reabriu (ver o comentário lá em cima).
       //   Aqui a conversa acabou de nascer pela mão do concorrente, e ESTA

@@ -68,13 +68,13 @@ import {
  * com um banco falso. Este arquivo responde outra pergunta: "o módulo
  * `whatsapp` chega ao dado da outra empresa?". Essa só tem resposta contra
  * duas empresas de verdade, com FK e índice único de verdade. Desde o Ciclo 1e
- * `waId` é único POR EMPRESA (`@@unique([companyId, waId])`, `prisma/schema.prisma`)
- * — e é justamente por isso que o arquivo precisa do banco real: com a
- * unicidade composta, o BANCO deixou de ser a coisa que impede duas empresas de
- * se cruzarem no mesmo número, e quem impede passou a ser só o ESCOPO.
- * `idExterno` ainda é `@unique` GLOBAL neste commit — é a Task 4 do mesmo ciclo.
- * Os casos do `describe` "o mesmo número em duas empresas" travam essa
- * transição.
+ * `waId` e `idExterno` são únicos POR EMPRESA (`@@unique([companyId, waId])` e
+ * `@@unique([companyId, idExterno])`, `prisma/schema.prisma`) — e é justamente
+ * por isso que o arquivo precisa do banco real: com a unicidade composta, o
+ * BANCO deixou de ser a coisa que impede duas empresas de se cruzarem no mesmo
+ * número, e quem impede passou a ser só o ESCOPO. Os quatro casos do `describe`
+ * "o mesmo número em duas empresas" travam essa transição, aos pares: a
+ * coexistência entre empresas e a recusa dentro da mesma empresa.
  *
  * ## As DUAS metades, sempre
  *
@@ -731,5 +731,106 @@ describe("o mesmo número em duas empresas — o que o Ciclo 1e destravou", () =
       select: { id: true },
     });
     expect(daA.map((c) => c.id)).toEqual([CONVERSA_A]);
+  });
+
+  it("duas empresas podem ter mensagens com o MESMO `idExterno`", async () => {
+    // `idExterno` é `data.key.id` da Evolution — a chave de idempotência que
+    // faz a reentrega do mesmo webhook não virar duas linhas. Enquanto foi
+    // única GLOBAL, o id de uma mensagem da empresa B bloqueava a gravação de
+    // uma mensagem da A com o mesmo id, e a gravação da A é que virava `P2002`.
+    const idExternoCompartilhado = `${P}-ext-compartilhado`;
+
+    const naA = await prisma.whatsappMessage.create({
+      data: {
+        id: `${P}-msg-a-compartilhada`,
+        companyId: EMPRESA_A,
+        conversationId: CONVERSA_A,
+        idExterno: idExternoCompartilhado,
+        direcao: "ENTRADA",
+        autor: "CLIENTE",
+        tipo: "TEXTO",
+        texto: "da A",
+      },
+    });
+
+    const naB = await prisma.whatsappMessage.create({
+      data: {
+        id: `${P}-msg-b-compartilhada`,
+        companyId: EMPRESA_B,
+        conversationId: CONVERSA_B,
+        idExterno: idExternoCompartilhado,
+        direcao: "ENTRADA",
+        autor: "CLIENTE",
+        tipo: "TEXTO",
+        texto: "da B",
+      },
+    });
+
+    expect(naA.companyId).toBe(EMPRESA_A);
+    expect(naB.companyId).toBe(EMPRESA_B);
+    expect(naA.id).not.toBe(naB.id);
+    // Cada uma continua pendurada na conversa da própria empresa — se o
+    // `conversationId` tivesse vazado, o job de fila processaria o turno da
+    // conversa errada, que é o dano que a §4.4 do spec nomeia.
+    expect(naA.conversationId).toBe(CONVERSA_A);
+    expect(naB.conversationId).toBe(CONVERSA_B);
+  });
+
+  it("dentro da MESMA empresa o `idExterno` continua deduplicando — a reentrega não vira segunda linha", async () => {
+    // A metade que impede "resolver" o ciclo quebrando a idempotência. Esta é
+    // a REENTREGA da Evolution vista pelo banco: mesmo `idExterno`, mesma
+    // empresa, mesma conversa. Se a chave tivesse sido apagada em vez de
+    // escopada, o cliente receberia a resposta duas vezes.
+    //
+    // A prova no nível da FUNÇÃO (`ingerirMensagem` devolvendo
+    // `duplicada: true`, sem incrementar `bufferSeq`) mora em
+    // `tests/unit/whatsapp-ingest.test.ts` — ali existe conexão de verdade no
+    // contexto, que este arquivo não monta. As duas juntas cobrem a chave e o
+    // tratamento dela.
+    const idExternoDaA = `${P}-ext-reentrega`;
+
+    await prisma.whatsappMessage.create({
+      data: {
+        id: `${P}-msg-a-original`,
+        companyId: EMPRESA_A,
+        conversationId: CONVERSA_A,
+        idExterno: idExternoDaA,
+        direcao: "ENTRADA",
+        autor: "CLIENTE",
+        tipo: "TEXTO",
+        texto: "primeira entrega",
+      },
+    });
+
+    const erro = await prisma.whatsappMessage
+      .create({
+        data: {
+          id: `${P}-msg-a-reentregue`,
+          companyId: EMPRESA_A,
+          conversationId: CONVERSA_A,
+          idExterno: idExternoDaA,
+          direcao: "ENTRADA",
+          autor: "CLIENTE",
+          tipo: "TEXTO",
+          texto: "reentrega da mesma mensagem",
+        },
+      })
+      .then(() => null)
+      .catch((e: unknown) => e);
+
+    // Mesmo oráculo do caso de `waId`: `.rejects.toThrow()` sem argumento
+    // aceitaria qualquer erro, inclusive violação de FK. O código do Prisma
+    // para unicidade mais o nome `companyId` na mensagem provam que quem
+    // recusou foi a chave COMPOSTA, e não um resto de
+    // `WhatsappMessage_idExterno_key`.
+    expect(erro).toBeInstanceOf(Error);
+    expect((erro as { code?: string }).code).toBe("P2002");
+    expect((erro as Error).message).toContain("companyId");
+
+    const daA = await prisma.whatsappMessage.findMany({
+      where: { companyId: EMPRESA_A, idExterno: idExternoDaA },
+      select: { id: true },
+    });
+    expect(daA.map((m) => m.id)).toEqual([`${P}-msg-a-original`]);
   });
 });
