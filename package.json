@@ -12,6 +12,7 @@
     "test:watch": "vitest",
     "seed:demo": "tsx prisma/seed-demo.ts",
     "seed:demo:limpar": "tsx prisma/seed-demo-limpar.ts",
+    "fila:worker": "tsx --conditions=react-server scripts/fila-worker.ts",
     "test:e2e": "tsx scripts/e2e-port-guard.ts && playwright test",
     "typecheck": "tsc --noEmit"
   },

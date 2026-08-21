@@ -6,8 +6,6 @@ import { readFileSync } from "node:fs";
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
-vi.mock("server-only", () => ({}));
-
 const reivindicarJobMock = vi.fn();
 const concluirJobMock = vi.fn();
 const falharJobMock = vi.fn();

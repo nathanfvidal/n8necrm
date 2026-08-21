@@ -1,5 +1,13 @@
-import "server-only";
-
+// Sem `import "server-only"` aqui, mesma divisão de `./postgres.ts` e
+// `./vercel.ts` — a marcação da fila mora em `./index.ts`.
+//
+// Aqui ela teria uma segunda razão para não estar: este módulo é a porta de
+// entrada de `scripts/fila-worker.ts`, um processo Node comum. Isso NÃO é o que
+// resolve o problema, e vale dizer, porque parece: `../turno` carrega a marcação
+// e é importado logo abaixo, então o worker precisa da condição
+// `--conditions=react-server` de qualquer jeito (o porquê está no cabeçalho do
+// worker, medido). Não pôr a marcação neste arquivo é só não acrescentar mais
+// um motivo para um problema que já existe.
 import { processarTurno } from "../turno";
 import {
   concluirJob,
