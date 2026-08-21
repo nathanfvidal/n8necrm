@@ -93,15 +93,18 @@ model User {
   /// em `src/` recebem o usuário de `usuarioAtual()`/`usuarioAtualOuLogin()`,
   /// que resolve o papel pelo vínculo, verificado em 2026-08-19.
   ///
-  /// Por que ela ainda existe: três tentativas de derrubá-la em 2026-08-19
-  /// descobriram três grupos de leitores diferentes cada vez; a medição
-  /// final encontrou `papel` referenciado em ~80 arquivos, entre
-  /// componentes, páginas, testes e e2e. Derrubar a coluna é varredura
-  /// mecânica desses ~80 pontos, um ciclo próprio — não passo de tarefa
-  /// avulsa, e por isso não foi feito aqui.
+  /// Por que ela ainda existe, e por quanto tempo: o Ciclo 1f está
+  /// derrubando-a. Esta linha é o meio do caminho — `Role?` em vez de `Role`
+  /// é a metade EXPANSÃO de um expand/contract
+  /// (`20260821120000_user_papel_aceita_nulo`), e existe para que os 42
+  /// escritores possam sair um lote por vez sem `23502`. A medição que fechou
+  /// o inventário está em `.superpowers/sdd/medicao-user-papel.md`: 11
+  /// leitores e 42 escritores, em 32 arquivos, NENHUM leitor em `src/`. O
+  /// número "~80 arquivos" que este comentário trazia antes contava prosa e
+  /// `Membership.papel` junto.
   ///
   /// Código novo lê o papel de `Membership`, nunca daqui.
-  papel              Role
+  papel              Role?
   ativo              Boolean              @default(true)
   criadoEm           DateTime             @default(now())
   leadsAtribuidos    Lead[]               @relation("LeadResponsavel")
