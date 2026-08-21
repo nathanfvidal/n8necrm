@@ -46,7 +46,6 @@ describe("core/contacts", () => {
         nome: `Autor ${MARCA}`,
         email: "teste-contatos-autor@teste.local",
         senhaHash: "hash-fake-nao-usado-em-login",
-        papel: "ADMIN",
       },
     });
     autorId = autor.id;

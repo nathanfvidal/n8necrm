@@ -244,7 +244,6 @@ describe("aviso de conversa aguardando humano", () => {
         nome: `Ativo de outra empresa ${MARCA}`,
         email: `ativo-outra-empresa-${MARCA.toLowerCase()}@teste.invalid`,
         senhaHash: HASH_INERTE,
-        papel: "VENDEDOR",
         ativo: true,
       },
     });

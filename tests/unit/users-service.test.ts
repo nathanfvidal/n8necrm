@@ -51,19 +51,16 @@ describe("core/users — service", () => {
     // próprio papel" abaixo dependem disso), e sem vínculo eles veriam
     // "Usuário não encontrado" em vez da mensagem que estão provando.
     //
-    // `papel: "ADMIN"` também vai para `User` (não só para o `Membership`
-    // logo abaixo): a coluna `User.papel` foi derrubada e RESTAURADA nesta
-    // mesma tarefa como bridge temporário para leitores fora do escopo dela
-    // (`core/audit/alerta.ts` em produção, entre outros) — `criarUsuario`
-    // grava nas duas enquanto o bridge existir, e este `create` direto
-    // (fora do serviço) precisa fazer o mesmo para não ficar com a coluna
-    // NOT NULL sem valor.
+    // O papel vai SÓ para o `Membership` logo abaixo. A coluna espelho
+    // `User.papel`, que este `create` direto também precisava preencher
+    // enquanto ela fosse NOT NULL, deixou de ser escrita no Ciclo 1f — passou
+    // a aceitar nulo em 21f0912 e `criarUsuario` parou de gravá-la em f6e6eea,
+    // na mesma leva.
     const autor = await prisma.user.create({
       data: {
         nome: "Autor de teste (users service)",
         email: email("autor"),
         senhaHash: "hash-fake-nao-usado-em-login",
-        papel: "ADMIN",
       },
     });
     autorId = autor.id;

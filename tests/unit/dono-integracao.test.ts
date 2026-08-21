@@ -72,7 +72,6 @@ beforeAll(async () => {
       nome: `Dono ${MARCA}`,
       email: `dono-${MARCA.toLowerCase()}@teste.invalid`,
       senhaHash: hashInerte,
-      papel: "VENDEDOR",
       ativo: false,
     },
   });
@@ -81,7 +80,6 @@ beforeAll(async () => {
       nome: `Intruso ${MARCA}`,
       email: `intruso-${MARCA.toLowerCase()}@teste.invalid`,
       senhaHash: hashInerte,
-      papel: "VENDEDOR",
       ativo: false,
     },
   });

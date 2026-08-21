@@ -50,7 +50,6 @@ describe("registrarAuditoria", () => {
         nome: "Usuário de teste (audit log)",
         email: "teste-audit-log@teste.local",
         senhaHash: "hash-fake-nao-usado-em-login",
-        papel: "VENDEDOR",
         memberships: { create: { companyId, papel: "VENDEDOR" } },
       },
     });

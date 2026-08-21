@@ -94,35 +94,19 @@ const CHAMADA_DE_USER = new RegExp(
 );
 
 /**
- * Arquivos que ainda mencionam `papel` numa chamada a `prisma.user.*`, com a
- * tarefa do Ciclo 1f que os limpa.
+ * Arquivos que ainda mencionam `papel` numa chamada a `prisma.user.*`.
  *
- * A lista SÓ ENCOLHE — as duas asserções abaixo travam as duas direções:
- * arquivo que viola e não está listado reprova, e arquivo listado que já não
- * viola também reprova. A segunda é o que impede a lista de virar depósito.
+ * **ZERO, e é o valor final.** A lista nasceu com 29 no início do Ciclo 1f e
+ * foi esvaziada pelas Tasks 4, 7, 8, 9 e 10. Com ela vazia, "não cresceu" e
+ * "está vazia" viraram a mesma afirmação — mesmo estado em que
+ * `catraca-prisma-cru.test.ts` deixou `LINHA_DE_BASE_DE_IMPORTADORES_TEMPORARIOS`.
  *
- * Mesmo desenho da fila de conversão de `catraca-prisma-cru.test.ts`
- * (`LINHA_DE_BASE_DE_IMPORTADORES_TEMPORARIOS`, hoje em zero) e de `PERDOADAS`
- * em `migracoes-seguras.test.ts`: registrar dívida por nome, com prazo, em vez
- * de dar passagem em silêncio.
- *
- * A contagem inicial é 29 e vem de `.superpowers/sdd/medicao-user-papel.md`:
- * 32 arquivos de superfície menos os 3 que usam dublê sem `prisma.user.*`
- * (`usuario-ativo`, `lead-actions`, `task-actions`).
+ * **Entrada nova aqui não é conserto, é a coluna voltando.** As duas asserções
+ * abaixo travam as duas direções: arquivo que viola e não está listado reprova,
+ * e arquivo listado que já não viola também reprova. A segunda é o que impede a
+ * lista de virar depósito.
  */
-const EM_CONVERSAO: Record<string, string> = {
-  // Ciclo 1f, Task 10 — o restante das fixtures de unidade.
-  "tests/unit/alerta-atividade.test.ts": "Task 10",
-  "tests/unit/audit-log.test.ts": "Task 10",
-  "tests/unit/contacts-service.test.ts": "Task 10",
-  "tests/unit/dono-integracao.test.ts": "Task 10",
-  "tests/unit/notificacoes-poda.test.ts": "Task 10",
-  "tests/unit/session.test.ts": "Task 10",
-  "tests/unit/tasks.test.ts": "Task 10",
-  "tests/unit/users-service.test.ts": "Task 10",
-  "tests/unit/whatsapp-envio-por-conexao.test.ts": "Task 10",
-  "tests/unit/whatsapp-notificacoes.test.ts": "Task 10",
-};
+const EM_CONVERSAO: Record<string, string> = {};
 
 // ─────────────────────────────────────────────────────────────────────────
 // O analisador

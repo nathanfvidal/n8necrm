@@ -97,7 +97,6 @@ beforeAll(async () => {
       nome: `Suspeito ${MARCA}`,
       email: `suspeito-${MARCA.toLowerCase()}@teste.invalid`,
       senhaHash: HASH_INERTE,
-      papel: "VENDEDOR",
       ativo: true,
     },
   });
@@ -115,7 +114,6 @@ beforeAll(async () => {
       nome: `AdminA ${MARCA}`,
       email: `admina-${MARCA.toLowerCase()}@teste.invalid`,
       senhaHash: HASH_INERTE,
-      papel: "ADMIN",
       ativo: true,
     },
   });
@@ -124,7 +122,6 @@ beforeAll(async () => {
       nome: `AdminB ${MARCA}`,
       email: `adminb-${MARCA.toLowerCase()}@teste.invalid`,
       senhaHash: HASH_INERTE,
-      papel: "ADMIN",
       ativo: true,
     },
   });
@@ -219,10 +216,10 @@ describe("alerta de atividade destrutiva em rajada", () => {
   // Avisar o próprio suspeito não protege ninguém — só entrega que ele foi
   // percebido. Se o saboteur for ADMIN, os OUTROS admins é que precisam saber.
   it("o proprio autor NAO recebe alerta sobre si mesmo, mesmo sendo admin", async () => {
-    // `Membership.papel`, não só `User.papel`: é de lá que a consulta de
-    // destinatários lê hoje. Atualizar as duas colunas é o mesmo dual-write
-    // que `core/users/service.ts` faz em produção.
-    await prisma.user.update({ where: { id: idSuspeito }, data: { papel: "ADMIN" } });
+    // Só `Membership.papel`: é de lá que a consulta de destinatários lê
+    // (`core/audit/alerta.ts`, escopado por empresa desde 3744e64), e a coluna
+    // espelho `User.papel`, que este bloco também atualizava, deixou de ser
+    // escrita no Ciclo 1f. O `finally` desfaz só esta linha pelo mesmo motivo.
     await prisma.membership.updateMany({
       where: { userId: idSuspeito, companyId },
       data: { papel: "ADMIN" },
@@ -245,7 +242,6 @@ describe("alerta de atividade destrutiva em rajada", () => {
       expect(sobreEleMesmo).toHaveLength(0);
       expect(await alertasRecebidos()).toBe(2);
     } finally {
-      await prisma.user.update({ where: { id: idSuspeito }, data: { papel: "VENDEDOR" } });
       await prisma.membership.updateMany({
         where: { userId: idSuspeito, companyId },
         data: { papel: "VENDEDOR" },
@@ -352,7 +348,6 @@ describe("alerta de atividade destrutiva em rajada", () => {
         nome: `AdminOutraEmpresa ${MARCA}`,
         email: `admin-outra-empresa-${MARCA.toLowerCase()}@teste.invalid`,
         senhaHash: HASH_INERTE,
-        papel: "ADMIN",
         ativo: true,
       },
     });

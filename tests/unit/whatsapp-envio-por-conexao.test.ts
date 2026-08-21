@@ -160,13 +160,14 @@ beforeAll(async () => {
       nome: "Atendente do envio por conexão",
       email: `${USUARIO}@exemplo.invalido`,
       senhaHash: SENHA_FALSA,
-      papel: "ADMIN",
     },
   });
-  // O vínculo, e não `User.papel`, é o que define "pessoa desta empresa"
-  // (`User.papel` é espelho depreciado desde a8dd76a). Fixture que cria `User`
-  // sem `Membership` produz usuário sem empresa nenhuma — bug latente de
-  // e67e1e6.
+  // O vínculo é o que define "pessoa desta empresa", e desde o Ciclo 1f é a
+  // única coisa que define o papel: a coluna espelho `User.papel` (depreciada
+  // em a8dd76a) não é mais escrita por lugar nenhum do repositório — quem
+  // sustenta esse "nenhum" é `tests/unit/user-papel-nao-volta.test.ts`.
+  // Fixture que cria `User` sem `Membership` produz usuário sem empresa
+  // nenhuma — bug latente de e67e1e6.
   await prisma.membership.create({
     data: { userId: USUARIO, companyId: EMPRESA, papel: "ADMIN" },
   });

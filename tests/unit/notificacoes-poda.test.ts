@@ -57,7 +57,6 @@ beforeAll(async () => {
       nome: `Dono ${MARCA}`,
       email: `poda-${MARCA.toLowerCase()}@teste.invalid`,
       senhaHash: "$2b$10$invalidoinvalidoinvalidoinvalidoinvalidoinvalidoinvalidoinva",
-      papel: "VENDEDOR",
       ativo: false,
     },
   });

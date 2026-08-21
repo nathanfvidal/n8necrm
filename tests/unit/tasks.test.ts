@@ -174,7 +174,6 @@ describe("tarefas", () => {
           nome: `${PREFIXO_TESTE}Usuário Desativado`,
           email: `teste-tasks-desativado-${Date.now()}@teste.local`,
           senhaHash: "hash-fake-nunca-usado-em-login",
-          papel: "VENDEDOR",
           ativo: false,
         },
       });

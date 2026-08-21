@@ -57,18 +57,18 @@ describe("usuarioAtual — fix round 1/5 (CRITICAL): usuário desativado não po
     // papel do vínculo (VENDEDOR) abaixo — se `usuarioAtual()` algum dia
     // voltasse a ler `User.papel` em vez de `Membership.papel`, o teste
     // "retorna o usuário..." pegaria isso (papel devolvido seria ADMIN, não
-    // VENDEDOR). `User.papel` foi derrubada e RESTAURADA nesta mesma tarefa
-    // — o DROP revelou leitores fora do escopo dela (`core/audit/alerta.ts`
-    // em produção, entre outros) e a coluna voltou como bridge temporário
-    // (`core/users/service.ts` grava nas duas agora); este teste continua
-    // valendo, e com a coluna de volta o "deliberadamente diferente" volta a
-    // ser possível de escrever.
+    // VENDEDOR). Era assim ATÉ o Ciclo 1f: a coluna espelho `User.papel`
+    // deixou de ser escrita aqui, e com ela foi embora a divergência que este
+    // `beforeAll` montava de propósito. Ela não sumiu do projeto — mudou de
+    // endereço e vive em `LINHA_HOSTIL`, em `tests/unit/usuario-ativo.test.ts`,
+    // que reintroduz um papel divergente na linha falsa de `User` justamente
+    // para a regra de resolução pelo vínculo continuar tendo o que contradizer.
+    // Aqui o vínculo é a única fonte, e é só o que os testes abaixo veem.
     const ativo = await prisma.user.create({
       data: {
         nome: "Teste Fix1 Ativo",
         email: EMAIL_ATIVO,
         senhaHash: "hash-fake-nao-usado-em-login",
-        papel: "ADMIN",
         ativo: true,
         memberships: { create: { companyId: idEmpresa, papel: "VENDEDOR" } },
       },
@@ -80,7 +80,6 @@ describe("usuarioAtual — fix round 1/5 (CRITICAL): usuário desativado não po
         nome: "Teste Fix1 Desativado",
         email: EMAIL_DESATIVADO,
         senhaHash: "hash-fake-nao-usado-em-login",
-        papel: "VENDEDOR",
         ativo: false,
         memberships: { create: { companyId: idEmpresa, papel: "VENDEDOR" } },
       },
@@ -114,8 +113,12 @@ describe("usuarioAtual — fix round 1/5 (CRITICAL): usuário desativado não po
     expect(usuario.id).toBe(idAtivo);
     expect(usuario.ativo).toBe(true);
     expect(usuario.companyId).toBe(idEmpresa);
-    // VENDEDOR é o papel do Membership; a coluna User.papel deste usuário é
-    // ADMIN (ver comentário no beforeAll) — só passa se a origem for o vínculo.
+    // VENDEDOR é o papel do Membership, e desde o Ciclo 1f é a única origem
+    // possível: este `User` não carrega mais papel nenhum. Esta asserção
+    // deixou de DISCRIMINAR a origem quando a coluna espelho parou de ser
+    // escrita (ver o comentário no `beforeAll`) — quem discrimina hoje é
+    // `LINHA_HOSTIL`, em `tests/unit/usuario-ativo.test.ts`. O que ela ainda
+    // prova é que o papel chega do vínculo, e não nulo nem inventado.
     expect(usuario.papel).toBe("VENDEDOR");
   });
 
