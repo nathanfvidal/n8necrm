@@ -5,7 +5,9 @@
 // (Task 13/18: `responsavelId`/`autorId` SEMPRE vêm de `usuarioAtual()`,
 // NUNCA de um argumento de input) sem depender de sessão HTTP nem de banco.
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import type { User, Task } from "@prisma/client";
+import type { Task } from "@prisma/client";
+
+import type { UsuarioAtivo } from "@/core/auth/usuario-ativo";
 
 const usuarioAtualMock = vi.fn();
 vi.mock("@/core/auth/session", () => ({ usuarioAtual: () => usuarioAtualMock() }));
@@ -28,15 +30,26 @@ vi.mock("@/core/tasks/service", () => ({
 const { criarMinhaTaskAction, concluirMinhaTaskAction } = await import("../../src/core/tasks/actions");
 const { MENSAGEM_SESSAO_INVALIDA } = await import("../../src/lib/acao");
 
-function usuarioFake(overrides: Partial<User> = {}): User {
+// `UsuarioAtivo` e NÃO `User` do Prisma, que é o que este dublê fingia ser.
+// `usuarioAtual()` devolve `UsuarioAtivo` (`core/auth/usuario-ativo.ts:21-29`),
+// e a diferença não é cosmética: `UsuarioAtivo` tem `companyId` e `User` não
+// tem. Com o tipo errado, `autor.companyId` chegava `undefined` no serviço e o
+// teste ficava verde -- ver o describe "companyId vem da sessão".
+//
+// `senhaHash` e `criadoEm` somem, e a ausência é o ganho declarado no docstring
+// do tipo (`usuario-ativo.ts:17-19`): nada fora de `core/auth` tem por que ler
+// hash de senha. `papel` continua, e continua vindo do VÍNCULO -- não é
+// `User.papel`, coluna derrubada no Ciclo 1f.
+const EMPRESA_FAKE = "empresa-fake-id";
+
+function usuarioFake(overrides: Partial<UsuarioAtivo> = {}): UsuarioAtivo {
   return {
     id: "usuario-fake-id",
     nome: "Usuário Fake",
     email: "fake@teste.local",
-    senhaHash: "hash",
-    papel: "VENDEDOR",
     ativo: true,
-    criadoEm: new Date("2026-01-01T00:00:00.000Z"),
+    companyId: EMPRESA_FAKE,
+    papel: "VENDEDOR",
     ...overrides,
   };
 }
@@ -44,7 +57,10 @@ function usuarioFake(overrides: Partial<User> = {}): User {
 function taskFake(overrides: Partial<Task> = {}): Task {
   return {
     id: "task-fake-id",
-    companyId: "empresa-fake-id",
+    // Mesma constante da sessão falsa: a tarefa e quem age concordam sobre a
+    // empresa, que é o estado que produção sempre teve. Dois literais iguais
+    // escritos à mão poderiam divergir sem ninguém notar.
+    companyId: EMPRESA_FAKE,
     titulo: "Tarefa fake",
     descricao: null,
     vencimento: new Date("2026-08-05T00:00:00.000Z"),
@@ -62,6 +78,48 @@ beforeEach(() => {
   criarTaskMock.mockReset();
   concluirTaskMock.mockReset();
   revalidatePathMock.mockReset();
+});
+
+// O `companyId` da SESSÃO, e o defeito que o dublê mal tipado escondia.
+//
+// `criarTask`/`concluirTask` recebem `companyId: autor.companyId`
+// (`core/tasks/actions.ts:72` e `:113`), e o `autor` vem de `usuarioAtual()`,
+// que devolve `UsuarioAtivo`. Enquanto o dublê deste arquivo foi tipado como
+// `User` do Prisma -- que NÃO tem `companyId` --, esses dois pontos receberam
+// `undefined` e nenhum teste reclamou: `undefined` atravessa um mock sem
+// levantar nada.
+//
+// É a terceira vez que esse padrão exato aparece nesta branch, e as três
+// ficaram verdes do mesmo jeito. Estes dois casos são o que impede a quarta.
+describe("companyId vem da sessão, nunca do formulário", () => {
+  it("criar manda o companyId de usuarioAtual() para o serviço", async () => {
+    usuarioAtualMock.mockResolvedValue(usuarioFake());
+    criarTaskMock.mockResolvedValue(taskFake());
+
+    await criarMinhaTaskAction({
+      titulo: "Ligar",
+      vencimento: new Date("2026-08-05T00:00:00.000Z"),
+    });
+
+    expect(criarTaskMock).toHaveBeenCalledWith(
+      expect.objectContaining({ companyId: EMPRESA_FAKE, responsavelId: "usuario-fake-id" })
+    );
+  });
+
+  it("concluir manda o companyId de usuarioAtual() para o serviço", async () => {
+    usuarioAtualMock.mockResolvedValue(usuarioFake());
+    concluirTaskMock.mockResolvedValue(taskFake());
+
+    await concluirMinhaTaskAction("task-1");
+
+    expect(concluirTaskMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        companyId: EMPRESA_FAKE,
+        taskId: "task-1",
+        autorId: "usuario-fake-id",
+      })
+    );
+  });
 });
 
 // Criar e concluir não invalidavam o cache de rota — só editar e excluir. O
@@ -212,7 +270,18 @@ describe("concluirMinhaTaskAction", () => {
 
     await concluirMinhaTaskAction("task-1");
 
-    expect(concluirTaskMock).toHaveBeenCalledWith({ taskId: "task-1", autorId: "vendedor-2" });
+    // `companyId` entrou nesta comparação EXATA porque ela é exata: enquanto o
+    // dublê era `User` (sem `companyId`), a action chamava o serviço com
+    // `companyId: undefined` e esta linha continuava verde -- o Vitest trata
+    // chave de valor `undefined` como ausente. Era a quarta face do mesmo
+    // defeito, e a única que já estava escrita antes do Ciclo 1f. Com os três
+    // campos nomeados, um quarto argumento acrescentado por descuido fica
+    // vermelho aqui.
+    expect(concluirTaskMock).toHaveBeenCalledWith({
+      companyId: EMPRESA_FAKE,
+      taskId: "task-1",
+      autorId: "vendedor-2",
+    });
   });
 
   it(
