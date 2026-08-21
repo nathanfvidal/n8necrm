@@ -1,6 +1,11 @@
 import { describe, it, expect } from "vitest";
 
-import { parseValorBR, formatarValorBR, mascararValorBR } from "../../src/lib/dinheiro";
+import {
+  parseValorBR,
+  formatarValorBR,
+  mascararValorBR,
+  VALOR_MAXIMO_BR,
+} from "../../src/lib/dinheiro";
 
 describe("parseValorBR", () => {
   it("aceita o formato brasileiro completo", () => {
@@ -49,6 +54,43 @@ describe("parseValorBR", () => {
   // `Decimal(14,2)` aceita, e tem 18 caracteres com separadores.
   it("aceita o maior valor que a coluna comporta", () => {
     expect(parseValorBR("999.999.999.999,99").toString()).toBe("999999999999.99");
+  });
+
+  // ─── Teto de VALOR (achado 20 da Fase 1) ────────────────────────────────
+  //
+  // `TAMANHO_MAX` cobria tipo e mínimo, não máximo: 25 dígitos passam nos 32
+  // caracteres e casam com `PADRAO_BR`. Quem recusava era o `Decimal(14,2)` do
+  // Postgres, três camadas adiante — mensagem genérica para quem digitou e um
+  // erro "inesperado" no Sentry que era, na verdade, entrada de formulário.
+  it("recusa valor acima do que Decimal(14,2) comporta, e DIZ o limite", () => {
+    expect(() => parseValorBR("9".repeat(25))).toThrow(/Valor inválido/);
+    // A mensagem precisa carregar o limite: sem ele a pessoa fica adivinhando
+    // quantos dígitos sobram.
+    expect(() => parseValorBR("9".repeat(25))).toThrow(VALOR_MAXIMO_BR);
+  });
+
+  // O par que trava o número: o maior aceito e o primeiro recusado ficam a um
+  // dígito de distância. Se `Lead.valorEstimado` mudar de precisão sem esta
+  // constante mudar junto, um dos dois casos fica vermelho.
+  it("o limite é o 12º dígito inteiro — 13 é recusado, 12 passa", () => {
+    expect(parseValorBR("999999999999,99").toString()).toBe("999999999999.99");
+    expect(() => parseValorBR("1000000000000")).toThrow(/Valor inválido/);
+    expect(() => parseValorBR("1.000.000.000.000,00")).toThrow(/Valor inválido/);
+  });
+
+  // Zeros à esquerda não contam. `mascararValorBR` produz esta forma quando
+  // alguém digita os centavos primeiro, e recusá-la seria recusar R$ 0,01.
+  it("zeros à esquerda não consomem o teto", () => {
+    expect(parseValorBR("0000000000000001,00").toString()).toBe("1");
+    expect(parseValorBR("0,01").toString()).toBe("0.01");
+  });
+
+  // A prova de que a recusa CHEGA à tela em vez de virar "Falha ao salvar o
+  // lead": `MENSAGENS_SEGURAS` em `core/leads/actions.ts` reconhece a família
+  // por este prefixo exato. Trocar o texto da mensagem sem trocar o prefixo
+  // deixa o repasse funcionando; trocar o prefixo o quebra em silêncio.
+  it("a mensagem começa com o prefixo que `actions.ts` repassa para a tela", () => {
+    expect(() => parseValorBR("9".repeat(25))).toThrow(/^Valor inválido:/);
   });
 });
 
