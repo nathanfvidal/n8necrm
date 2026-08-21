@@ -798,7 +798,7 @@ describe("prismaDaEmpresa", () => {
       expect(bloco.filter((l) => /^\s*id\s+String\s+@id/.test(l))).toHaveLength(1);
     });
 
-    it("os 13 modelos de tenant nomeiam a relação `company` — a varredura depende do nome", () => {
+    it("os 14 modelos de tenant nomeiam a relação `company` — a varredura depende do nome", () => {
       const semRelacao = [...MODELOS_DE_TENANT].filter(
         (m) => !blocoDoModelo(m).some((l) => /^\s*company\s+Company\b/.test(l))
       );
@@ -828,13 +828,47 @@ describe("prismaDaEmpresa", () => {
       expect(comCompanyIdUnico).toEqual(["BotConfig", "CompanyConfig"]);
     });
 
-    it("`WhatsappConnection` é modelo de tenant, e a lista tem exatamente 13", () => {
+    it("`WhatsappConnection` é modelo de tenant, e a lista tem exatamente 14", () => {
       // Deriva: um modelo com `companyId` que ficasse FORA do Set passaria por
       // `escoparArgumentos` intacto — sem filtro, sem injeção, sem erro. É o
       // vazamento mais silencioso que este arquivo pode ter, e a única defesa
       // é esta igualdade exata.
       expect(MODELOS_DE_TENANT.has("WhatsappConnection")).toBe(true);
-      expect(MODELOS_DE_TENANT.size).toBe(13);
+      expect(MODELOS_DE_TENANT.size).toBe(14);
+    });
+
+    it("`TurnoJob` é modelo de tenant — a FILA é dado de empresa, não infraestrutura", () => {
+      // A alternativa considerada e recusada (spec do Ciclo 2d, §5.1,
+      // `docs/superpowers/specs/2026-08-21-ciclo-2d-fila-em-postgres-design.md`):
+      // guardar a empresa dentro de um Json, ou numa coluna com outro nome
+      // (`empresaId`), faria a tabela PASSAR na trava de deriva sem estar
+      // protegida — o leitor do schema procura o escalar `companyId`. Passar na
+      // trava por escolher outro nome é contornar a trava, não satisfazê-la.
+      //
+      // Os três caminhos escopados que isto compra — publicar, concluir e
+      // podar — vão para `src/modules/whatsapp/fila/postgres.ts` (Task 2). O
+      // quarto (a reivindicação) é cross-tenant por construção, porque o
+      // consumidor DESCOBRE a empresa reivindicando, e por isso ganha exceção
+      // NOMEADA no `eslint.config.mjs`, provada por
+      // `tests/unit/catraca-prisma-cru.test.ts`.
+      expect(MODELOS_DE_TENANT.has("TurnoJob")).toBe(true);
+    });
+
+    it("`TurnoJob.chaveIdempotencia` é única POR EMPRESA, não global", () => {
+      const bloco = blocoDoModelo("TurnoJob");
+
+      // Ciclo 1e: unicidade global sobre valor derivado de dado de empresa é a
+      // família de defeito que aquele ciclo fechou. A chave deriva de
+      // `conversationId` (cuid, já global), então as duas formas seriam
+      // corretas HOJE — a composta é a que continua correta se a chave passar a
+      // derivar de algo por empresa, e a que não exige o leitor confiar num
+      // raciocínio sobre cuid.
+      expect(
+        bloco.filter((l) => /^\s*@@unique\(\[companyId, chaveIdempotencia\]\)/.test(l))
+      ).toHaveLength(1);
+      expect(bloco.filter((l) => /^\s*chaveIdempotencia\s+String\s+@unique/.test(l))).toHaveLength(
+        0
+      );
     });
 
     it("`WhatsappConnection.webhookTokenHash` é `@unique` GLOBAL — e isso é deliberado", () => {

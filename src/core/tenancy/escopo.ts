@@ -298,6 +298,7 @@ export const MODELOS_DE_TENANT: ReadonlySet<string> = new Set([
   "CompanyConfig",
   "WhatsappMessage",
   "WhatsappConnection",
+  "TurnoJob",
 ]);
 
 /** Operações cujo `where` aceita filtro comum — dá para injetar `companyId`. */

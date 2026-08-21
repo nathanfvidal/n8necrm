@@ -148,6 +148,7 @@ model Company {
   // do modelo, logo depois de `BotConfig`.
   config              CompanyConfig?
   whatsappConnections WhatsappConnection[]
+  turnoJobs           TurnoJob[]
 }
 
 /// Vínculo entre pessoa e empresa, e é ONDE O PAPEL VIVE.
@@ -488,6 +489,7 @@ model Conversation {
   criadoEm              DateTime          @default(now())
   atualizadoEm          DateTime          @updatedAt
   mensagens             WhatsappMessage[]
+  turnoJobs             TurnoJob[]
   iaAtiva               Boolean           @default(true)
   iaPausadaEm           DateTime?
   iaPausadaPorId        String?
@@ -560,6 +562,103 @@ model Conversation {
   @@index([companyId])
   @@index([connectionId])
 }
+
+/// A FILA de turnos de conversa — a tabela que substituiu o Vercel Queues no
+/// Ciclo 2d, depois de o dono decidir, em 2026-08-21, não usar a Vercel
+/// (`docs/superpowers/specs/2026-08-21-ciclo-2d-fila-em-postgres-design.md`,
+/// §1 e §5.1).
+///
+/// ## Por que ela é modelo de TENANT, e não infraestrutura como `RateLimit`
+///
+/// `RateLimit` não tem `companyId`: é defesa global, consultada antes de
+/// existir sessão. Esta tabela tem dono — cada linha pertence à empresa da
+/// conversa —, e três dos quatro caminhos que a tocam JÁ têm o `companyId` na
+/// mão antes de falar com o banco: publicar (vem do job, resolvido pela
+/// conexão no webhook), concluir e podar (vêm do `RETURNING` da
+/// reivindicação). Os três usam `prismaDaEmpresa(companyId)`.
+///
+/// O quarto — reivindicar — é cross-tenant POR CONSTRUÇÃO: o consumidor roda
+/// sem sessão e a pergunta que ele faz é "qual o próximo job de QUALQUER
+/// empresa está pronto". `prismaDaEmpresa` exigiria como parâmetro exatamente
+/// o valor que o `UPDATE ... RETURNING "companyId"` devolve — a mesma
+/// circularidade que já isenta `core/auth/session.ts`,
+/// `core/auth/credenciais.ts` e `core/users/empresa.ts` na
+/// `EXCECAO_PERMANENTE` do `eslint.config.mjs`.
+///
+/// A alternativa recusada foi guardar a empresa num `Json` ou numa coluna com
+/// outro nome: isso PASSARIA na trava de deriva de
+/// `tests/unit/escopo-empresa.test.ts` (que procura o escalar `companyId`) sem
+/// estar protegida — contornar a trava, não satisfazê-la.
+///
+/// ## Por que não há coluna de estado
+///
+/// `mortoEm IS NULL` = vivo. "Pendente" e "reivindicado" já são deduzidos de
+/// `disponivelEm` e `leaseAte`; um enum diria a mesma coisa num segundo lugar,
+/// que é onde a deriva nasce. E `mortoEm` precisa ser DATA de qualquer jeito,
+/// porque é ela que a poda por retenção lê.
+///
+/// ## Por que a morte é GRAVADA e não recalculada
+///
+/// Se a condição de morte fosse `tentativasEntrega >= MAX_TENTATIVAS_ENTREGA`
+/// lida a cada reivindicação, subir a constante RESSUSCITARIA jobs mortos
+/// antigos sem ninguém pedir. `mortoEm` gravado é decisão tomada.
+///
+/// ## Job concluído é APAGADO
+///
+/// A fila é lista de trabalho, não livro-razão: o histórico que importa está em
+/// `WhatsappMessage.processadoEm` e em `AuditLog`. Uma coluna `concluidoEm`
+/// exigiria um SEGUNDO mecanismo para tirar a linha — e foi exatamente esse
+/// segundo mecanismo que nunca existiu no caso do `RateLimit` ("nada nunca
+/// apagava linha desta tabela"). Só o job MORTO fica, com `ultimoErro`, por 7
+/// dias: apagá-lo em silêncio apagaria a única evidência de que uma conversa
+/// nunca foi respondida.
+model TurnoJob {
+  id                     String  @id @default(cuid())
+  companyId              String
+  company                Company @relation(fields: [companyId], references: [id])
+
+  /// O job é um PONTEIRO para uma conversa, e o ponteiro não pode sobreviver ao
+  /// alvo: sem a FK em cascata, apagar uma conversa deixaria jobs que
+  /// reivindicam, falham no `claimLease` de `modules/whatsapp/turno.ts`,
+  /// reagendam até o teto e desistem — barulho por minutos, para nada.
+  conversationId         String
+  conversation           Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  seq                    Int
+  tentativaReagendamento Int          @default(0)
+
+  /// `conv:seq` na publicação original, `conv:seq:rN` no reagendamento — a
+  /// mesma forma que a `idempotencyKey` do adaptador da Vercel usava, e pelo
+  /// mesmo motivo: sem o sufixo, o reagendamento colidiria consigo mesmo.
+  chaveIdempotencia      String
+
+  /// Quando o job pode ser entregue. É o `delaySeconds` da interface
+  /// `OpcoesPublicacao` (`modules/whatsapp/fila/tipos.ts`) virado data: 8s no
+  /// caso comum (a janela de buffer), 5s no reagendamento. A reivindicação só
+  /// enxerga `disponivelEm <= agora`.
+  disponivelEm           DateTime
+
+  /// O lease do JOB. NULL = livre. O valor devolvido pela reivindicação é o
+  /// FENCING TOKEN — `concluirJob`/`falharJob` só agem quando ele ainda é este
+  /// mesmo valor, igual a `liberarLease` em `modules/whatsapp/turno.ts`.
+  leaseAte               DateTime?
+
+  /// Incrementa na REIVINDICAÇÃO, não na conclusão. É o que faz um job que MATA
+  /// o processo morrer também, em vez de girar para sempre.
+  tentativasEntrega      Int          @default(0)
+
+  mortoEm                DateTime?
+  ultimoErro             String?
+  criadoEm               DateTime     @default(now())
+
+  @@unique([companyId, chaveIdempotencia])
+  // O índice que a REIVINDICAÇÃO usa: ela filtra por `mortoEm IS NULL` e
+  // ordena/corta por `disponivelEm`.
+  @@index([mortoEm, disponivelEm])
+  @@index([companyId])
+  @@index([conversationId])
+}
+
 
 /// Configuração do agente de IA — uma linha POR EMPRESA.
 ///
