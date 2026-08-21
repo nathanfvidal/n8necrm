@@ -55,6 +55,7 @@ import { semComentarios } from "./helpers/codigo-fonte";
 const RAIZ = process.cwd();
 const DIRETORIOS = ["src", "tests", "prisma", "scripts", "config"];
 const ESTE_ARQUIVO = "tests/unit/user-papel-nao-volta.test.ts";
+const SCHEMA = readFileSync(join(RAIZ, "prisma", "schema.prisma"), "utf8");
 
 /**
  * Métodos do delegate `user` do Prisma Client 7.9 que aceitam `where`, `data`
@@ -107,6 +108,38 @@ const CHAMADA_DE_USER = new RegExp(
  * lista de virar depósito.
  */
 const EM_CONVERSAO: Record<string, string> = {};
+
+/**
+ * O corpo de um `model` do schema, sem o cabeçalho e sem a chave de fecho.
+ *
+ * Lido do `prisma/schema.prisma` como TEXTO, e não do client gerado, pelo
+ * mesmo motivo que `catraca-prisma-cru.test.ts:136-145` dá para não importar
+ * `MODELOS_DE_TENANT`: o schema é a fonte, o client é derivado, e um client
+ * desatualizado no disco faria este teste afirmar o passado.
+ */
+export function blocoDoModelo(schema: string, modelo: string): string {
+  const linhas = schema.replace(/\r\n/g, "\n").split("\n");
+  const inicio = linhas.findIndex((l) => new RegExp(`^model\\s+${modelo}\\s*\\{`).test(l));
+  if (inicio === -1) return "";
+
+  const fim = linhas.findIndex((l, i) => i > inicio && /^\}/.test(l));
+  return linhas.slice(inicio + 1, fim === -1 ? linhas.length : fim).join("\n");
+}
+
+/**
+ * Os nomes de campo declarados num bloco de `model`.
+ *
+ * `^\s*(\w+)\s+\w` casa `papel Role` e `id String`, e NÃO casa `/// prosa`,
+ * `@@unique([...])` nem linha em branco — a prosa deste schema menciona
+ * `papel` dezenas de vezes, e contá-la como declaração inverteria o
+ * resultado.
+ */
+export function camposDoModelo(bloco: string): string[] {
+  return bloco
+    .split("\n")
+    .map((linha) => /^\s*(\w+)\s+\w/.exec(linha)?.[1])
+    .filter((nome): nome is string => nome !== undefined);
+}
 
 // ─────────────────────────────────────────────────────────────────────────
 // O analisador
@@ -376,5 +409,47 @@ describe("User.papel não volta", () => {
     expect(
       analisar(ESTE_ARQUIVO, readFileSync(join(RAIZ, ESTE_ARQUIVO), "utf8"))
     ).toEqual([]);
+  });
+
+  it("`model User` não tem campo `papel`", () => {
+    const bloco = blocoDoModelo(SCHEMA, "User");
+
+    // Sem isto, um `model User` renomeado devolveria bloco vazio e a asserção
+    // seguinte passaria por não ter lido nada.
+    expect(bloco.length, "não achei `model User` em prisma/schema.prisma").toBeGreaterThan(0);
+
+    expect(
+      camposDoModelo(bloco),
+      "`User.papel` voltou ao schema. Papel é atributo do VÍNCULO: a mesma " +
+        "pessoa pode ser ADMIN numa empresa e VENDEDOR em outra, e uma coluna " +
+        "em `User` só tem resposta certa enquanto cada pessoa tiver uma " +
+        "empresa só. A coluna saiu do banco no Ciclo 1f, na quarta tentativa " +
+        "(`20260821130000_derruba_user_papel_de_vez`); as três anteriores " +
+        "estão contadas em `.superpowers/sdd/medicao-user-papel.md`."
+    ).not.toContain("papel");
+  });
+
+  it("`model Membership` TEM o campo papel — a fonte de verdade continua de pé", () => {
+    // A outra metade. Sem ela, apagar `Membership.papel` por engano deixaria a
+    // asserção acima verde e o projeto sem nenhuma fonte de papel.
+    expect(camposDoModelo(blocoDoModelo(SCHEMA, "Membership"))).toContain("papel");
+  });
+
+  it("o leitor de schema distingue os dois casos — prova de que morde", () => {
+    // Prova de que o leitor não é decorativo: aplicado a um `model User` COM a
+    // coluna, ele precisa encontrá-la. Sem isto, um regex quebrado devolveria
+    // lista vazia e as duas asserções acima ficariam verdes para sempre.
+    const comAColunaDeVolta = [
+      "model User {",
+      "  id                 String               @id @default(cuid())",
+      "  nome               String",
+      "  /// papel aqui em prosa NÃO conta como declaração",
+      "  papel              Role",
+      "  ativo              Boolean              @default(true)",
+      "}",
+    ].join("\n");
+
+    expect(camposDoModelo(blocoDoModelo(comAColunaDeVolta, "User"))).toContain("papel");
+    expect(camposDoModelo(blocoDoModelo(comAColunaDeVolta, "User"))).toContain("ativo");
   });
 });

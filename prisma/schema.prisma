@@ -71,40 +71,39 @@ enum CanalConexao {
 // GLOBALMENTE, de propósito: é o mesmo login em qualquer empresa a que a
 // pessoa esteja vinculada.
 //
-// `papel` foi derrubada e RESTAURADA na mesma tarefa (Ciclo 1a, Task 2 parte
-// 2, migração `20260819140000_restaura_user_papel_temporariamente`). O DROP
-// passou na verificação de integridade, mas o `typecheck` do repositório
-// inteiro revelou um terceiro grupo de leitores que nem o plano original nem
-// esta tarefa previram — `src/core/audit/alerta.ts` (produção: destinatários
-// do alerta de rajada destrutiva) e ~20 arquivos de teste/e2e. Corrigi-los é
-// decisão de escopo fora do que esta tarefa estava autorizada a tomar
-// sozinha (o brief manda PARAR e reportar ao achar um terceiro leitor não
-// previsto). `core/users/service.ts` grava nas DUAS colunas (`User.papel` e
-// `Membership.papel`) enquanto este bridge existir — ver comentário lá.
+// `papel` NÃO é coluna de `User`, e a ausência é o desenho: papel é atributo
+// do VÍNCULO (`Membership.papel`), porque a mesma pessoa pode ser ADMIN numa
+// empresa e VENDEDOR em outra. Uma coluna aqui só teria resposta certa
+// enquanto cada pessoa tivesse uma empresa só.
+//
+// A coluna existiu, e a história importa porque custou quatro tentativas. O
+// Ciclo 1a derrubou (`20260819130000_derruba_user_papel`) e RESTAUROU
+// (`20260819140000_restaura_user_papel_temporariamente`) na mesma tarefa: o
+// DROP passou na verificação de integridade dos dados, mas o typecheck do
+// repositório revelou um terceiro grupo de leitores. As três tentativas
+// mediram com um instrumento só, acharam um grupo e concluíram que era o
+// alcance total.
+//
+// O Ciclo 1f fechou o inventário medindo com DOIS instrumentos independentes,
+// e o que fechou de verdade foi o segundo: a varredura textual achou `papel`
+// escrito através de `.map()`, que o `tsc` deixa passar porque a checagem de
+// propriedade excedente só vale para literal fresco atribuído direto ao
+// parâmetro. Superfície real: 32 arquivos, 11 pontos de leitura e 42 de
+// escrita, nenhum leitor em `src/` — não os ~80 que este comentário afirmava
+// antes, número que contava prosa e `Membership.papel` junto. A medição
+// inteira está em `.superpowers/sdd/medicao-user-papel.md`; a coluna saiu em
+// `20260821130000_derruba_user_papel_de_vez`.
+//
+// O que impede a volta: `tests/unit/user-papel-nao-volta.test.ts` — lê ESTE
+// arquivo e reprova um campo `papel` dentro de `model User`, e varre o
+// repositório reprovando `papel` dentro de qualquer chamada a `prisma.user.*`.
+// A varredura textual é a metade que não depende do `tsc`, e é deliberado que
+// ela não dependa.
 model User {
   id                 String               @id @default(cuid())
   nome               String
   email              String               @unique
   senhaHash          String
-  /// Espelho depreciado. A fonte de verdade do papel é `Membership.papel`
-  /// (ver comentário do modelo `Membership` acima) — esta coluna sobrevive
-  /// só por dual-write, escrita em paralelo a cada mudança de papel, e
-  /// NENHUMA decisão de autorização a lê: as 15 chamadas de `hasPermission`
-  /// em `src/` recebem o usuário de `usuarioAtual()`/`usuarioAtualOuLogin()`,
-  /// que resolve o papel pelo vínculo, verificado em 2026-08-19.
-  ///
-  /// Por que ela ainda existe, e por quanto tempo: o Ciclo 1f está
-  /// derrubando-a. Esta linha é o meio do caminho — `Role?` em vez de `Role`
-  /// é a metade EXPANSÃO de um expand/contract
-  /// (`20260821120000_user_papel_aceita_nulo`), e existe para que os 42
-  /// escritores possam sair um lote por vez sem `23502`. A medição que fechou
-  /// o inventário está em `.superpowers/sdd/medicao-user-papel.md`: 11
-  /// leitores e 42 escritores, em 32 arquivos, NENHUM leitor em `src/`. O
-  /// número "~80 arquivos" que este comentário trazia antes contava prosa e
-  /// `Membership.papel` junto.
-  ///
-  /// Código novo lê o papel de `Membership`, nunca daqui.
-  papel              Role?
   ativo              Boolean              @default(true)
   criadoEm           DateTime             @default(now())
   leadsAtribuidos    Lead[]               @relation("LeadResponsavel")
