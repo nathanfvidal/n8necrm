@@ -188,24 +188,23 @@ export async function seed(): Promise<void> {
   const senhaHash = await bcrypt.hash(senhaPlano, 10);
   const atualizarSenhaNaReexecucao = senhaPlanoExplicita !== undefined;
 
-  // `papel` grava nas DUAS colunas (dual-write): `User.papel` foi derrubada e
-  // RESTAURADA nesta mesma tarefa — o DROP provou seguro para os dados, mas
-  // revelou leitores fora do escopo dela (`core/audit/alerta.ts` em produção,
-  // mais ~20 arquivos de teste/e2e). Até esses leitores migrarem para
-  // `Membership`, `User.papel` continua sendo escrito aqui — o literal
-  // também vai para `vincularAEmpresa`, que grava a mesma informação no
-  // `Membership` (a fonte que `core/users/service.ts` lê).
+  // O papel vai SÓ para `vincularAEmpresa`, que grava no `Membership`. A
+  // coluna espelho `User.papel` foi escrita aqui em dual-write entre
+  // 2026-08-19 e 2026-08-21, como ponte para leitores que o DROP do Ciclo 1a
+  // revelou tarde demais; o Ciclo 1f migrou todos e o seed é o último escritor
+  // a sair, junto com `core/users/service.ts`. O vínculo é a única fonte, e é
+  // de lá que aquele módulo e `usuarioAtual()` leem.
   const admin = await prisma.user.upsert({
     where: { email: "admin@exemplo.com" },
     update: atualizarSenhaNaReexecucao ? { senhaHash } : {},
-    create: { nome: "Admin Exemplo", email: "admin@exemplo.com", senhaHash, papel: "ADMIN" },
+    create: { nome: "Admin Exemplo", email: "admin@exemplo.com", senhaHash },
   });
   await vincularAEmpresa(admin.id, empresa.id, "ADMIN");
 
   const vendedor = await prisma.user.upsert({
     where: { email: "vendedor@exemplo.com" },
     update: atualizarSenhaNaReexecucao ? { senhaHash } : {},
-    create: { nome: "Vendedor Exemplo", email: "vendedor@exemplo.com", senhaHash, papel: "VENDEDOR" },
+    create: { nome: "Vendedor Exemplo", email: "vendedor@exemplo.com", senhaHash },
   });
   await vincularAEmpresa(vendedor.id, empresa.id, "VENDEDOR");
 
@@ -253,10 +252,14 @@ export async function seed(): Promise<void> {
 
 /**
  * Cria (ou confirma) o `Membership` de um usuário com a empresa semeada, com
- * o `papel` que o chamador passa. `User` não tem mais coluna `papel` (Ciclo
- * 1a, Task 2 parte 2 a derrubou) — o vínculo é a ÚNICA fonte do papel a
- * partir de agora, então quem chama esta função decide o literal, em vez de
- * reler algo que não existe mais no registro de `User`.
+ * o `papel` que o chamador passa. O vínculo é a ÚNICA fonte do papel, então
+ * quem chama esta função decide o literal, em vez de reler a linha de `User`.
+ *
+ * A coluna `User.papel` foi derrubada no Ciclo 1a e RESTAURADA no mesmo ciclo,
+ * quando o DROP revelou leitores tarde demais; este docstring afirmava que ela
+ * já não existia e ficou errado nesse intervalo. Desde o Ciclo 1f nada mais a
+ * escreve — nem este arquivo, nem `core/users/service.ts` — e ela sai do
+ * schema ainda neste ciclo.
  *
  * `upsert` por `userId_companyId` (a chave de `@@unique([userId, companyId])`)
  * em vez de "existe? não cria de novo": mesma forma que o resto deste arquivo
@@ -353,7 +356,6 @@ async function semearUsuarioSistemaWhatsapp(companyId: string): Promise<void> {
       nome: "Atendente WhatsApp (sistema)",
       email: "whatsapp-bot@sistema.invalid",
       senhaHash,
-      papel: "ADMIN",
       ativo: false,
     },
   });

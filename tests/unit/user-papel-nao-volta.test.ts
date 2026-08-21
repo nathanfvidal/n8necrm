@@ -111,10 +111,6 @@ const CHAMADA_DE_USER = new RegExp(
  * (`usuario-ativo`, `lead-actions`, `task-actions`).
  */
 const EM_CONVERSAO: Record<string, string> = {
-  // Ciclo 1f, Task 7 — o dual-write de produção e o seed.
-  "src/core/users/service.ts": "Task 7",
-  "prisma/seed.ts": "Task 7",
-
   // Ciclo 1f, Task 8 — fixtures de e2e.
   "tests/e2e/global-setup.ts": "Task 8",
   "tests/e2e/sessao-e-cache.spec.ts": "Task 8",

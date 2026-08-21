@@ -241,16 +241,21 @@ export async function criarUsuario(
     // do `Membership` (crash, timeout) deixaria exatamente essa órfã; a
     // transação garante que as duas linhas nascem juntas ou nenhuma nasce.
     //
-    // `papel` ainda vai para `User.create` também (dual-write): a coluna
-    // `User.papel` foi derrubada e RESTAURADA nesta mesma tarefa — o DROP
-    // provou seguro para os dados, mas revelou um terceiro grupo de leitores
-    // (`core/audit/alerta.ts` em produção, mais ~20 arquivos de teste/e2e)
-    // fora do escopo desta tarefa. Até esses leitores migrarem para
-    // `Membership` numa tarefa dedicada, `User.papel` precisa continuar
-    // correto também para gente criada DEPOIS da restauração — não só para
-    // quem já existia quando ela rodou. `Membership.papel` é a fonte que
-    // este módulo LÊ; `User.papel` é só o bridge escrito para não quebrar os
-    // leitores antigos.
+    // `papel` vai SÓ para `Membership`. A coluna espelho `User.papel` foi
+    // escrita aqui em dual-write entre 2026-08-19 e 2026-08-21, como ponte
+    // para leitores que o DROP do Ciclo 1a revelou tarde demais; o Ciclo 1f
+    // migrou todos eles e esta linha é o último escritor de produção a sair.
+    // A coluna já é nula desde `21f0912` e some do schema ainda neste ciclo.
+    //
+    // O parâmetro continua aqui porque o VÍNCULO precisa dele — papel é
+    // atributo do vínculo, e é de lá que `usuarioAtual()` o lê
+    // (`core/auth/session.ts:98-106`).
+    //
+    // A volta é travada por `tests/unit/user-papel-nao-volta.test.ts`, que lê
+    // este arquivo como texto e reprova `papel` dentro de qualquer chamada a
+    // `prisma.user.*`. Textual, e não apoiada no `tsc`, porque o compilador
+    // deixa passar o campo excedente quando ele atravessa um `.map()` — o caso
+    // medido está em `audit-isolamento.test.ts:163`.
     //
     // A transação é aberta sobre o cliente ESCOPADO, e o `tx` dentro dela
     // carrega a extensão (medido no Prisma 7.9.1 desta árvore — ver o docstring
@@ -261,7 +266,7 @@ export async function criarUsuario(
     // recusa, lançando, que é o comportamento desejado.
     criado = await prismaDaEmpresa(companyId).$transaction(async (tx) => {
       const usuario = await tx.user.create({
-        data: { nome, email, senhaHash, papel },
+        data: { nome, email, senhaHash },
         select: { id: true, nome: true, email: true, ativo: true, criadoEm: true },
       });
       await tx.membership.create({ data: { userId: usuario.id, companyId, papel } });
@@ -352,10 +357,10 @@ export async function atualizarUsuario(
   // opção (duas escritas soltas) deixaria uma janela onde `nome` mudou e
   // `papel` ainda não, ou vice-versa, se a segunda escrita falhasse.
   //
-  // `User.papel` também é regravado aqui — mesmo dual-write de `criarUsuario`
-  // (ver o comentário lá): a coluna é um bridge temporário para os leitores
-  // que o DROP desta tarefa revelou fora do escopo dela, e precisa continuar
-  // correta quando o papel de alguém muda, não só na criação.
+  // O `papel` novo vai SÓ para `Membership`, mesma razão de `criarUsuario`
+  // (ver o comentário lá): o dual-write na coluna espelho `User.papel` saiu no
+  // Ciclo 1f e o vínculo é a única fonte. `tx.user.update` continua existindo
+  // nesta transação porque `nome` É atributo da pessoa, não do vínculo.
   //
   // `tx.membership.updateMany` e não `update`: o escopo recusa `update` em
   // modelo de tenant, e a recusa é o ponto — o `where` de `update` só aceita
@@ -367,7 +372,7 @@ export async function atualizarUsuario(
   const usuarioAtualizado = await db.$transaction(async (tx) => {
     const usuario = await tx.user.update({
       where: { id: entrada.id },
-      data: { nome, papel },
+      data: { nome },
       select: { id: true, nome: true, email: true, ativo: true, criadoEm: true },
     });
     await tx.membership.updateMany({
