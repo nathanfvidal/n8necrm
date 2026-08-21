@@ -101,26 +101,28 @@ export async function ingerirMensagem(
       // O `upsert` resolvia a corrida "dois webhooks do mesmo `waId` novo ao
       // mesmo tempo" no banco. `findFirst` + `create` reabre essa janela — e ela
       // cai no MESMO tratamento de `P2002` que já existe logo abaixo, porque
-      // `Conversation.waId` continua `@unique`: o segundo a chegar colide, o
-      // `catch` busca a mensagem já gravada e devolve `duplicada: true`. O
-      // ramo do `catch` teve de aprender a lidar com a colisão de `waId`
-      // (conversa) além da de `idExterno` (mensagem) — ver lá.
+      // `Conversation` continua com unicidade de `waId` imposta pelo banco: o
+      // segundo a chegar colide, o `catch` busca a mensagem já gravada e devolve
+      // `duplicada: true`. O ramo do `catch` teve de aprender a lidar com a
+      // colisão de `waId` (conversa) além da de `idExterno` (mensagem) — ver lá.
       //
-      // ## `waId` é `@unique` GLOBAL, e isso é pendência de SCHEMA
+      // ## `waId` é único POR EMPRESA desde o Ciclo 1e
       //
       // O `findFirst` escopado NÃO encontra a conversa de outra empresa com o
-      // mesmo `waId` — e é justamente por isso que ele tentaria criar uma
-      // segunda, batendo no `@unique` global. É a mesma família de
-      // `Contact.telefone` e `PipelineStage.ordem`, registrada à parte (⚠️ R2
-      // da auditoria do Ciclo 1a).
+      // mesmo `waId` — e é isso que se quer: são conversas diferentes, de
+      // empresas diferentes, com a mesma pessoa. A chave
+      // `@@unique([companyId, waId])` é a mesma dupla de colunas que este
+      // `findFirst` filtra (o escopo injeta `where.companyId`), então o `create`
+      // abaixo só pode colidir com uma conversa DESTA empresa.
       //
-      // O QUE MUDOU NO CICLO 2a: até aqui, `EVOLUTION_COMPANY_ID` (uma
-      // instância por deploy) tornava a segunda empresa INALCANÇÁVEL, e o
-      // defeito era teórico. Agora duas empresas podem ter conexões, e o mesmo
-      // número atendido pelas duas colide em `P2002` → 500 → a Evolution
-      // reentrega para sempre. A dívida é a mesma; o ALCANCE dela cresceu. Não
-      // é este ciclo que a resolve (decisão do dono), e o sintoma está escrito
-      // aqui para ninguém gastar um dia diagnosticando.
+      // O QUE ISSO FECHOU: até o Ciclo 1e, `waId` era `@unique` GLOBAL, o
+      // `create` colidia com a conversa de OUTRA empresa, o `catch` não achava
+      // mensagem por `idExterno` (ela não chegou a ser gravada), o erro subia, a
+      // rota devolvia 500 e a Evolution reentregava — para sempre, porque a
+      // segunda tentativa repetia tudo. Era a §6 da auditoria do Ciclo 2a
+      // (`docs/auditorias/2026-08-20-ciclo-2a-cofre-credenciais.md`). Caso que
+      // trava as duas metades disto: `tests/unit/whatsapp-isolamento.test.ts`,
+      // `describe` "o mesmo número em duas empresas".
       const existente = await tx.conversation.findFirst({ where: { waId: evento.waId } });
 
       // `nomeExibicao` é o único campo que faz sentido atualizar numa
@@ -198,8 +200,11 @@ export async function ingerirMensagem(
       //   Aqui a conversa acabou de nascer pela mão do concorrente, e ESTA
       //   chamada não gravou a mensagem: ela precisa ser reprocessada, não
       //   confirmada. Deixar o erro subir faz a rota do webhook devolver 500 e
-      //   a Evolution reentregar — o retry acerta, porque na segunda vez o
-      //   `findFirst` encontra a conversa.
+      //   a Evolution reentregar — e desde o Ciclo 1e o retry ACERTA sem
+      //   qualificação, porque a chave (`[companyId, waId]`) e o `findFirst`
+      //   (escopado pela mesma empresa) enxergam o mesmo conjunto de linhas.
+      //   Antes disso a frase valia só para a corrida intra-empresa: a colisão
+      //   entre empresas reentregava para sempre.
       const mensagemExistente = await db.whatsappMessage.findFirst({
         where: { idExterno: evento.idExterno },
       });

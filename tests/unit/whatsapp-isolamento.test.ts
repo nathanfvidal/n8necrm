@@ -67,9 +67,14 @@ import {
  * `tests/unit/escopo-empresa.test.ts` exercita o MECANISMO (`prismaDaEmpresa`)
  * com um banco falso. Este arquivo responde outra pergunta: "o módulo
  * `whatsapp` chega ao dado da outra empresa?". Essa só tem resposta contra
- * duas empresas de verdade, com FK e `@unique` GLOBAL de verdade — `waId` e
- * `idExterno` são `@unique` sem empresa (`prisma/schema.prisma`), e é
- * exatamente esse tipo de coluna que faz um filtro por id parecer suficiente.
+ * duas empresas de verdade, com FK e índice único de verdade. Desde o Ciclo 1e
+ * `waId` é único POR EMPRESA (`@@unique([companyId, waId])`, `prisma/schema.prisma`)
+ * — e é justamente por isso que o arquivo precisa do banco real: com a
+ * unicidade composta, o BANCO deixou de ser a coisa que impede duas empresas de
+ * se cruzarem no mesmo número, e quem impede passou a ser só o ESCOPO.
+ * `idExterno` ainda é `@unique` GLOBAL neste commit — é a Task 4 do mesmo ciclo.
+ * Os casos do `describe` "o mesmo número em duas empresas" travam essa
+ * transição.
  *
  * ## As DUAS metades, sempre
  *
@@ -107,9 +112,14 @@ const MENSAGEM_A = `${P}-msg-a`;
 const MENSAGEM_B = `${P}-msg-b`;
 
 /**
- * `Conversation.waId` é `@unique` GLOBAL (`prisma/schema.prisma`) — a mesma
- * família de `Contact.telefone`. O prefixo é PRÓPRIO deste arquivo e **não**
- * começa com `teste-`, de propósito: `limparConversasDeTeste`
+ * Desde o Ciclo 1e `Conversation.waId` é único POR EMPRESA
+ * (`@@unique([companyId, waId])`, `prisma/schema.prisma`) — a mesma mudança que
+ * `Contact.telefone` sofreu na Task 1 do ciclo. Os três valores abaixo
+ * continuam distintos entre si porque `WA_A` e `WA_A_SEM_ESPERA` são da MESMA
+ * empresa, e ali a unicidade continua valendo integralmente.
+ *
+ * O prefixo é PRÓPRIO deste arquivo e **não** começa com `teste-`, de
+ * propósito: `limparConversasDeTeste`
  * (`tests/unit/helpers/whatsapp.ts`) apaga toda `Conversation` com `waId`
  * começando em `teste-`, e um `afterEach` de outro arquivo levaria a fixture
  * daqui junto se o prefixo colidisse.
@@ -656,5 +666,70 @@ describe("marcarAguardandoHumano / limparAguardandoHumano", () => {
     await limparAguardandoHumano(EMPRESA_B, CONVERSA_B);
     const depois = await prisma.conversation.findUniqueOrThrow({ where: { id: CONVERSA_B } });
     expect(depois.aguardandoHumanoDesde).toBeNull();
+  });
+});
+
+// ─── A unicidade que o Ciclo 1e escopou ───────────────────────────────────
+
+describe("o mesmo número em duas empresas — o que o Ciclo 1e destravou", () => {
+  it("duas empresas podem ter conversas com o MESMO `waId`", async () => {
+    // Até o Ciclo 1e isto era `P2002` em `Conversation_waId_key`, e o alcance
+    // do defeito cresceu no Ciclo 2a: com `EVOLUTION_COMPANY_ID` morto, duas
+    // empresas passaram a poder ter conexões, e o mesmo número atendido pelas
+    // duas colidia → 500 → a Evolution reentregava para sempre (§6 da auditoria
+    // do Ciclo 2a, `docs/auditorias/2026-08-20-ciclo-2a-cofre-credenciais.md`).
+    const daB = await prisma.conversation.create({
+      data: {
+        id: `${P}-conv-b-mesmo-waid`,
+        companyId: EMPRESA_B,
+        // `WA_A` já pertence a uma conversa da empresa A, criada por `semear`.
+        waId: WA_A,
+      },
+    });
+
+    expect(daB.companyId).toBe(EMPRESA_B);
+    expect(daB.waId).toBe(WA_A);
+
+    // Segunda metade: a conversa da A com o mesmo número continua lá, e é outra
+    // linha — o histórico das duas empresas não se fundiu.
+    const daA = await prisma.conversation.findUniqueOrThrow({ where: { id: CONVERSA_A } });
+    expect(daA.companyId).toBe(EMPRESA_A);
+    expect(daA.waId).toBe(WA_A);
+    expect(daA.id).not.toBe(daB.id);
+  });
+
+  it("dentro da MESMA empresa o `waId` continua único — a chave escopou, não afrouxou", async () => {
+    // A metade que impede "apaguei a constraint" de passar por "escopei a
+    // constraint". Se `@@unique([companyId, waId])` sumisse, a empresa A
+    // ganharia DUAS conversas com o mesmo número — e `ingest.ts` escolheria uma
+    // delas por `findFirst`, isto é, arbitrariamente: metade das mensagens do
+    // cliente cairia numa linha, metade na outra, cada uma com sua cópia de
+    // `iaAtiva`/`iaPausadaPor`.
+    const erro = await prisma.conversation
+      .create({
+        data: {
+          id: `${P}-conv-a-duplicada`,
+          companyId: EMPRESA_A,
+          waId: WA_A,
+        },
+      })
+      .then(() => null)
+      .catch((e: unknown) => e);
+
+    // `.rejects.toThrow()` sem argumento aceitaria QUALQUER erro — inclusive um
+    // FK inválido, que passaria pelo motivo errado. O oráculo é o código do
+    // Prisma para violação de unicidade, e a mensagem tem de nomear `companyId`:
+    // é ela que prova que a chave violada é a COMPOSTA, e não um resto da antiga
+    // `Conversation_waId_key`.
+    expect(erro).toBeInstanceOf(Error);
+    expect((erro as { code?: string }).code).toBe("P2002");
+    expect((erro as Error).message).toContain("companyId");
+
+    // E a linha original continua sendo a única com esse número nesta empresa.
+    const daA = await prisma.conversation.findMany({
+      where: { companyId: EMPRESA_A, waId: WA_A },
+      select: { id: true },
+    });
+    expect(daA.map((c) => c.id)).toEqual([CONVERSA_A]);
   });
 });

@@ -840,13 +840,16 @@ describe("prismaDaEmpresa", () => {
     it("`WhatsappConnection.webhookTokenHash` é `@unique` GLOBAL — e isso é deliberado", () => {
       const bloco = blocoDoModelo("WhatsappConnection");
 
-      // Diferente de `Conversation.waId` (⚠️ R2 do Ciclo 1a): `waId` é
+      // Diferente de `Conversation.waId` (⚠️ R2 do Ciclo 1a): `waId` ERA
       // global-único sobre um identificador COMPARTILHÁVEL — o mesmo número
-      // pode ser atendido por duas empresas, e por isso aquilo é defeito. Um
-      // token de webhook é segredo de 256 bits: duas empresas com o mesmo
-      // token é estado que DEVE ser impossível. Se esta linha cair, a
-      // resolução do webhook (Tarefa 7) perde a garantia de que um token
-      // aponta uma conexão só.
+      // pode ser atendido por duas empresas, e por isso aquilo era defeito. A
+      // Task 3 do Ciclo 1e o compôs (`@@unique([companyId, waId])`), e este
+      // `webhookTokenHash` é o caso que NÃO acompanhou, de propósito: um token
+      // de webhook é segredo de 256 bits, e duas empresas com o mesmo token é
+      // estado que DEVE ser impossível. Se esta linha cair, a resolução do
+      // webhook (Tarefa 7 do Ciclo 2a) perde a garantia de que um token aponta
+      // uma conexão só — e "compor por simetria com as quatro do Ciclo 1e" é
+      // exatamente o engano que o §9.5 daquele spec proíbe por escrito.
       expect(bloco.filter((l) => /^\s*webhookTokenHash\s+String\s+@unique/.test(l))).toHaveLength(1);
     });
 

@@ -474,7 +474,7 @@ model Conversation {
   id                    String            @id @default(cuid())
   companyId             String
   company               Company           @relation(fields: [companyId], references: [id])
-  waId                  String            @unique
+  waId                  String
   telefone              String?
   contactId             String?
   contact               Contact?          @relation(fields: [contactId], references: [id])
@@ -501,6 +501,53 @@ model Conversation {
   connectionId String?
   connection   WhatsappConnection? @relation(fields: [connectionId], references: [id])
 
+  /// Uma conversa por número, POR EMPRESA (Ciclo 1e). Era `waId @unique`,
+  /// GLOBAL.
+  ///
+  /// ## O que a global custava
+  ///
+  /// Enquanto `EVOLUTION_COMPANY_ID` era constante de deploy, a segunda empresa
+  /// era inalcançável e o defeito era teoria. O Ciclo 2a matou a variável: o
+  /// webhook passou a resolver a empresa pela CONEXÃO, e o mesmo número
+  /// atendido por duas empresas colidia em `P2002` → 500 → a Evolution
+  /// reentregava para sempre. O `catch` de `ingest.ts` diz "o retry acerta,
+  /// porque na segunda vez o `findFirst` encontra a conversa" — verdade para a
+  /// corrida dentro da mesma empresa, falso entre empresas, porque aquele
+  /// `findFirst` é escopado. Com esta chave, só sobra o caso em que a frase é
+  /// verdadeira. Fonte: `docs/auditorias/2026-08-20-ciclo-2a-cofre-credenciais.md`,
+  /// §6 e ⚠️ D4.
+  ///
+  /// ## Por que `connectionId` NÃO entra na chave — é decisão de PRODUTO
+  ///
+  /// Uma empresa com dois números recebendo o mesmo cliente tem UMA conversa,
+  /// não duas. `Conversation` carrega estado (`iaAtiva`, `iaPausadaPor`,
+  /// `aguardandoHumanoDesde`, `contactId`, `leadId`), e duplicá-la duplica a
+  /// pausa da IA: a atendente assume o atendimento numa linha e o bot continua
+  /// respondendo a mesma pessoa na outra, ao mesmo tempo, na mesma tela do
+  /// WhatsApp dela.
+  ///
+  /// Há um segundo motivo, mecânico: `connectionId` é `String?`, e no Postgres
+  /// NULL é distinto de NULL num índice único — a mesma armadilha que
+  /// `@@unique([companyId, canal, instancia])` documenta em
+  /// `WhatsappConnection`, mas ali ela é o comportamento desejado e aqui seria
+  /// o contrário. Com `connectionId` na chave, duas linhas com o mesmo `waId` e
+  /// `connectionId` nulo ambas passariam.
+  ///
+  /// ## O que a escolha custa, e está declarado
+  ///
+  /// A resposta sai por `Conversation.connectionId` — a conexão que ABRIU a
+  /// conversa, não necessariamente aquela para a qual o cliente escreveu por
+  /// último. É ⚠️ D3-a do spec do Ciclo 1e
+  /// (`docs/superpowers/specs/2026-08-20-ciclo-1e-unicidades-globais-design.md`,
+  /// §4.3.4), com o conserto já nomeado — atualizar `connectionId` a cada
+  /// mensagem de ENTRADA, como já se faz com `nomeExibicao` — e deixado para o
+  /// dono decidir.
+  ///
+  /// As duas metades estão travadas em `tests/unit/whatsapp-isolamento.test.ts`,
+  /// no `describe` "o mesmo número em duas empresas": duas empresas com o mesmo
+  /// `waId` coexistem, E um segundo `create` com o mesmo `waId` DENTRO da mesma
+  /// empresa continua sendo `P2002`.
+  @@unique([companyId, waId])
   // turno.ts faz UPDATE ... WHERE "processandoAte" IS NULL OR "processandoAte" < now()
   // a cada job de fila — sem índice, essa checagem varreria a tabela inteira
   // conforme o número de conversas ativas cresce.
@@ -633,9 +680,12 @@ model CompanyConfig {
 /// CONFERIDO. O token do webhook nunca é usado, só comparado — então um dump
 /// do banco não entrega uma URL de webhook funcional. O `@unique` é GLOBAL de
 /// propósito, e isso NÃO é a mesma coisa que `Conversation.waId` (⚠️ R2): ali
-/// o valor é compartilhável entre empresas e a unicidade global é o defeito;
-/// aqui o valor é um segredo de 256 bits e duas empresas com o mesmo token é
-/// estado que deve ser impossível. Há caso de teste amarrando esta linha
+/// o valor é compartilhável entre empresas e a unicidade global ERA o defeito —
+/// a Task 3 do Ciclo 1e a compôs em `@@unique([companyId, waId])`. Aqui o valor
+/// é um segredo de 256 bits e duas empresas com o mesmo token é estado que deve
+/// ser impossível, então esta linha fica como está e NÃO acompanha as quatro
+/// daquele ciclo (§9.5 do spec dele diz isso por escrito). Há caso de teste
+/// amarrando esta linha
 /// (`tests/unit/escopo-empresa.test.ts`, "`webhookTokenHash` é `@unique`
 /// GLOBAL"), para que a decisão não se desfaça num `prisma format` distraído.
 model WhatsappConnection {

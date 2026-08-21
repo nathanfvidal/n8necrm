@@ -30,9 +30,16 @@ const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL! });
 const prisma = new PrismaClient({ adapter });
 
 // Prefixo exclusivo deste arquivo (não colide com "teste-ingest-"/"teste-turno-"
-// dos testes unitários nem com nenhum outro spec e2e). `Conversation.waId` é
-// único, então cada conversa criada abaixo ainda soma um `randomUUID()` ao
-// prefixo — o prefixo sozinho é só o que a limpeza usa para encontrá-las.
+// dos testes unitários nem com nenhum outro spec e2e). Cada conversa criada
+// abaixo ainda soma um `randomUUID()` ao prefixo — o prefixo sozinho é só o que
+// a limpeza usa para encontrá-las.
+//
+// O sufixo aleatório continua NECESSÁRIO depois do Ciclo 1e, e o motivo mudou:
+// `Conversation.waId` deixou de ser `@unique` global e passou a
+// `@@unique([companyId, waId])`, mas TODAS as conversas deste arquivo nascem na
+// mesma empresa do seed — a composição não separa uma linha da outra aqui. Dois
+// `waId` literais iguais colidiriam exatamente como antes. Mesmo raciocínio que
+// `tests/e2e/seguranca-headers.spec.ts` registra para o telefone.
 const PREFIXO_WAID = "e2e-agente-";
 
 // Usuário descartável do teste 4 (sessão inválida) — e-mail fixo, não
