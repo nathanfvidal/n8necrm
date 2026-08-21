@@ -111,14 +111,6 @@ const CHAMADA_DE_USER = new RegExp(
  * (`usuario-ativo`, `lead-actions`, `task-actions`).
  */
 const EM_CONVERSAO: Record<string, string> = {
-  // Ciclo 1f, Task 4 — leitores `where: { papel }`, migram para `Membership`.
-  "tests/unit/lead-creation-resilience.test.ts": "Task 4",
-  "tests/unit/lead-notes.test.ts": "Task 4",
-  "tests/unit/notifications.test.ts": "Task 4",
-  "tests/unit/pipeline-service.test.ts": "Task 4",
-  "tests/unit/stage-transition.test.ts": "Task 4",
-  "tests/unit/task-queries.test.ts": "Task 4",
-
   // Ciclo 1f, Task 7 — o dual-write de produção e o seed.
   "src/core/users/service.ts": "Task 7",
   "prisma/seed.ts": "Task 7",

@@ -16,6 +16,7 @@ import {
   excluirEtapa,
   EtapaInvalidaError,
 } from "../../src/core/pipeline/service";
+import { usuarioDoSeed } from "./helpers/usuarios-do-seed";
 
 /**
  * TODA etapa criada aqui nasce com prefixo próprio e é apagada no fim. O banco é
@@ -45,9 +46,11 @@ const criadas: string[] = [];
  * prova o isolamento entre duas empresas é `tests/unit/pipeline-isolamento.test.ts`.
  */
 async function contextoDoAdmin() {
-  const admin = await prisma.user.findFirstOrThrow({ where: { papel: "ADMIN" } });
-  const vinculo = await prisma.membership.findFirstOrThrow({ where: { userId: admin.id } });
-  return { admin, companyId: vinculo.companyId };
+  // Uma consulta onde eram duas, e o `ativo: true` que faltava: o formato
+  // antigo (`User.papel`, sem filtro de ativo) podia devolver o "Atendente
+  // WhatsApp (sistema)", que é ADMIN e `ativo: false`. Ver o helper.
+  const admin = await usuarioDoSeed("ADMIN");
+  return { admin, companyId: admin.companyId };
 }
 
 async function novaEtapa(sufixo: string) {

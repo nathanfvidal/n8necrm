@@ -33,6 +33,7 @@ vi.mock("@/core/notifications/dispatch", () => ({
 
 import { prisma } from "../../src/lib/prisma";
 import { criarLead } from "../../src/core/leads/service";
+import { usuarioDoSeed } from "./helpers/usuarios-do-seed";
 
 // Telefone JÁ NORMALIZADO que este arquivo grava. Prefixo "119444" é
 // exclusivo deste arquivo — não colide com o seed da Task 9
@@ -91,8 +92,7 @@ describe("criarLead — resiliência a falha do módulo de notificação (spec s
 
   beforeAll(async () => {
     await limparDadosDeTeste();
-    const admin = await prisma.user.findFirstOrThrow({ where: { papel: "ADMIN", ativo: true } });
-    autorId = admin.id;
+    autorId = (await usuarioDoSeed("ADMIN")).id;
   });
 
   afterAll(limparDadosDeTeste);

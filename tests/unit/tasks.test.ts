@@ -20,6 +20,7 @@ vi.mock("server-only", () => ({}));
 
 import { prisma } from "../../src/lib/prisma";
 import { criarTask, concluirTask, listarTasksPendentes } from "../../src/core/tasks/service";
+import { usuarioDoSeed } from "./helpers/usuarios-do-seed";
 
 // Prefixo exclusivo deste arquivo — Task não tem nenhum campo único no
 // schema (ao contrário de Contact.telefone, usado por lead-notes.test.ts e
@@ -42,15 +43,13 @@ describe("tarefas", () => {
   beforeAll(async () => {
     await limparDadosDeTeste();
 
-    const usuario = await prisma.user.findFirstOrThrow({ where: { papel: "ADMIN", ativo: true } });
-    usuarioId = usuario.id;
+    usuarioId = (await usuarioDoSeed("ADMIN")).id;
 
     // Segundo usuário real (papel diferente) para o teste de checagem de
     // dono abaixo — precisa ser outro `id` de usuário existente, não um
     // valor forjado, para provar que a rejeição é sobre PROPRIEDADE da
     // tarefa, não sobre o usuário não existir.
-    const outroUsuario = await prisma.user.findFirstOrThrow({ where: { papel: "VENDEDOR", ativo: true } });
-    outroUsuarioId = outroUsuario.id;
+    outroUsuarioId = (await usuarioDoSeed("VENDEDOR")).id;
 
     // Lead real do seed (Task 9: 4 leads) para o teste de vínculo — não
     // criamos um lead novo aqui para não duplicar a responsabilidade de

@@ -23,6 +23,7 @@ vi.mock("server-only", () => ({}));
 import { prisma } from "../../src/lib/prisma";
 import { adicionarNota, listarNotas } from "../../src/core/leads/notes";
 import { criarLead } from "../../src/core/leads/service";
+import { usuarioDoSeed } from "./helpers/usuarios-do-seed";
 
 // Telefone JÁ NORMALIZADO que este arquivo grava (o que `criarLead` →
 // `encontrarOuCriarContact` efetivamente persiste em `Contact.telefone`).
@@ -83,12 +84,11 @@ describe("notas de lead", () => {
   beforeAll(async () => {
     await limparDadosDeTeste();
 
-    const usuario = await prisma.user.findFirstOrThrow({
-      where: { papel: "ADMIN", ativo: true },
-      include: { memberships: true },
-    });
-    usuarioId = usuario.id;
-    companyId = usuario.memberships[0]!.companyId;
+    // As duas informações numa consulta só, e as duas vindas do VÍNCULO: era
+    // `include: { memberships: true }` sobre `User` filtrado por `User.papel`,
+    // coluna que sai no Ciclo 1f. O `memberships[0]!` também some — ele pegava
+    // um vínculo arbitrário de quem tivesse dois.
+    ({ id: usuarioId, companyId } = await usuarioDoSeed("ADMIN"));
     const lead = await criarLead({
       nome: "Teste Notas",
       telefone: TELEFONE_TESTE,

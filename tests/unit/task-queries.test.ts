@@ -16,6 +16,7 @@ vi.mock("server-only", () => ({}));
 import { prisma } from "../../src/lib/prisma";
 import { criarTask, concluirTask } from "../../src/core/tasks/service";
 import { listarTasksPendentesDoLead } from "../../src/core/tasks/queries";
+import { usuarioDoSeed } from "./helpers/usuarios-do-seed";
 
 const PREFIXO_TESTE = "[teste-task-queries] ";
 
@@ -32,10 +33,8 @@ describe("listarTasksPendentesDoLead", () => {
   beforeAll(async () => {
     await limparDadosDeTeste();
 
-    const admin = await prisma.user.findFirstOrThrow({ where: { papel: "ADMIN", ativo: true } });
-    adminId = admin.id;
-    const vendedor = await prisma.user.findFirstOrThrow({ where: { papel: "VENDEDOR", ativo: true } });
-    vendedorId = vendedor.id;
+    adminId = (await usuarioDoSeed("ADMIN")).id;
+    vendedorId = (await usuarioDoSeed("VENDEDOR")).id;
 
     // Lead real do seed — não criamos um lead novo aqui pelo mesmo motivo
     // documentado em tasks.test.ts.

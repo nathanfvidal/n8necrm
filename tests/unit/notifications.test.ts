@@ -33,6 +33,7 @@ vi.mock("server-only", () => ({}));
 
 import { prisma } from "../../src/lib/prisma";
 import { criarLead } from "../../src/core/leads/service";
+import { usuarioDoSeed } from "./helpers/usuarios-do-seed";
 import {
   notificarNovoLead,
   listarNotificacoesNaoLidas,
@@ -92,10 +93,8 @@ describe("notificações", () => {
   beforeAll(async () => {
     await limparDadosDeTeste();
 
-    const admin = await prisma.user.findFirstOrThrow({ where: { papel: "ADMIN", ativo: true } });
-    adminId = admin.id;
-    const vendedor = await prisma.user.findFirstOrThrow({ where: { papel: "VENDEDOR", ativo: true } });
-    vendedorId = vendedor.id;
+    adminId = (await usuarioDoSeed("ADMIN")).id;
+    vendedorId = (await usuarioDoSeed("VENDEDOR")).id;
 
     // `criarLead` (leads/service.ts) já chama `notificarNovoLead` internamente
     // desde a Task 19 — este `beforeAll`, sozinho, já prova a integração do
